@@ -1,0 +1,15 @@
+# Tasks: Products and the portfolio
+
+- [x] T001 Store: products and product_repos tables, CRUD, slug, budget and status checks (src/products/store.ts)
+- [x] T002 Store: attach, detach, role change, product lookup by workspace (src/products/store.ts)
+- [x] T003 Cost: per-workspace totals over all time, this month and last 7 days, nested-folder rule (src/products/cost.ts)
+- [x] T004 Cost: product spend against budget with overBudget flag (src/products/cost.ts)
+- [x] T005 Portfolio: roadmap progress per repo, last verify per workspace, product rollup (src/products/portfolio.ts)
+- [x] T006 Routes: /api/products, /api/products/:id, /api/products/:id/repos, /api/portfolio (src/daemon/routes/products.ts)
+- [x] T007 CLI: trb product ls|new|show|attach|detach|set-status|budget, trb portfolio (src/cli/commands/product.ts)
+- [x] T008 Web: data hooks, pure logic, PortfolioView, ProductDetail (web/src/features/products/)
+- [x] T009 Tests: store, cost, portfolio, route contract, budget logic (tests/products.test.ts, tests/products-logic.test.ts)
+- [x] T010 Wiring: register productRoutes in src/daemon/server.ts (shared registry, later step)
+- [x] T011 Wiring: register cmdProduct and cmdPortfolio in src/cli/main.ts (shared registry, later step)
+- [x] T012 Wiring: mount PortfolioView in a shell tab (rendered as the Portfolio page of the factory tab in web/src/features/factory/FactoryView.tsx, which web/src/shell/EditorArea.tsx loads lazily)
+- [x] T013 CLI end-to-end test against a running daemon (tests/products-cli.test.ts; it also fixed zero spend shown as $0.0000 in src/cli/commands/product.ts)

@@ -1,0 +1,39 @@
+appId: com.devotomy.treeboss
+productName: TreeBoss
+directories:
+  output: dist
+files:
+  - main.cjs
+  - preload.cjs
+  - package.json
+# Per-platform payload: the compiled daemon for that OS/arch, plus the built web UI.
+extraResources:
+  - from: stage/web
+    to: web
+mac:
+  category: public.app-category.developer-tools
+  target: dmg
+  identity: null          # unsigned for now
+  extraResources:
+    - from: stage/bin/darwin-${arch}
+      to: bin
+    # The skill packs sit beside the daemon, where the compiled trb looks for them (src/skills/packs.ts).
+    - from: stage/packs
+      to: packs
+dmg:
+  artifactName: TreeBoss-${version}-mac-${arch}.dmg
+win:
+  target: nsis
+  signExecutable: false          # unsigned; keeps the exe icon and metadata (rcedit) applied
+  extraResources:
+    - from: stage/bin/windows-x64
+      to: bin
+    # The skill packs sit beside the daemon, where the compiled trb looks for them (src/skills/packs.ts).
+    - from: stage/packs
+      to: packs
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  artifactName: TreeBoss-Setup-${version}.exe
+  # Adds the integration checkboxes (folder/file context menus, editor registration, PATH). See build/installer.nsh.
+  include: build/installer.nsh

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Resolve symlinks so `ln -s …/bin/trb /usr/local/bin/trb` works.
+src="${BASH_SOURCE[0]}"
+while [ -h "$src" ]; do
+  dir="$(cd -P "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  [[ $src != /* ]] && src="$dir/$src"
+done
+root="$(cd -P "$(dirname "$src")/.." && pwd)"
+exec bun run "$root/src/cli/main.ts" "$@"

@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - name: Configure git for the test repos
+        run: |
+          git config --global user.name "CI"
+          git config --global user.email "ci@users.noreply.github.com"
+          git config --global init.defaultBranch main
+      # Tests swap in a scripted turn runner and never call a model, but sessions check that the engine CLI exists.
+      - name: Stub engine CLIs
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          for b in claude codex cursor-agent opencode; do
+            printf '#!/bin/sh\nexit 1\n' > "$HOME/.local/bin/$b"
+            chmod +x "$HOME/.local/bin/$b"
+          done
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test --timeout 20000

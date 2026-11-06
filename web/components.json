@@ -1,0 +1,33 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "new-york",
+  "rsc": true,
+  "tsx": true,
+  "tailwind": {
+    "config": "",
+    "css": "src/app/globals.css",
+    "baseColor": "neutral",
+    "cssVariables": true,
+    "prefix": ""
+  },
+  "iconLibrary": "lucide",
+  "aliases": {
+    "components": "@/components",
+    "utils": "@/lib/utils",
+    "ui": "@/components/ui",
+    "lib": "@/lib",
+    "hooks": "@/hooks"
+  },
+  "registries": {
+    "@shadcn": "https://ui.shadcn.com/r/styles/{style}/{name}.json",
+    "@magicui": "https://magicui.design/r/{name}.json",
+    "@aceternity": "https://ui.aceternity.com/registry/{name}.json",
+    "@motion-primitives": "https://motion-primitives.com/c/{name}.json",
+    "@cult-ui": "https://www.cult-ui.com/r/{name}.json",
+    "@kokonutui": "https://kokonutui.com/r/{name}.json",
+    "@tailark": "https://tailark.com/r/{name}.json",
+    "@originui": "https://coss.com/ui/r/{name}.json",
+    "@assistant-ui": "https://r.assistant-ui.com/{name}.json",
+    "@8bitcn": "https://www.8bitcn.com/r/{name}.json"
+  }
+}

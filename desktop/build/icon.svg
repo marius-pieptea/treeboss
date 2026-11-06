@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- The app icon: trunk and two heads in off-white, the lead in white, on the dark bg token, macOS-style tile. Mark shared with web/src/shell/Logo.tsx. -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#0a0a0b"/>
+  <g transform="translate(100 100) scale(25.75)">
+<path d="M16 27.5V18M16 18c0-5-9-4-9-11M16 18c0-5 9-4 9-11M16 18V9.5" stroke="#b9b9be" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="7" cy="7" r="2.8" fill="#b9b9be"/><circle cx="25" cy="7" r="2.8" fill="#b9b9be"/><circle cx="16" cy="6.5" r="3.8" fill="#ffffff"/>
+  </g>
+</svg>

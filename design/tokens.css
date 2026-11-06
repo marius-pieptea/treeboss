@@ -1,0 +1,222 @@
+/*
+ * Design tokens for treeboss. The contract is in DESIGN.md (Token contract).
+ * Plain custom properties, no build step. Light is the default. Dark repeats the color and shadow
+ * tokens twice: once when the OS asks for dark (unless the page forces light), and once for an explicit
+ * data-theme="dark". Durations go to zero under prefers-reduced-motion.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Color: roles, not hues. Components ask for a role. */
+  --color-bg: #f4f4f5;
+  --color-surface: #ffffff;
+  --color-surface-2: #f0f0f1;
+  --color-overlay: #ffffff;
+  --color-border: rgba(0, 0, 0, 0.1);
+  --color-border-strong: rgba(0, 0, 0, 0.2);
+  --color-text: #1a1a1c;
+  --color-text-muted: #55555c;
+  --color-text-faint: #85858c;
+  --color-hover: rgba(0, 0, 0, 0.05);
+  --color-active: rgba(0, 0, 0, 0.09);
+  --color-primary: #1a1a1c;
+  --color-primary-fg: #ffffff;
+  --color-primary-soft: rgba(0, 0, 0, 0.08);
+  --color-accent: #6d28d9;
+  --color-success: #166534;
+  --color-warning: #9a4608;
+  --color-danger: #b91c1c;
+  --color-danger-fg: #ffffff;
+  --color-info: #1d4ed8;
+  --color-focus: #1a1a1c;
+  /* Tint laid over the OS frosted material when the desktop app has glass on. Light enough that the material shows through. */
+  --color-glass: rgba(244, 244, 245, 0.4);
+
+  /* Type: families, then the scale in px (dense product UI, 1px steps from 11 to 14). */
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+  --text-xs: 11px;
+  --text-label: var(--text-xs);
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-lg: 14px;
+  --text-xl: 16px;
+  --text-2xl: 18px;
+  --text-3xl: 22px;
+  --text-4xl: 28px;
+  --leading-tight: 1.25;
+  --leading-normal: 1.45;
+  --leading-snug: 1.375;
+  --leading-relaxed: 1.625;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --tracking-label: 0.08em;
+
+  /* Space: 4px grid. Layout gaps come from here. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* Shape: corner radii and elevation. */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+  --shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.12), 0 2px 4px -2px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.14), 0 1px 0 rgba(0, 0, 0, 0.04);
+
+  /* Motion: durations and the one easing curve. */
+  --duration-instant: 100ms;
+  --duration-fast: 150ms;
+  --duration-base: 200ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --stagger-step: 30ms;
+  /* Reduced motion only: movement becomes this opacity fade. Not zeroed with the other durations. */
+  --duration-crossfade: 150ms;
+  /* Effort bar sweep: a loop, so it runs from slow (lowest level) to fast (highest). Not zeroed under reduced motion; the sweep stops instead. */
+  --duration-sweep-slow: 2400ms;
+  --duration-sweep-fast: 800ms;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --color-bg: #0a0a0b;
+    --color-surface: #101011;
+    --color-surface-2: #171718;
+    --color-overlay: #1a1a1c;
+    --color-border: rgba(255, 255, 255, 0.075);
+    --color-border-strong: rgba(255, 255, 255, 0.15);
+    --color-text: #e6e6e8;
+    --color-text-muted: #a1a1a9;
+    --color-text-faint: #66666d;
+    --color-hover: rgba(255, 255, 255, 0.045);
+    --color-active: rgba(255, 255, 255, 0.085);
+    --color-primary: #f2f2f3;
+    --color-primary-fg: #0a0a0b;
+    --color-primary-soft: rgba(255, 255, 255, 0.10);
+    --color-accent: #a78bfa;
+    --color-success: #4ade80;
+    --color-warning: #fbbf24;
+    --color-danger: #f87171;
+    --color-danger-fg: #1c0505;
+    --color-info: #60a5fa;
+    --color-focus: #f2f2f3;
+    --color-glass: rgba(16, 16, 18, 0.4);
+    --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.5), 0 1px 2px -1px rgba(0, 0, 0, 0.5);
+    --shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.5), 0 2px 4px -2px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-bg: #0a0a0b;
+  --color-surface: #101011;
+  --color-surface-2: #171718;
+  --color-overlay: #1a1a1c;
+  --color-border: rgba(255, 255, 255, 0.075);
+  --color-border-strong: rgba(255, 255, 255, 0.15);
+  --color-text: #e6e6e8;
+  --color-text-muted: #a1a1a9;
+  --color-text-faint: #66666d;
+  --color-hover: rgba(255, 255, 255, 0.045);
+  --color-active: rgba(255, 255, 255, 0.085);
+  --color-primary: #f2f2f3;
+  --color-primary-fg: #0a0a0b;
+  --color-primary-soft: rgba(255, 255, 255, 0.10);
+  --color-accent: #a78bfa;
+  --color-success: #4ade80;
+  --color-warning: #fbbf24;
+  --color-danger: #f87171;
+  --color-danger-fg: #1c0505;
+  --color-info: #60a5fa;
+  --color-focus: #f2f2f3;
+  --color-glass: rgba(16, 16, 18, 0.4);
+  --shadow-sm: 0 1px 3px 0 rgba(0, 0, 0, 0.5), 0 1px 2px -1px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.5), 0 2px 4px -2px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+/* Spritecraft: pixel-art theme, light and dark (parchment, ink outlines, quest green). Light only, zero radius, hard-edged shadows. */
+:root[data-theme="spritecraft"] {
+  color-scheme: light;
+  --color-bg: #f4e9c8;
+  --color-surface: #fbf5dd;
+  --color-surface-2: #ead8a3;
+  --color-overlay: #fbf5dd;
+  --color-border: rgba(28, 28, 28, 0.35);
+  --color-border-strong: #1c1c1c;
+  --color-text: #1c1c1c;
+  --color-text-muted: #6d5526;
+  --color-text-faint: #9a8350;
+  --color-hover: rgba(109, 85, 38, 0.10);
+  --color-active: rgba(109, 85, 38, 0.18);
+  --color-primary: #2fa84f;
+  --color-primary-fg: #ffffff;
+  --color-primary-soft: rgba(47, 168, 79, 0.18);
+  --color-accent: #3aa0e6;
+  --color-success: #2fa84f;
+  --color-warning: #f0a232;
+  --color-danger: #d94343;
+  --color-info: #3aa0e6;
+  --color-focus: #3aa0e6;
+  --color-glass: rgba(244, 233, 200, 0.4);
+  --font-sans: "VT323", ui-monospace, monospace;
+  --font-display: "Press Start 2P", "VT323", monospace;
+  --font-mono: "VT323", ui-monospace, monospace;
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+  --radius-full: 0;
+  --shadow-sm: 0 4px 0 0 rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 6px 0 0 rgba(0, 0, 0, 0.30);
+  --shadow-lg: 0 8px 0 0 rgba(0, 0, 0, 0.35);
+}
+
+:root[data-theme="spritecraft"].dark {
+  color-scheme: dark;
+  --color-bg: #1c1814;
+  --color-surface: #2a231b;
+  --color-surface-2: #3a3024;
+  --color-overlay: #2a231b;
+  --color-border: rgba(244, 233, 200, 0.22);
+  --color-border-strong: #f4e9c8;
+  --color-text: #f4e9c8;
+  --color-text-muted: #c9b27a;
+  --color-text-faint: #7d6a40;
+  --color-hover: rgba(244, 233, 200, 0.07);
+  --color-active: rgba(244, 233, 200, 0.13);
+  --color-primary: #4cc766;
+  --color-primary-fg: #10230f;
+  --color-primary-soft: rgba(76, 199, 102, 0.2);
+  --color-accent: #6cc0f5;
+  --color-success: #6cdd6c;
+  --color-warning: #ffd27a;
+  --color-danger: #ff8a8a;
+  --color-info: #6cc0f5;
+  --color-focus: #6cc0f5;
+  --color-glass: rgba(28, 24, 20, 0.4);
+  --shadow-sm: 0 4px 0 0 rgba(0, 0, 0, 0.6);
+  --shadow-md: 0 6px 0 0 rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 8px 0 0 rgba(0, 0, 0, 0.6);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-instant: 0ms;
+    --duration-fast: 0ms;
+    --duration-base: 0ms;
+  }
+}
