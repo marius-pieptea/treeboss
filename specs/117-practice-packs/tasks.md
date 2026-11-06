@@ -1,0 +1,23 @@
+# Tasks: Practice packs
+
+- [x] T001 Built-in pack catalog as data, with the ponytail pack from the skill's rules
+- [x] T002 Managed practices block with its own markers, mirrored like memory, idempotent, with tests
+- [x] T003 Per-workspace settings table and custom packs in practices.json, validated, with tests
+- [x] T004 Heuristic checks (file and function length, any and !, presentational data, raw color, img alt), thresholds, with tests
+- [x] T005 Gate integration: practice findings join the fix turn; `practiceFindings` exported; no-op with no pack, with gate tests
+- [x] T006 HTTP routes (catalog, custom CRUD, workspace settings, check), with tests
+- [x] T007 CLI `trb practices ls|enable|disable|check`
+- [x] T008 Web panel: toggle cards, rules, thresholds, Check now
+- [x] T009 Register the routes, the CLI command and the web panel (server.ts, cli/main.ts, FactoryView's Practices page)
+- [x] T010 A web editor for custom packs (now PracticesEditor: built-in and custom packs, see T018 and T019)
+- [x] T011 Narrow the presentational check so it skips containers that are named *Button or *Card but own their data (`passesDataToChild` in src/practices/checks.ts: a container that passes its own fetched data to a child is skipped)
+- [x] T012 Marketing packs for web: cro, copywriting, seo (at most eight rules each), with optional skills rendered as "Use the X skill if available", with tests
+- [x] T013 Checks for the marketing packs: banned-words, generic-cta, seo-meta, multiple-h1, seo-link-text, with positive and negative tests
+- [x] T014 Template files (FR-005b): the copy, link, alt, color and SEO checks read the markup of Twig, Blade, ERB, Jinja, Nunjucks, Liquid, Handlebars, Mustache, Go templates, PHP HTML parts, Vue, Svelte and Astro; template syntax is blanked first (src/practices/templates.ts), with positive, negative and never-flagged tests per dialect
+- [x] T015 seo-meta through layouts (FR-005c): a page that extends a layout is covered by the layout's title and meta description; unresolved layouts and partials are not judged; tests for Twig, Blade, ERB and Astro
+- [x] T016 Skipped files (FR-005d): the main stack's files that no enabled check reads, returned by checkFiles and the check route as `skipped`; practiceFindings and the gate unchanged; tests
+- [x] T017 Verify step: practice checks run after a turn in every build session, not only in treeboss mode. Their findings are a "Practices" result of the verify run, with pack labels in the fix prompt and the same bounded retries. Treeboss sessions skip the step (the gate runs the packs once). Tests: tests/verify-practices.test.ts
+- [x] T018 Editable packs: a built-in pack is edited in place (modified), forked into a custom copy, or reset; custom packs are created, edited and deleted; per workspace, single rules and checks switch off; thresholds stay editable; the AGENTS.md block is rewritten whenever an enabled pack's effective rules change. Routes: /api/practices/packs/:id (+ fork, reset). CLI: `trb practices new|edit|reset|rm|enforce`. Tests: tests/practices.test.ts
+- [x] T019 Practices enforce: off | warn | fix per workspace, default warn. warn reports the findings in the verify results and the log without a fix turn; fix sends them back. Shown in the Practices panel. The Settings page "Practices" mounts the same editor (PracticesEditor). Web: features/practices/
+- [x] T020 Recipe defaults: the Templates editor picks the practice packs (from the effective catalog, custom packs included) and the checklists (id and title from /api/checklists); saving sends both, and an empty list clears them
+- [x] T021 End-to-end proof: a git workspace with strict-types and smart-dumb-components on; a turn adds an `as any` and a fetching presentational component. The verify step reports both, fix mode sends one fix turn and warn mode none, and the AGENTS.md block lists the rules. Tests: tests/verify-practices.test.ts

@@ -1,0 +1,21 @@
+{
+  "name": "treeboss-desktop",
+  "productName": "TreeBoss",
+  "version": "0.5.0",
+  "description": "Desktop shell for TreeBoss: runs the bundled daemon and opens the UI in a window.",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "main": "main.cjs",
+  "private": true,
+  "author": "Marius Pieptea",
+  "scripts": {
+    "start": "electron .",
+    "stage": "bun run stage.ts",
+    "dist:mac": "bun run stage.ts darwin-arm64 darwin-x64 && electron-builder --mac --arm64 --x64",
+    "dist:win": "bun run stage.ts windows-x64 && electron-builder --win --x64",
+    "dist": "bun run dist:mac && bun run dist:win"
+  },
+  "devDependencies": {
+    "electron": "^43.0.0",
+    "electron-builder": "^26.0.0"
+  }
+}

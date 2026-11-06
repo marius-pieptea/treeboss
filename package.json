@@ -1,0 +1,35 @@
+{
+  "name": "treeboss",
+  "version": "0.5.0",
+  "description": "An agent harness and software factory: drive claude, codex, cursor and friends from one daemon, with Hydra pairs, live subagents, MCPs and skills, autopilot builds, PRs, deploys, Expo releases and signals back into the roadmap.",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "trb": "./bin/trb"
+  },
+  "scripts": {
+    "trb": "bun run src/cli/main.ts",
+    "daemon": "bun run src/cli/main.ts daemon run",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p . && bun run --cwd web typecheck",
+    "build:web": "bun run --cwd web build",
+    "dev:web": "bun run --cwd web dev"
+  },
+  "engines": {
+    "bun": ">=1.2"
+  },
+  "dependencies": {
+    "@colbymchenry/codegraph": "1.6.2",
+    "playwright-core": "^1.64.0",
+    "qrcode-generator": "^2.0.4",
+    "unpdf": "^1.8.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "typescript": "^7.0.2"
+  },
+  "workspaces": [
+    "web"
+  ]
+}

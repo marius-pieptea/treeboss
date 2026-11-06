@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/marius-pieptea/treeboss/security/advisories/new
+    about: Report it privately, not in a public issue.
+  - name: Commercial license
+    url: https://github.com/marius-pieptea/treeboss/blob/main/LICENSING.md
+    about: Using TreeBoss at a company or in paid work? See how to get a commercial license.

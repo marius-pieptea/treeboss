@@ -1,0 +1,50 @@
+TreeBoss (trb)
+Copyright 2026 Marius Pieptea
+
+TreeBoss is licensed under the PolyForm Noncommercial License 1.0.0 (see LICENSE).
+Commercial use needs a separate commercial license (see LICENSING.md).
+Keep this NOTICE file, the LICENSE file and its Required Notice line when redistributing.
+
+The third-party material below keeps its own license.
+
+Design discovery, reference extraction and the design self-critique (src/design/guidance.ts and the
+built-in skills design-discovery, design-critique and brand-extract in src/skills/builtin.ts) adapt
+working methods from open-design:
+
+  open-design, https://github.com/nexu-io/open-design
+  Licensed under the Apache License, Version 2.0
+
+The wording, the direction library and the shipped design systems are trb's own.
+
+pstack 0.15.36 by Lauren Tan (https://github.com/cursor/plugins/tree/main/pstack) is adapted in the places
+below, all under the MIT License that follows:
+
+  - the skills vendored under src/skills/packs/pstack/skills/, from the upstream commit that
+    src/skills/packs/pstack/pack.json names, with the LICENSE beside them;
+  - the adapter in src/skills/packs/pstack/local/pstack-treeboss/: its name map is adapted from pstack's
+    docs/harness/claude-code.md, and references/claude-code-adapter.md is a verbatim copy of that file;
+  - the agent instructions in src/agents/pstack.ts, adapted from pstack's delegates;
+  - the lead brief of the two pstack recipes (PSTACK_LEAD) in src/hydra/pairs.ts;
+  - the rules of the pstack practice pack in src/practices/packs.ts, paraphrased from pstack's principles.
+
+  MIT License
+  
+  Copyright (c) 2026 Lauren Tan
+  
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+  
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+  
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.

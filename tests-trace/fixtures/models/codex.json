@@ -1,0 +1,1 @@
+{"models": [{"slug": "glm-5.3-flash", "display_name": "glm-5.3-flash", "description": "Z.ai's latest flagship model", "default_reasoning_level": "max", "supported_reasoning_levels": [{"effort": "low", "description": "Light reasoning"}, {"effort": "high", "description": "Enhanced reasoning"}, {"effort": "max", "description": "Deep reasoning"}], "visibility": "list"}]}
