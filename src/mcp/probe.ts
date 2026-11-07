@@ -6,6 +6,8 @@
  * `ok: false` and the reason, because that is exactly what the operator is trying to find out.
  */
 
+import { VERSION } from "../version";
+
 export interface ProbeTool {
   name: string;
   description: string;
@@ -24,7 +26,7 @@ export interface ProbeResult {
 }
 
 const PROTOCOL = "2025-06-18";
-const CLIENT = { name: "trb", version: "0.5.0" };
+const CLIENT = { name: "trb", version: VERSION };
 const STDERR_CAP = 8 * 1024;
 
 function toolsOf(msg: any): ProbeTool[] {
