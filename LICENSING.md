@@ -22,7 +22,7 @@ Changes you make and share must keep the [LICENSE](LICENSE) and [NOTICE](NOTICE)
 
 ## Getting a commercial license
 
-Email {{LICENSING_EMAIL}} with your company name and how you plan to use TreeBoss. If you want to try it at work first, ask, and we will arrange an evaluation.
+Email [marius@devotomy.com](mailto:marius@devotomy.com) with your company name and how you plan to use TreeBoss. If you want to try it at work first, ask, and we will arrange an evaluation.
 
 ## Third-party parts
 
