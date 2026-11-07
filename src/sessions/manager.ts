@@ -29,6 +29,7 @@ import { HydraPairs, type HydraPair } from "../hydra/pairs";
 import { Agents, agentPromptBlock } from "../agents/store";
 import { PAIR_ROLE_LIBRARY } from "../hydra/roles";
 import { WorktreeManager, git, mergePatch, repoRootOf, type WorktreeSession } from "../git/worktree";
+import { pruneSharedTargets } from "../git/cargotarget";
 import { drainSerialized, gitKey, LOCAL_GIT_TIMEOUT_MS, runGit } from "../git/run";
 import { buildRunMcpConfig } from "../mcp/store";
 import { practicesBrief } from "../practices/store";
@@ -998,6 +999,7 @@ export function recoverOnStartup(): RecoveryReport {
       .map((r) => r.id.replace(/^s_/, "").slice(0, 10)),
   );
   const swept = WorktreeManager.sweep((shortId) => liveShortIds.has(shortId));
+  pruneSharedTargets(getSetting("cargo_target_max_gb") * 1024 ** 3);
   return { interrupted, swept, launchInterrupted, headsInterrupted, worktreesKept, waitsInterrupted: waits.length, parked, finalized };
 }
 

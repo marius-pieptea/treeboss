@@ -24,6 +24,8 @@ export const SETTING_DEFS = {
   skills_link: { type: "string", def: "on", help: "on: skills are linked into the workspace (one entry each, fast, nothing copied). off: copied file by file. Falls back to a copy by itself if the filesystem refuses links." },
   mcp_isolation: { type: "string", def: "strict", help: "strict: claude sees only trb's MCP servers. merge: also its own user config." },
   worktree_setup_cmd: { type: "string", def: "", help: "Shell command run in each new subagent worktree (e.g. `bun install`). Empty: symlink node_modules from the repo." },
+  cargo_shared_target: { type: "string", def: "on", help: "on: every worktree of a repo builds Rust into one shared CARGO_TARGET_DIR under the trb home, instead of a full target/ per head (tens of GB each). Skipped when CARGO_TARGET_DIR is already set. off: each worktree keeps its own target/." },
+  cargo_target_max_gb: { type: "number", def: 30, help: "A repo's shared Rust target dir is deleted at daemon start when it is bigger than this many GB and none of its sessions is live. 0: never." },
   idle_close_hours: { type: "number", def: 6, help: "Close idle subagents after this many hours without a turn." },
   leftover_reap_hours: { type: "number", def: 24, help: "Stop the background processes an agent left running (dev servers, watchers, browsers) once a session's last turn ended this many hours ago. The session stays open. 0: never." },
   min_free_memory_mb: { type: "number", def: 1500, help: "A new turn is refused while less memory than this (MB) is available: a lead's turn, or a subagent's launch or follow-up. Available means MemAvailable on Linux, free memory elsewhere. 0: no guard." },
