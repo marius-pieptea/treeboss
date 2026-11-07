@@ -4,7 +4,7 @@
 
 An agent harness and software factory: one daemon and UI for the coding CLIs you already pay for, from idea to shipped app.
 
-![Bun](https://img.shields.io/badge/Bun-1.2%2B-000?logo=bun) ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=000) ![TypeScript](https://img.shields.io/badge/TypeScript-7-3178C6?logo=typescript&logoColor=fff) ![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=fff) ![Tailwind](https://img.shields.io/badge/Tailwind-4-06B6D4?logo=tailwindcss&logoColor=fff) ![Electron](https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=fff)  ![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue)
+![Bun](https://img.shields.io/badge/Bun-1.2%2B-000?logo=bun) ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=000) ![TypeScript](https://img.shields.io/badge/TypeScript-7-3178C6?logo=typescript&logoColor=fff) ![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=fff) ![Tailwind](https://img.shields.io/badge/Tailwind-4-06B6D4?logo=tailwindcss&logoColor=fff) ![Electron](https://img.shields.io/badge/Electron-43-47848F?logo=electron&logoColor=fff)  ![License: PolyForm Shield](https://img.shields.io/badge/license-PolyForm%20Shield-blue)
 
 </div>
 
@@ -214,7 +214,7 @@ trb pair add --recipe pstack-claude-codex
 trb run -p "pstack (Claude + Codex)" "add rate limiting to the login route, with tests"
 ```
 
-pstack is by Lauren Tan, MIT licensed, Copyright (c) 2026 Lauren Tan. The skills are its text at commit `c742dd6` of [cursor/plugins](https://github.com/cursor/plugins/tree/main/pstack), version 0.15.36. Its agents and recipes adapt its text, as [NOTICE](NOTICE) says. The license is kept at `src/skills/packs/pstack/LICENSE`. treeboss itself is under the PolyForm Noncommercial License 1.0.0. To update the skills, run `bun scripts/vendor-pstack.ts <checkout>` on a clean checkout of cursor/plugins.
+pstack is by Lauren Tan, MIT licensed, Copyright (c) 2026 Lauren Tan. The skills are its text at commit `c742dd6` of [cursor/plugins](https://github.com/cursor/plugins/tree/main/pstack), version 0.15.36. Its agents and recipes adapt its text, as [NOTICE](NOTICE) says. The license is kept at `src/skills/packs/pstack/LICENSE`. treeboss itself is under the PolyForm Shield License 1.0.0. To update the skills, run `bun scripts/vendor-pstack.ts <checkout>` on a clean checkout of cursor/plugins.
 
 ## Plan mode
 
@@ -485,7 +485,7 @@ The scripted engine understands `SAY`, `WRITE`, `SLEEP`, `FAIL`, `GIT_COMMIT`, `
 
 ## License
 
-TreeBoss is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). It is free for personal use, hobby projects, study and research, and for charities, schools, public research bodies and government. Commercial use needs a commercial license. That covers use at or for a company, selling it, offering it as a hosted service, and bundling it into a product. See [LICENSING.md](LICENSING.md) for what counts and how to get one.
+TreeBoss is source-available under the [PolyForm Shield License 1.0.0](LICENSE). Use it for anything, for free: personal projects, client work, at your company, and to build and sell your own products. The one thing you may not do is sell TreeBoss itself, or offer a product or service that competes with it, such as a rebranded copy or a hosted version. To do that, ask for a commercial license. See [LICENSING.md](LICENSING.md).
 
 This is not an OSI open-source license. Keep the [NOTICE](NOTICE) file when you share a copy. Contributions are welcome under the [CLA](CLA.md): see [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 

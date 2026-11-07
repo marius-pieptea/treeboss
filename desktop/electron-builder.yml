@@ -37,3 +37,16 @@ nsis:
   artifactName: TreeBoss-Setup-${version}.exe
   # Adds the integration checkboxes (folder/file context menus, editor registration, PATH). See build/installer.nsh.
   include: build/installer.nsh
+linux:
+  target:
+    - AppImage
+    - tar.gz
+  category: Development
+  icon: build/icon.png
+  artifactName: TreeBoss-${version}-linux-${arch}.${ext}
+  extraResources:
+    - from: stage/bin/linux-${arch}
+      to: bin
+    # The skill packs sit beside the daemon, where the compiled trb looks for them (src/skills/packs.ts).
+    - from: stage/packs
+      to: packs

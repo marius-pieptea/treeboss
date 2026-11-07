@@ -1,28 +1,29 @@
 # Licensing
 
-TreeBoss is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE). This page explains it in plain words. If this page and the license ever disagree, the license wins.
+TreeBoss is source-available under the [PolyForm Shield License 1.0.0](LICENSE). This page explains it in plain words. If this page and the license ever disagree, the license wins.
 
-## Free to use
+## Free, for any purpose
 
-You can use, change and share TreeBoss for free when the use is noncommercial:
+You can use, change and share TreeBoss for free, including:
 
-- personal use, hobby projects, private study and learning
-- research and experiments, without any anticipated commercial application
-- charities, schools and universities, public research bodies, public health and safety organizations, and government institutions, whatever their funding
+- personal and hobby projects
+- client work and freelancing
+- use at your company, by any number of developers
+- building and selling your own apps and products with it
 
 Changes you make and share must keep the [LICENSE](LICENSE) and [NOTICE](NOTICE) files.
 
-## Needs a commercial license
+## The one thing you may not do
 
-- using TreeBoss at or for a company, including internal use by its developers
-- using it in work you are paid for
-- selling it, or a modified version of it
-- offering it as a hosted service
-- bundling it into a product
+You may not provide a product or service that competes with TreeBoss, paid or free. For example:
 
-## Getting a commercial license
+- selling TreeBoss, or a modified or rebranded copy of it
+- offering TreeBoss as a hosted service
+- shipping a coding-agent harness or tool built from TreeBoss's code as your own product
 
-Email [marius@devotomy.com](mailto:marius@devotomy.com) with your company name and how you plan to use TreeBoss. If you want to try it at work first, ask, and we will arrange an evaluation.
+## Commercial license
+
+To do one of those things, for example to embed TreeBoss in your product, resell it, or host it, email [marius@devotomy.com](mailto:marius@devotomy.com) with your company name and what you plan to do.
 
 ## Third-party parts
 

@@ -26,4 +26,4 @@ Issues and pull requests are welcome. Here is how it works.
 
 ## Why a CLA
 
-TreeBoss is under the [PolyForm Noncommercial License](LICENSE), and companies can buy a commercial license (see [LICENSING.md](LICENSING.md)). The CLA lets the maintainer include your contribution in both. You keep the copyright to your work.
+TreeBoss is under the [PolyForm Shield License](LICENSE), and the maintainer also offers commercial licenses (see [LICENSING.md](LICENSING.md)). The CLA lets the maintainer include your contribution under both. You keep the copyright to your work.
