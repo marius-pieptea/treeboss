@@ -40,22 +40,24 @@ export function FeaturesView({ root, onOpenPlan }: { root: string; onOpenPlan: (
       <div className="mx-auto flex max-w-3xl flex-col gap-3 p-4">
         <header className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="min-w-0 flex-1 truncate text-[15px] font-semibold">Features</h2>
-            <WhoPicker who={who} onChange={setWho} inline />
-            {data.exists && (
-              <Button size="sm" variant="outline" disabled={mapping || actions.mapFeatures.isPending} onClick={map} title="An agent reads the code and the running app and updates lab/features.md, keeping the plans already linked">
-                <MapIcon /> Update map
+            <h2 className="shrink-0 text-[15px] font-semibold">Features</h2>
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <WhoPicker who={who} onChange={setWho} inline />
+              {data.exists && (
+                <Button size="sm" variant="outline" disabled={mapping || actions.mapFeatures.isPending} onClick={map} title="An agent reads the code and the running app and updates lab/features.md, keeping the plans already linked">
+                  <MapIcon /> Update map
+                </Button>
+              )}
+              <Button
+                size="sm"
+                variant="primary"
+                disabled={runnable.length === 0 || running || actions.e2e.isPending}
+                title={runnable.length === 0 ? "No feature has a plan with steps yet" : "An agent runs every linked plan in its own browser, one after another, and logs the bugs it finds"}
+                onClick={() => actions.e2e.mutate({ plans: runnable, ...who })}
+              >
+                <Bot /> Run all end to end{runnable.length > 0 && <span className="font-mono">({runnable.length})</span>}
               </Button>
-            )}
-            <Button
-              size="sm"
-              variant="primary"
-              disabled={runnable.length === 0 || running || actions.e2e.isPending}
-              title={runnable.length === 0 ? "No feature has a plan with steps yet" : "An agent runs every linked plan in its own browser, one after another, and logs the bugs it finds"}
-              onClick={() => actions.e2e.mutate({ plans: runnable, ...who })}
-            >
-              <Bot /> Run all end to end{runnable.length > 0 && <span className="font-mono">({runnable.length})</span>}
-            </Button>
+            </div>
           </div>
           <p className="text-xs leading-relaxed text-fg-muted">What a user can do, the plans that test each feature, and how their last runs went. The map is lab/features.md: edit it like any file.</p>
           {mapping && data.session && (
