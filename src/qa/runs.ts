@@ -92,10 +92,16 @@ export function summarize(run: Run): RunSummary {
 /** The first step still waiting for an outcome: where the panel resumes. */
 export const currentStep = (run: Run): RunStep | null => run.steps.find((s) => s.outcome.state === "pending") ?? null;
 
-/** A plan's runs, newest first. */
+/** A plan's runs, newest first. A run an agent walked names its session. */
 export function listRuns(root: string, slug: PlanSlug, limit = 50): RunSummary[] {
   const rows = db().prepare("SELECT * FROM qa_runs WHERE root_dir = ? AND plan = ? ORDER BY started_at DESC, rowid DESC LIMIT ?").all(realOf(root), slug, limit) as Row[];
-  return rows.map((r) => summarize(toRun(r)));
+  const agents = new Map((db().prepare("SELECT run_id, session_id FROM qa_sessions WHERE root_dir = ? AND plan = ? AND run_id IS NOT NULL").all(realOf(root), slug) as Array<{ run_id: string; session_id: string }>).map((a) => [a.run_id, a.session_id]));
+  return rows.map((r) => ({ ...summarize(toRun(r)), agentSession: agents.get(r.id) ?? null }));
+}
+
+/** Drops one run: an agent run whose session could not start. */
+export function removeRun(id: RunId): void {
+  db().prepare("DELETE FROM qa_runs WHERE id = ?").run(id);
 }
 
 export function lastRunSummary(root: string, slug: PlanSlug): RunSummary | null {

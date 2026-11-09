@@ -42,6 +42,8 @@ import { COMPUTER_TOOL_SET } from "../../computer/defs";
 import { executeComputerTool } from "../../computer/tools";
 import { DEVSERVER_TOOL_SET, executeDevserverTool } from "../../devserver/tools";
 import { EVIDENCE_TOOL_SET, executeEvidenceTool } from "../../evidence/tools";
+import { QA_TOOL_SET } from "../../qa/defs";
+import { executeQaTool } from "../../qa/tools";
 import { executeTreebossTool, TREEBOSS_TOOL_SET } from "../../treeboss/tools";
 import { CHECKLIST_TOOL_SET, executeChecklistTool } from "../../checklists/tools";
 import { followSession } from "../live";
@@ -120,6 +122,7 @@ export function coreRoutes(opts: { onShutdown?: () => void }): RouteModule {
       if ((TITLE_TOOL_NAMES as readonly string[]).includes(name)) return json(executeTitleTool(name, (c.body.args ?? {}) as Record<string, unknown>, sessionId));
       if (TREEBOSS_TOOL_SET.has(name)) return json(executeTreebossTool(name, (c.body.args ?? {}) as Record<string, unknown>, sessionId));
       if (CHECKLIST_TOOL_SET.has(name)) return json(executeChecklistTool(name, (c.body.args ?? {}) as Record<string, unknown>, sessionId));
+      if (QA_TOOL_SET.has(name)) return json(await executeQaTool(name, (c.body.args ?? {}) as Record<string, unknown>, sessionId));
       if (!(SUBAGENT_TOOL_NAMES as readonly string[]).includes(name)) throw new HttpError(400, `Unknown tool "${name}".`);
       const out = await executeSubagentToolStep(name, (c.body.args ?? {}) as Record<string, unknown>, { sessionId });
       return json(out.pending ? { text: "", pending: out.pending } : { text: out.text });

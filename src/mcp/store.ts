@@ -153,7 +153,7 @@ export const McpStore = {
  * (the subagent tools) when the session may open subagents. `TRB_URL`/`TRB_TOKEN`/`TRB_SESSION`
  * tell that child process which daemon and which caller it speaks for.
  */
-export function buildRunMcpConfig(opts: { sessionId: string; subagents: boolean; daemonUrl: string; token: string; allowed?: string[] | null; browser?: boolean; emulator?: boolean; computer?: boolean; evidence?: boolean; rea?: boolean; plan?: boolean; title?: boolean; treeboss?: boolean; checklists?: boolean; ask?: boolean; codegraphDir?: string | null }): McpRunConfig {
+export function buildRunMcpConfig(opts: { sessionId: string; subagents: boolean; daemonUrl: string; token: string; allowed?: string[] | null; browser?: boolean; emulator?: boolean; computer?: boolean; evidence?: boolean; rea?: boolean; plan?: boolean; title?: boolean; treeboss?: boolean; checklists?: boolean; qa?: boolean; ask?: boolean; codegraphDir?: string | null }): McpRunConfig {
   const out: McpRunConfig = {};
   // Ask mode is lean: the operator's own servers, the subagent shim and the browser stay out. Only CodeGraph's read tools.
   for (const s of opts.ask ? [] : McpStore.list()) {
@@ -171,13 +171,13 @@ export function buildRunMcpConfig(opts: { sessionId: string; subagents: boolean;
   // REA (on by default, third party): a plain stdio server like any registry entry, unless the operator registered one under that name.
   const rea = opts.rea && !opts.ask && !out[REA_NAME] && (!opts.allowed || opts.allowed.includes(REA_NAME)) ? reaLaunch() : null;
   if (rea) out[REA_NAME] = { type: "stdio", command: rea.command, args: rea.args, env: reaEnv() };
-  if (!opts.ask && (opts.subagents || opts.plan || opts.emulator || opts.computer || opts.title || opts.evidence || opts.treeboss || opts.checklists)) {
+  if (!opts.ask && (opts.subagents || opts.plan || opts.emulator || opts.computer || opts.title || opts.evidence || opts.treeboss || opts.checklists || opts.qa)) {
     const self = selfInvocation();
     out.trb = {
       type: "stdio",
       command: self.command,
       args: [...self.args, "mcp-serve"],
-      env: { TRB_URL: opts.daemonUrl, TRB_TOKEN: opts.token, TRB_SESSION: opts.sessionId, TRB_HOME: home(), TRB_BROWSER: opts.browser ? "1" : "0", TRB_EMULATOR: opts.emulator ? "1" : "0", TRB_COMPUTER: opts.computer ? "1" : "0", TRB_EVIDENCE: opts.evidence ? "1" : "0", TRB_PLAN: opts.plan ? "1" : "0", TRB_TITLE: opts.title ? "1" : "0", TRB_TREEBOSS: opts.treeboss ? "1" : "0", TRB_CHECKLISTS: opts.checklists ? "1" : "0", TRB_SUBAGENTS: opts.subagents ? "1" : "0" },
+      env: { TRB_URL: opts.daemonUrl, TRB_TOKEN: opts.token, TRB_SESSION: opts.sessionId, TRB_HOME: home(), TRB_BROWSER: opts.browser ? "1" : "0", TRB_EMULATOR: opts.emulator ? "1" : "0", TRB_COMPUTER: opts.computer ? "1" : "0", TRB_EVIDENCE: opts.evidence ? "1" : "0", TRB_PLAN: opts.plan ? "1" : "0", TRB_TITLE: opts.title ? "1" : "0", TRB_TREEBOSS: opts.treeboss ? "1" : "0", TRB_CHECKLISTS: opts.checklists ? "1" : "0", TRB_QA: opts.qa ? "1" : "0", TRB_SUBAGENTS: opts.subagents ? "1" : "0" },
     };
   }
   return out;

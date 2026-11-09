@@ -1,4 +1,7 @@
-/** Logs a bug reported from the built-in browser: gathers the screenshot, console and server log, stores them as evidence, and writes the finding. */
+/**
+ * Logs a bug reported from the built-in browser by a person, or from the agent's browser by a QA agent (qa/tools.ts
+ * bug_log): gathers the screenshot, console and server log, stores them as evidence, and writes the finding.
+ */
 import fs from "fs";
 import { HttpError } from "../daemon/http";
 import { listInstances, readLogs } from "../devserver/manager";
@@ -8,7 +11,8 @@ import { shootViewport } from "../preview/shot";
 import { redact, stripQueryValues } from "../search/redact";
 import { BUG_KINDS, createBugFinding, type BugKind, type Finding, type ShotKind } from "./findings";
 
-export type ShotIn = { kind: "desktop"; png: Buffer } | { kind: "rerender"; viewport: { width: number; height: number } } | { kind: "none" };
+/** `agent`: a PNG the agent's own browser took of the page it was on. */
+export type ShotIn = { kind: "desktop"; png: Buffer } | { kind: "agent"; png: Buffer } | { kind: "rerender"; viewport: { width: number; height: number } } | { kind: "none" };
 
 export interface BugReport {
   title: string;
@@ -22,6 +26,10 @@ export interface BugReport {
   port: number | null;
   shot: ShotIn;
   attach: { console: boolean; logs: boolean };
+  /** Console lines the caller already has (the agent browser's), used instead of the preview's. */
+  consoleLines?: string[];
+  /** Logged by a QA agent: the finding is marked found_by: agent and starts unconfirmed. */
+  byAgent?: boolean;
 }
 
 export interface LoggedBug {
@@ -150,7 +158,7 @@ export interface CaptureDeps {
 }
 
 async function screenshot(r: BugReport, deps: CaptureDeps): Promise<{ png: Buffer | null; kind: ShotKind; note: string | null; viewport?: { width: number; height: number } }> {
-  if (r.shot.kind === "desktop") return { png: r.shot.png, kind: "desktop", note: null };
+  if (r.shot.kind === "desktop" || r.shot.kind === "agent") return { png: r.shot.png, kind: r.shot.kind, note: null };
   if (r.shot.kind === "none") return { png: null, kind: "none", note: null };
   const shot = await deps.shoot({ url: r.url, viewport: r.shot.viewport });
   if ("error" in shot) return { png: null, kind: "none", note: `The page could not be re-rendered for a screenshot: ${shot.error}` };
@@ -164,7 +172,7 @@ async function screenshot(r: BugReport, deps: CaptureDeps): Promise<{ png: Buffe
 }
 
 export async function logBug(rootDir: string, r: BugReport, deps: CaptureDeps = { shoot: shootViewport, write: createBugFinding }): Promise<LoggedBug> {
-  const issues = r.attach.console ? consoleLines(r.port) : [];
+  const issues = !r.attach.console ? [] : r.consoleLines ?? consoleLines(r.port);
   const server = r.attach.logs ? serverOf(rootDir, r.port) : null;
   const logs = server ? readLogs(rootDir, server.service, 0, LOG_LINES).lines.map((l) => (l.stream === "sys" ? `[trb] ${l.text}` : l.text)) : [];
   const shot = await screenshot(r, deps);
@@ -177,7 +185,7 @@ export async function logBug(rootDir: string, r: BugReport, deps: CaptureDeps = 
   let capture: EvidenceItem | null = null;
   if (Object.keys(files).length) {
     files["meta.json"] = JSON.stringify({ url, ...(shot.viewport ? { viewport: shot.viewport } : {}), shot: shot.kind, ...(server ? { service: server.service } : {}) }, null, 2);
-    capture = addEvidence({ workspace: rootDir, kind: "bug", title: r.title, url, summary: r.actual, files, source: "operator" });
+    capture = addEvidence({ workspace: rootDir, kind: "bug", title: r.title, url, summary: r.actual, files, source: r.byAgent ? "agent" : "operator" });
   }
 
   const con = excerpt(issues);
@@ -187,6 +195,6 @@ export async function logBug(rootDir: string, r: BugReport, deps: CaptureDeps = 
   const expected = section("Expected", r.expected);
   const actual = section("Actual", r.actual);
   const body = [steps || expected || actual ? "" : r.title, steps, expected, actual, con.count ? `## Console (last ${con.count})\n\n\`\`\`\n${con.text}\n\`\`\`` : "", log.count ? `## Server log (last ${log.count})\n\n\`\`\`\n${log.text}\n\`\`\`` : ""].filter(Boolean).join("\n\n");
-  const finding = deps.write(rootDir, { title: r.title, body, bug: { url, capture: capture?.id ?? null, shot: shot.kind, kind: r.kind }, impact: "medium", effort: "s" });
+  const finding = deps.write(rootDir, { title: r.title, body, bug: { url, capture: capture?.id ?? null, shot: shot.kind, kind: r.kind, ...(r.byAgent ? { by: "agent" as const, confirmed: false } : {}) }, impact: "medium", effort: "s" });
   return { finding, capture, shotNote: shot.note };
 }

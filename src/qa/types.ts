@@ -79,6 +79,8 @@ export interface RunSummary {
   finished: boolean;
   /** Each step's outcome state in this run. */
   states: Record<string, OutcomeState>;
+  /** The session of the agent that walked this run; null for a run a person did. Set by listRuns. */
+  agentSession?: string | null;
 }
 
 export interface PlanSummary {
@@ -94,15 +96,72 @@ export interface PlanSummary {
 export const FOCUS = ["errors", "edge-cases", "mobile", "accessibility", "empty-states", "permissions"] as const;
 export type Focus = (typeof FOCUS)[number];
 
-export type QaAsk = { kind: "draft"; from: PlanSource; note: string } | { kind: "suggest"; focus: Focus[]; note: string };
+/**
+ * What a QA session is asked to do. draft and suggest write proposals; explore drives the app like a user, logs the bugs
+ * it meets and writes its walk as proposals; run walks one run's steps in the browser and records each outcome; map
+ * writes the feature map (features.ts).
+ */
+export type QaAsk =
+  | { kind: "draft"; from: PlanSource; note: string }
+  | { kind: "suggest"; focus: Focus[]; note: string }
+  | { kind: "explore"; from: PlanSource; note: string; baseUrl: string | null }
+  | { kind: "run"; run: RunId; note: string; baseUrl: string | null; batch: string | null }
+  | { kind: "map"; note: string; baseUrl: string | null };
+
+export type QaKind = QaAsk["kind"];
 
 export type Decision = "accept" | "reject";
 
-/** The QA session of a plan, as the panel shows it. */
+/** The QA session of a plan (or of the feature map), as the panel shows it. */
 export interface QaSessionInfo {
   sessionId: string;
-  kind: QaAsk["kind"];
+  kind: QaKind;
   running: boolean;
-  /** Set when the turn ended and the proposals file was missing, empty or malformed. */
+  /** Set when the turn ended without the work it was asked for: proposals missing or malformed, steps left unrecorded. */
   problem: string | null;
+  /** The run an agent run walks (kind "run"). */
+  runId: RunId | null;
+  /** The end-to-end batch that started it, if any. */
+  batchId: string | null;
+}
+
+/** One feature of the product, from `lab/features.md`: what a user can do, where, and the plans that test it. */
+export interface Feature {
+  id: string;
+  title: string;
+  /** The pages it lives on ("/..."), as written. */
+  where: string[];
+  /** Plan slugs, as written: one that does not exist is shown as missing. */
+  plans: string[];
+  summary: string;
+}
+
+/** How well a feature is tested, from its plans' last runs. */
+export type Coverage = "no-plan" | "not-run" | "failing" | "partial" | "passing";
+
+export interface FeaturePlan {
+  slug: string;
+  title: string | null;
+  exists: boolean;
+  steps: number;
+  lastRun: RunSummary | null;
+}
+
+export interface FeatureView extends Feature {
+  planInfo: FeaturePlan[];
+  coverage: Coverage;
+}
+
+export interface BatchView {
+  id: string;
+  plans: string[];
+  /** How many plans were started (or skipped) so far. */
+  next: number;
+  /** The plan whose run is going now, or null. */
+  current: string | null;
+  running: boolean;
+  cancelled: boolean;
+  /** Plans that could not start, with why. */
+  errors: Array<{ plan: string; error: string }>;
+  createdAt: number;
 }

@@ -2,7 +2,7 @@
  * Pure logic of the QA panel: progress, which step is current, the bug draft a failed step becomes, the keyboard
  * map, and how a plan's steps and proposals line up as rows. No React and no fetching, so it is all unit-tested.
  */
-import type { BugDraft, Outcome, OutcomeState, Plan, PlanSource, PlanStep, PlanSummary, Proposal, Run, RunCounts, RunStep, RunSummary, StepHistory, StepPath } from "./api";
+import type { BatchView, BugDraft, Coverage, Outcome, OutcomeState, Plan, PlanSource, PlanStep, PlanSummary, Proposal, QaSession, Run, RunCounts, RunStep, RunSummary, StepHistory, StepPath } from "./api";
 
 export const STATES: OutcomeState[] = ["pass", "fail", "skip", "blocked", "pending"];
 
@@ -140,4 +140,37 @@ export function sourceOf(c: { kind: FromKind; page: StepPath | null; dir: string
     case "manual":
       return null;
   }
+}
+
+/** What a running QA session is doing, for the "…" marker next to a plan. */
+export const SESSION_LABEL: Record<QaSession["kind"], string> = { draft: "Drafting…", suggest: "Suggesting…", explore: "Exploring…", run: "Agent running…", map: "Mapping features…" };
+
+export const sessionLabel = (s: Pick<QaSession, "kind" | "running"> | null): string | null => (s?.running ? SESSION_LABEL[s.kind] : null);
+
+/** A feature's coverage as a word and a badge tone: a status color always comes with the word. */
+export const COVERAGE: Record<Coverage, { label: string; tone: "neutral" | "red" | "amber" | "green" }> = {
+  "no-plan": { label: "no plan", tone: "neutral" },
+  "not-run": { label: "not run", tone: "neutral" },
+  failing: { label: "failing", tone: "red" },
+  partial: { label: "partly tested", tone: "amber" },
+  passing: { label: "passing", tone: "green" },
+};
+
+/** Worst first, so what needs attention is at the top; the map's own order breaks ties. */
+const COVERAGE_ORDER: Coverage[] = ["failing", "partial", "not-run", "no-plan", "passing"];
+export const sortFeatures = <T extends { coverage: Coverage }>(list: T[]): T[] => list.map((f, i) => ({ f, i })).sort((a, b) => COVERAGE_ORDER.indexOf(a.f.coverage) - COVERAGE_ORDER.indexOf(b.f.coverage) || a.i - b.i).map((x) => x.f);
+
+/** The plans an end-to-end run of these features covers: each linked plan that exists and has steps, once. */
+export function e2ePlansOf(features: Array<{ planInfo: Array<{ slug: string; exists: boolean; steps: number }> }>): string[] {
+  const out: string[] = [];
+  for (const f of features) for (const p of f.planInfo) if (p.exists && p.steps > 0 && !out.includes(p.slug)) out.push(p.slug);
+  return out;
+}
+
+/** "2 of 5 plans · now: checkout-flow" for a batch going; a finished one says how it ended. */
+export function batchLine(b: Pick<BatchView, "plans" | "next" | "current" | "running" | "cancelled" | "errors">): string {
+  const skipped = b.errors.length ? ` · ${b.errors.length} could not start` : "";
+  if (b.running && b.current) return `${b.next} of ${b.plans.length} plans · now: ${b.current}${skipped}`;
+  if (b.cancelled) return `Cancelled after ${b.next} of ${b.plans.length} plans${skipped}`;
+  return `Ran ${b.plans.length - b.errors.length} of ${b.plans.length} plans${skipped}`;
 }

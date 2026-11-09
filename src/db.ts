@@ -326,6 +326,16 @@ export function migrate(conn: Database): void {
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
   )`);
   addColumn(conn, "qa_sessions", "proposals_sig", "TEXT");
+  // An agent run (kind 'run') walks one run of the plan: run_id. A run started by an end-to-end batch names it: batch_id.
+  addColumn(conn, "qa_sessions", "run_id", "TEXT");
+  addColumn(conn, "qa_sessions", "batch_id", "TEXT");
+  // End-to-end batches (qa/batches.ts): plans run by an agent one after another. `next` is the index of the plan to start
+  // when the current run's turn ends; `opts` is the engine choice as JSON.
+  conn.exec(`CREATE TABLE IF NOT EXISTS qa_batches (
+    id TEXT PRIMARY KEY, root_dir TEXT NOT NULL, plans TEXT NOT NULL, next INTEGER NOT NULL DEFAULT 0, current TEXT,
+    base_url TEXT, opts TEXT NOT NULL DEFAULT '{}', cancelled INTEGER NOT NULL DEFAULT 0, errors TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL
+  )`);
 }
 
 /**

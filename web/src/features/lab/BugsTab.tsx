@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowUpRight, Bug, Check, Hammer, Undo2, X } from "lucide-react";
+import { ArrowUpRight, BadgeCheck, Bot, Bug, Check, Hammer, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/form";
 import { Badge, Empty, Spinner } from "@/components/ui/misc";
@@ -11,12 +11,12 @@ import { cn } from "@/lib/utils";
 import { type Actions, type Finding } from "./data";
 import { takePendingBugs } from "./views";
 import { LabGate, LabPage, SweepRow, useLabView, useWho } from "./shared";
-import { bugState, BUG_KINDS, byKind, fixableBugs, hasScreenshot, IMPACT_TONE, isBug, kindCounts, runningFix, type BugState, type KindFilter } from "./logic";
+import { bugState, BUG_KINDS, byKind, fixableBugs, hasScreenshot, IMPACT_TONE, isBug, kindCounts, runningFix, unconfirmed, type BugState, type KindFilter } from "./logic";
 
 const BUG_TONE: Record<BugState, "red" | "accent" | "amber" | "green" | "neutral"> = { open: "red", fixing: "accent", "needs-check": "amber", fixed: "green", dismissed: "neutral" };
 const BUG_LABEL: Record<BugState, string> = { open: "open", fixing: "fixing", "needs-check": "needs check", fixed: "fixed", dismissed: "dismissed" };
 
-/** A bug logged from the browser: the page it was seen on, a thumbnail of what was captured, and the ways to deal with it. */
+/** A bug logged from the browser, by a person or a QA agent: the page it was seen on, a thumbnail of what was captured, and the ways to deal with it. */
 function BugCard({ root, f, actions, busy, fixBlocked, onOpenSession, focused }: { root: string; f: Finding; actions: Actions; busy: boolean; fixBlocked: string | null; onOpenSession: (id: string) => void; focused: boolean }) {
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -27,6 +27,8 @@ function BugCard({ root, f, actions, busy, fixBlocked, onOpenSession, focused }:
   const closed = state === "fixed" || state === "dismissed";
   const go = (p: Promise<{ session?: { id: string } }>) => void p.then((r) => r.session && onOpenSession(r.session.id)).catch(() => {});
   const url = f.bug?.url ?? "";
+  // An agent's bug waits for a person: Confirm is the main action until then, and fix-all skips it.
+  const toConfirm = unconfirmed(f) && !closed;
   return (
     <article ref={ref} data-bug={f.id} data-bug-state={state} className={cn("flex gap-3 rounded-xl border border-line bg-panel px-3 py-2.5", closed && "opacity-60", focused && "border-accent bg-accent-soft/40")}>
       {hasScreenshot(f) && <img src={partUrl(root, f.bug.capture, "screenshot.png")} alt={`Screenshot for ${f.title}`} loading="lazy" className="h-16 w-24 shrink-0 rounded-lg border border-line bg-raised object-cover object-top" />}
@@ -35,6 +37,12 @@ function BugCard({ root, f, actions, busy, fixBlocked, onOpenSession, focused }:
           <h3 className="min-w-0 flex-1 text-[13px] font-semibold leading-snug">{f.title}</h3>
           <div className="flex shrink-0 items-center gap-1">
             {f.bug?.shot === "rerender" && <Badge title="The screenshot was re-rendered from the captured page, not taken from the screen">Re-render</Badge>}
+            {f.bug?.by === "agent" && (
+              <Badge tone="violet" title="Logged by a QA agent while it used the app">
+                <Bot className="size-3" /> agent
+              </Badge>
+            )}
+            {toConfirm && <Badge tone="amber" title="Not confirmed by a person yet: fix-all leaves it alone">unconfirmed</Badge>}
             {f.bug && <Badge tone="blue" title="Kind of bug">{f.bug.kind}</Badge>}
             <Badge tone={IMPACT_TONE[f.impact]} title="Impact">{f.impact}</Badge>
             <Badge tone={BUG_TONE[state]}>{BUG_LABEL[state]}</Badge>
@@ -48,8 +56,13 @@ function BugCard({ root, f, actions, busy, fixBlocked, onOpenSession, focused }:
         {f.summary && <p className="line-clamp-2 text-[12px] leading-snug text-fg-muted">{f.summary}</p>}
         {f.problem && <p className="text-[11.5px] text-amber">{f.problem}</p>}
         <footer className="flex flex-wrap items-center gap-1.5">
+          {toConfirm && (
+            <Button size="xs" variant="primary" disabled={busy} onClick={() => actions.confirm.mutate(f.id)} title="You checked it and it is a real bug: fix-all may pick it up">
+              <BadgeCheck /> Confirm
+            </Button>
+          )}
           {!closed && (
-            <Button size="xs" variant="primary" disabled={busy || !!fixBlocked} onClick={() => go(actions.fix.mutateAsync(f.id))} title={fixBlocked ?? "Start a session that fixes this"}>
+            <Button size="xs" variant={toConfirm ? "outline" : "primary"} disabled={busy || !!fixBlocked} onClick={() => go(actions.fix.mutateAsync(f.id))} title={fixBlocked ?? "Start a session that fixes this"}>
               <Hammer /> {f.fixRunning ? "Fix running" : "Fix now"}
             </Button>
           )}
@@ -80,7 +93,7 @@ function BugCard({ root, f, actions, busy, fixBlocked, onOpenSession, focused }:
 }
 
 
-/** Bugs logged from the browser, with the page they were seen on. */
+/** Bugs logged from the browser by a person or a QA agent, with the page they were seen on. */
 export function BugsTab() {
   const { root, q, state, actions, busy, fixBlockOf } = useLabView();
   const [who] = useWho();
@@ -107,7 +120,7 @@ export function BugsTab() {
   if (!state) return <LabGate q={q} icon={<Bug />} title="Bugs" />;
 
   return (
-    <LabPage icon={<Bug />} title="Bugs" hint="Bugs logged from the browser, with the page they were seen on.">
+    <LabPage icon={<Bug />} title="Bugs" hint="Bugs logged from the browser by you or by a QA agent, with the page they were seen on. Confirm an agent's bug before fix-all picks it up.">
       {state.sweeps
         .filter((s) => s.kind === "fix" && (s.running > 0 || s.queued > 0))
         .map((s) => (
@@ -131,7 +144,7 @@ export function BugsTab() {
           </Button>
         </div>
         {bugs.length === 0 ? (
-          <Empty icon={<Bug />} title="No bugs logged" hint="Open the browser and press Log bug on a page to add one here." />
+          <Empty icon={<Bug />} title="No bugs logged" hint="Press Log bug on a page in the browser, or run a QA plan with an agent." />
         ) : (
           shownBugs.length === 0 ? (
             <Empty icon={<Bug />} title={`No ${kind} bugs`} hint="Pick another kind to see the rest." />

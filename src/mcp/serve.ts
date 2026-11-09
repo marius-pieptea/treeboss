@@ -19,6 +19,7 @@ import { planToolDefs } from "../sessions/planq";
 import { titleToolDefs } from "../sessions/title";
 import { treebossToolDefs } from "../treeboss/tools";
 import { checklistToolDefs } from "../checklists/tools";
+import { qaToolDefs } from "../qa/defs";
 
 const PROTOCOL_VERSION = "2025-06-18";
 
@@ -36,7 +37,8 @@ function send(msg: unknown): void {
 /**
  * The tools this shim serves: the subagent tools (unless the session may not open subagents), the browser
  * and computer tools and the evidence tools when the daemon turned them on for this turn, the plan questionnaire tools in plan mode,
- * `session_title` on a lead, the spec and roadmap tools in treeboss mode, and checklist_record in a checklist audit.
+ * `session_title` on a lead, the spec and roadmap tools in treeboss mode, checklist_record in a checklist audit, and
+ * qa_record and bug_log in a QA agent session.
  */
 function toolDefs() {
   const defs: Array<{ name: string; description: string; inputSchema: unknown }> = [];
@@ -49,6 +51,7 @@ function toolDefs() {
   if (process.env.TRB_TITLE === "1") defs.push(...titleToolDefs());
   if (process.env.TRB_TREEBOSS === "1") defs.push(...treebossToolDefs());
   if (process.env.TRB_CHECKLISTS === "1") defs.push(...checklistToolDefs());
+  if (process.env.TRB_QA === "1") defs.push(...qaToolDefs());
   return defs;
 }
 

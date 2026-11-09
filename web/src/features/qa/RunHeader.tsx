@@ -5,7 +5,7 @@ import { Badge, Spinner } from "@/components/ui/misc";
 import { DropdownMenu, type MenuEntry } from "@/components/ui/overlay";
 import { cn } from "@/lib/utils";
 import type { OutcomeState, PlanSummary, QaSession, RunSummary } from "./api";
-import { runLine, STATES, summaryProgress, type Progress } from "./logic";
+import { runLine, SESSION_LABEL, STATES, summaryProgress, type Progress } from "./logic";
 
 const SEGMENT: Record<OutcomeState, string> = { pass: "bg-green", fail: "bg-red", blocked: "bg-amber", skip: "bg-fg-faint", pending: "bg-transparent" };
 
@@ -94,7 +94,7 @@ export function RunHeader(p: RunHeaderProps) {
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           {p.session?.running && (
             <span className="flex items-center gap-1 text-xs text-fg-muted">
-              <Spinner /> {p.session.kind === "draft" ? "Drafting…" : "Suggesting…"}
+              <Spinner /> {SESSION_LABEL[p.session.kind]}
               <button type="button" onClick={() => p.onOpenSession(p.session!.sessionId)} className="text-fg underline underline-offset-2 outline-none hover:text-accent">
                 Open session
               </button>
