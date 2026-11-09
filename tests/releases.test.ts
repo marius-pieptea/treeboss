@@ -13,7 +13,7 @@ import { cutRelease, planRelease } from "../src/deploy/release";
 import { changelogPrompt, startChangelogSession } from "../src/releases/draft";
 import { candidates, detectVersionFiles, listPackageRoots, nextVersion, parseBase, rangeOf, readVersionFile, renderVersion, resolveBase, suggestBump, writeVersionFiles, type VersionFile } from "../src/releases/range";
 import { listDrafts, listReleases, parseDoc, publishDraft, publishProductNote, undoRelease, readDraft, renderDoc, updateDraft } from "../src/releases/store";
-import { setTurnRunner } from "../src/sessions/manager";
+import { getSession, setTurnRunner } from "../src/sessions/manager";
 import { makeRepo, resetState } from "./helpers";
 import { db } from "../src/db";
 
@@ -542,6 +542,22 @@ describe("routes", () => {
     const id = Workspaces.open(dir).id;
     await expect(call("POST", `/api/releases/${id}/draft`, { bump: "huge" })).rejects.toThrow();
     await expect(call("POST", `/api/releases/${id}/draft`, { audience: "pirates" })).rejects.toThrow();
+  });
+
+  test("the draft and the product note start on the engine and model the body names", async () => {
+    const { dir } = history();
+    const id = Workspaces.open(dir).id;
+    setTurnRunner(async () => ({ success: true, output: "ok", sessionId: null, resumeRejected: false, aborted: false, timedOut: false }) as any);
+    try {
+      const changelog = (await (await call("POST", `/api/releases/${id}/draft`, { bump: "minor", engine: "fake", model: "chosen-model", effort: "high" }))!.json()) as { sessionId: string };
+      expect(getSession(changelog.sessionId)).toMatchObject({ engine: "fake", model: "chosen-model", effort: "high" });
+      const product = createProduct({ name: "Acme Pay" });
+      attachWorkspace(product.id, id, "web");
+      const notes = (await (await call("POST", `/api/releases/product/${product.id}/draft`, { engine: "fake", model: "other-model", effort: "low" }))!.json()) as { sessionId: string };
+      expect(getSession(notes.sessionId)).toMatchObject({ engine: "fake", model: "other-model", effort: "low" });
+    } finally {
+      setTurnRunner(null);
+    }
   });
 
   test("the tag listing and the version of a workspace with no commits yet read cleanly", () => {

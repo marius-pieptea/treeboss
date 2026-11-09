@@ -210,7 +210,14 @@ export interface DraftStart {
   suggested: { bump: string; reason: string };
 }
 
-export interface ChangelogOpts {
+/** Who runs the session a draft starts. Empty fields fall back to the default engine, or the agent's or the pair's choice. */
+export interface SessionChoice {
+  engine?: string | null;
+  model?: string | null;
+  effort?: string | null;
+}
+
+export interface ChangelogOpts extends SessionChoice {
   base?: string | null;
   bump?: ReleaseBump | null;
   audience?: Audience | null;
@@ -238,7 +245,7 @@ export function startChangelogSession(workspaceId: string, opts: ChangelogOpts =
   if (!range.commits.length && !range.roadmap.length) throw new UserError(`Nothing has changed since ${range.base.label}. There is nothing to draft.`);
   const token = randomBytes(6).toString("hex");
   const prompt = changelogPrompt({ workspace: w.name, range, current: primary.version, bump, audience, date: today(), token });
-  const session = createLead({ prompt, title: `Changelog: ${range.base.label}`.slice(0, 100), cwd: w.path, mode: "build" });
+  const session = createLead({ prompt, title: `Changelog: ${range.base.label}`.slice(0, 100), cwd: w.path, mode: "build", engine: opts.engine, model: opts.model, effort: opts.effort });
   recordSession({ token, workspace_id: workspaceId, session_id: session.id, kind: "changelog", subject: range.base.label });
   return {
     sessionId: session.id,
@@ -280,7 +287,7 @@ export interface ProductStart {
  * Starts a session that drafts one combined note for a product, from each of its repos' latest published release. The
  * note is written in the first repo's folder, under releases/products/.
  */
-export function startProductReleaseNotes(productId: string, opts: { audience?: Audience | null } = {}): ProductStart {
+export function startProductReleaseNotes(productId: string, opts: SessionChoice & { audience?: Audience | null } = {}): ProductStart {
   const product = resolveProduct(productId);
   if (!product) throw new UserError(`No product "${productId}".`);
   const repos = productWorkspaces(product.id);
@@ -293,7 +300,7 @@ export function startProductReleaseNotes(productId: string, opts: { audience?: A
     return { name: r.name, role: r.role, version: latest?.version ?? null, date: latest?.meta.date ?? null, notes: latest ? latest.body : null };
   });
   const prompt = productPrompt({ product: product.name, slug: product.slug, date, audience, token, repos: rows });
-  const session = createLead({ prompt, title: `Product notes: ${product.name}`.slice(0, 100), cwd: repos[0]!.path, mode: "build" });
+  const session = createLead({ prompt, title: `Product notes: ${product.name}`.slice(0, 100), cwd: repos[0]!.path, mode: "build", engine: opts.engine, model: opts.model, effort: opts.effort });
   recordSession({ token, workspace_id: repos[0]!.workspace_id, session_id: session.id, kind: "product", subject: product.id });
   return {
     sessionId: session.id,

@@ -1000,6 +1000,18 @@ describe("routes", () => {
     expect(getSession(sessionId)?.title).toBe("Checklist fix: Marketing site");
     await expect(call("POST", `/api/workspaces/${id}/checklists/audit`, { fix: "yes" })).rejects.toThrow(/fix must be/);
   });
+
+  test("an audit starts on the engine and model the body names", async () => {
+    stubTurns();
+    const dir = makeRepo(SLIM_TWIG);
+    const id = Workspaces.open(dir).id;
+    const u = (p: string) => new URL(`http://localhost${p}`);
+    const call = async (method: string, p: string, body: Record<string, unknown> = {}) => (await checklistsRoutes(makeCtx(new Request(u(p), { method }), u(p), body)))!;
+    await call("POST", `/api/workspaces/${id}/checklists`, { checklistId: "marketing-site" });
+    const audit = await call("POST", `/api/workspaces/${id}/checklists/audit`, { checklistId: "marketing-site", engine: "fake", model: "chosen-model", effort: "high" });
+    expect(audit.status).toBe(201);
+    expect(getSession((await audit.json()).sessionId)).toMatchObject({ engine: "fake", model: "chosen-model", effort: "high" });
+  });
 });
 
 /* -------------------------------------------------------------------------- */

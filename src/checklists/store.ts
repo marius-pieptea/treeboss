@@ -31,7 +31,7 @@ import { createChecklistFile, fileOf, patchChecklistFile, removeChecklistFile, U
 import { closeItemFinding, findingsByItem, syncItemFinding } from "./findings";
 import { judgeScreens, readJudgements, screenMessage, verificationOf, type ScreenJudgement, type ScreenRun, type Shooter, type Verification } from "./screens";
 import { browserShooter } from "./screens-browser";
-import { startChecklistPass } from "./launch";
+import { startChecklistPass, type PassOpts } from "./launch";
 import { addProjectItem, disabledAnswer, isDisabled, projectChecklist, removeProjectItem, type ProjectChecklist } from "./project";
 import { patchFinding, shipChecklistFindings, type Finding } from "../lab/findings";
 
@@ -446,13 +446,13 @@ export function recordResult(workspaceId: string, input: RecordInput): ItemState
  * of about ten items, run by the sweep runner. Each answer is recorded with checklist_record. Returns the first session's id.
  * Refuses when nothing is open. `checklistId` omitted covers every attached checklist.
  */
-export function startAuditSession(workspaceId: string, checklistId?: string | null, opts: { fix?: boolean } = {}): string {
-  return startChecklistPass(workspaceId, checklistId ?? null, { fix: !!opts.fix }).sessionId;
+export function startAuditSession(workspaceId: string, checklistId?: string | null, opts: PassOpts = {}): string {
+  return startChecklistPass(workspaceId, checklistId ?? null, { fix: !!opts.fix, engine: opts.engine, model: opts.model, effort: opts.effort }).sessionId;
 }
 
 /** "Fix with agent": an audit that fixes failing and unknown items. Kept under its old name. */
-export function startFixSession(workspaceId: string, checklistId: string): string {
-  return startAuditSession(workspaceId, checklistId, { fix: true });
+export function startFixSession(workspaceId: string, checklistId: string, opts: PassOpts = {}): string {
+  return startAuditSession(workspaceId, checklistId, { ...opts, fix: true });
 }
 
 /* -------------------------------------------------------------------------- */

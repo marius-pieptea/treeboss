@@ -17,7 +17,7 @@
  *   POST   /api/workspaces/:id/checklists/run                    { url? }   run the automatic checks
  *   GET    /api/workspaces/:id/checklists/urls                   what the checks can run against: running dev servers, deploy targets
  *   POST   /api/workspaces/:id/checklists/:checklistId/fix       start an audit that fixes first, { sessionId } (201)
- *   POST   /api/workspaces/:id/checklists/audit                  { checklistId?, fix? }   start an audit session, { sessionId } (201)
+ *   POST   /api/workspaces/:id/checklists/audit                  { checklistId?, fix?, engine?, model?, effort? }   start an audit session, { sessionId } (201)
  *   GET    /api/workspaces/:id/checklists/stack                  the detected stack of the folder, with the evidence
  */
 import { CHECK_IDS } from "../../checklists/catalog";
@@ -28,6 +28,7 @@ import { Workspaces } from "../../workspaces";
 import { HttpError, json, type Ctx, type RouteModule } from "../http";
 
 const isBool = (v: unknown): v is boolean => typeof v === "boolean";
+const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
 
 export const checklistsRoutes: RouteModule = async (c: Ctx) => {
   const { method } = c;
@@ -79,7 +80,7 @@ export const checklistsRoutes: RouteModule = async (c: Ctx) => {
   if (rest === "audit" && method === "POST") {
     const checklistId = typeof b.checklistId === "string" && b.checklistId.trim() ? b.checklistId.trim() : null;
     if (b.fix !== undefined && typeof b.fix !== "boolean") throw new HttpError(400, "fix must be true or false.");
-    return json({ sessionId: startAuditSession(id, checklistId, { fix: b.fix === true }) }, 201);
+    return json({ sessionId: startAuditSession(id, checklistId, { fix: b.fix === true, engine: str(b.engine), model: str(b.model), effort: str(b.effort) }) }, 201);
   }
 
   let r: RegExpMatchArray | null;
