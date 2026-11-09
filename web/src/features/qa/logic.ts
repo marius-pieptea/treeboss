@@ -1,8 +1,10 @@
 /**
  * Pure logic of the QA panel: progress, which step is current, the bug draft a failed step becomes, the keyboard
- * map, and how a plan's steps and proposals line up as rows. No React and no fetching, so it is all unit-tested.
+ * map, how a plan's steps and proposals line up as rows, and the requests that carry the chosen engine and model.
+ * No React and no fetching, so it is all unit-tested.
  */
-import type { BatchView, BugDraft, Coverage, Outcome, OutcomeState, Plan, PlanSource, PlanStep, PlanSummary, Proposal, QaSession, Run, RunCounts, RunStep, RunSummary, StepHistory, StepPath } from "./api";
+import type { Who } from "@/components/agent-who";
+import type { BatchView, BugDraft, Coverage, Focus, NewPlanInput, Outcome, OutcomeState, Plan, PlanSource, PlanStep, PlanSummary, Proposal, QaSession, Run, RunCounts, RunStep, RunSummary, StepHistory, StepPath } from "./api";
 
 export const STATES: OutcomeState[] = ["pass", "fail", "skip", "blocked", "pending"];
 
@@ -140,6 +142,43 @@ export function sourceOf(c: { kind: FromKind; page: StepPath | null; dir: string
     case "manual":
       return null;
   }
+}
+
+/** Which agent start a QA view asks for, with what the route reads besides the engine and model. */
+export type AgentStart =
+  | { kind: "map"; note?: string; baseUrl?: string }
+  | { kind: "e2e"; features?: string[]; plans?: string[]; baseUrl?: string }
+  | { kind: "feature-plan"; id: string }
+  | { kind: "run"; slug: string; note?: string; baseUrl?: string }
+  | { kind: "explore"; slug: string; note?: string; baseUrl?: string }
+  | { kind: "suggest"; slug: string; focus: Focus[]; note: string };
+
+/** The POST that starts a QA agent session: the route's own fields, plus the chosen engine and model. */
+export function agentRequest(root: string, a: AgentStart & Who): { path: string; body: Record<string, unknown> } {
+  const base = `/api/qa/${root}`;
+  const plan = (slug: string) => `${base}/plans/${encodeURIComponent(slug)}`;
+  const who: Who = { engine: a.engine, model: a.model };
+  switch (a.kind) {
+    case "map":
+      return { path: `${base}/features/map`, body: { ...who, note: a.note, baseUrl: a.baseUrl } };
+    case "e2e":
+      return { path: `${base}/e2e`, body: { ...who, features: a.features, plans: a.plans, baseUrl: a.baseUrl } };
+    case "feature-plan":
+      return { path: `${base}/features/${encodeURIComponent(a.id)}/plan`, body: who };
+    case "run":
+      return { path: `${plan(a.slug)}/runs`, body: { ...who, agent: true, note: a.note, baseUrl: a.baseUrl } };
+    case "explore":
+      return { path: `${plan(a.slug)}/explore`, body: { ...who, note: a.note, baseUrl: a.baseUrl } };
+    case "suggest":
+      return { path: `${plan(a.slug)}/suggest`, body: { ...who, focus: a.focus, note: a.note } };
+  }
+}
+
+/** A new plan's body: the engine and model ride along only when the server starts an agent on it. */
+export function newPlanBody(v: NewPlanInput & Who): NewPlanInput & Who {
+  const { engine, model, ...input } = v;
+  const agent = v.explore === true || (v.from !== undefined && v.from.kind !== "manual");
+  return agent ? { ...input, engine, model } : input;
 }
 
 /** What a running QA session is doing, for the "…" marker next to a plan. */

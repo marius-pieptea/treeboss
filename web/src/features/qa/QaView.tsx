@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Bot, Bug, ChevronRight, ClipboardCheck, Compass, Globe, Plus, Sparkles, Trash2 } from "lucide-react";
+import { WhoPicker, useWho } from "@/components/agent-who";
 import { Button } from "@/components/ui/button";
 import { confirm } from "@/components/ui/dialogs";
 import { Badge, Empty, SegTabs, Skeleton, Spinner } from "@/components/ui/misc";
@@ -55,6 +56,7 @@ export function QaView(props: QaViewProps) {
 function PlansPane({ root, onOpenBug, onRunInBrowser, picked, setPicked }: QaViewProps & { picked: string | null; setPicked: (slug: string | null) => void }) {
   const plans = usePlans(root);
   const actions = useQaActions(root);
+  const [who] = useWho();
   const [dialog, setDialog] = React.useState<null | "new" | "suggest">(null);
   const listWidth = usePaneWidth("qa.list", 360);
 
@@ -168,7 +170,7 @@ function PlansPane({ root, onOpenBug, onRunInBrowser, picked, setPicked }: QaVie
         open={dialog === "suggest"}
         onOpenChange={(o) => !o && setDialog(null)}
         busy={actions.suggest.isPending}
-        onSubmit={(focus, note) => slug && actions.suggest.mutate({ slug, focus, note }, { onSuccess: () => setDialog(null) })}
+        onSubmit={(focus, note) => slug && actions.suggest.mutate({ slug, focus, note, ...who }, { onSuccess: () => setDialog(null) })}
       />
     </div>
   );
@@ -231,6 +233,7 @@ interface DetailProps {
 }
 
 function PlanDetail({ root, summary, view, busy, actions, onOpenBug, onRunInBrowser, onSuggest, onDelete }: DetailProps) {
+  const [who, setWho] = useWho();
   const { plan, session } = view;
   const runs = React.useMemo(() => runsNewestFirst(view.runs), [view.runs]);
   const [tab, setTab] = React.useState<Tab>("steps");
@@ -244,15 +247,16 @@ function PlanDetail({ root, summary, view, busy, actions, onOpenBug, onRunInBrow
       <header className="flex flex-col gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="min-w-0 flex-1 truncate text-[15px] font-semibold">{plan.title}</h2>
+          <WhoPicker who={who} onChange={setWho} inline />
           {onRunInBrowser && (
             <Button size="sm" variant="primary" disabled={plan.steps.length === 0} onClick={() => onRunInBrowser(plan.slug)}>
               <Globe /> Run in browser
             </Button>
           )}
-          <Button size="sm" variant="outline" disabled={plan.steps.length === 0 || working || starting} title="An agent runs each step in its own browser, records the outcome and logs the bugs it finds" onClick={() => actions.startAgent.mutate({ slug: plan.slug }, { onSuccess: () => setTab("runs") })}>
+          <Button size="sm" variant="outline" disabled={plan.steps.length === 0 || working || starting} title="An agent runs each step in its own browser, records the outcome and logs the bugs it finds" onClick={() => actions.startAgent.mutate({ slug: plan.slug, ...who }, { onSuccess: () => setTab("runs") })}>
             <Bot /> Run with agent
           </Button>
-          <Button size="sm" variant="outline" disabled={working || starting} title="An agent uses the app around this plan, logs the bugs it finds and suggests the steps it took" onClick={() => actions.explore.mutate({ slug: plan.slug })}>
+          <Button size="sm" variant="outline" disabled={working || starting} title="An agent uses the app around this plan, logs the bugs it finds and suggests the steps it took" onClick={() => actions.explore.mutate({ slug: plan.slug, ...who })}>
             <Compass /> Explore
           </Button>
           <Button size="sm" variant="outline" disabled={working} onClick={onSuggest}>

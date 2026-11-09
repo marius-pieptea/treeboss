@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Bot, Map as MapIcon, Play, Sparkles, Square } from "lucide-react";
+import { WhoPicker, useWho } from "@/components/agent-who";
 import { Button } from "@/components/ui/button";
 import { Badge, Empty, Skeleton, Spinner } from "@/components/ui/misc";
 import { openSession } from "@/features/agent/agent-commands";
@@ -15,6 +16,7 @@ import { batchLine, COVERAGE, e2ePlansOf, lastRunLine, SESSION_LABEL, sortFeatur
 export function FeaturesView({ root, onOpenPlan }: { root: string; onOpenPlan: (slug: string) => void }) {
   const q = useFeatures(root);
   const actions = useQaActions(root);
+  const [who, setWho] = useWho();
   const data = q.data;
   const features = React.useMemo(() => sortFeatures(data?.features ?? []), [data?.features]);
   const runnable = React.useMemo(() => e2ePlansOf(features), [features]);
@@ -32,13 +34,14 @@ export function FeaturesView({ root, onOpenPlan }: { root: string; onOpenPlan: (
   }
   if (q.error || !data) return <div className="p-4 text-xs text-red">{(q.error as Error | null)?.message ?? "The feature map could not be read."}</div>;
 
-  const map = () => actions.mapFeatures.mutate({});
+  const map = () => actions.mapFeatures.mutate({ ...who });
   return (
     <div className="h-full overflow-auto">
       <div className="mx-auto flex max-w-3xl flex-col gap-3 p-4">
         <header className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="min-w-0 flex-1 truncate text-[15px] font-semibold">Features</h2>
+            <WhoPicker who={who} onChange={setWho} inline />
             {data.exists && (
               <Button size="sm" variant="outline" disabled={mapping || actions.mapFeatures.isPending} onClick={map} title="An agent reads the code and the running app and updates lab/features.md, keeping the plans already linked">
                 <MapIcon /> Update map
@@ -49,7 +52,7 @@ export function FeaturesView({ root, onOpenPlan }: { root: string; onOpenPlan: (
               variant="primary"
               disabled={runnable.length === 0 || running || actions.e2e.isPending}
               title={runnable.length === 0 ? "No feature has a plan with steps yet" : "An agent runs every linked plan in its own browser, one after another, and logs the bugs it finds"}
-              onClick={() => actions.e2e.mutate({ plans: runnable })}
+              onClick={() => actions.e2e.mutate({ plans: runnable, ...who })}
             >
               <Bot /> Run all end to end{runnable.length > 0 && <span className="font-mono">({runnable.length})</span>}
             </Button>
@@ -84,7 +87,7 @@ export function FeaturesView({ root, onOpenPlan }: { root: string; onOpenPlan: (
           <ul className="flex flex-col gap-2">
             {features.map((f) => (
               <li key={f.id}>
-                <FeatureCard f={f} batchBusy={running || actions.e2e.isPending} drafting={actions.planFeature.isPending} onOpenPlan={onOpenPlan} onDraft={() => actions.planFeature.mutate({ id: f.id }, { onSuccess: (r) => onOpenPlan(r.plan.slug) })} onRun={(plans) => actions.e2e.mutate({ plans })} />
+                <FeatureCard f={f} batchBusy={running || actions.e2e.isPending} drafting={actions.planFeature.isPending} onOpenPlan={onOpenPlan} onDraft={() => actions.planFeature.mutate({ id: f.id, ...who }, { onSuccess: (r) => onOpenPlan(r.plan.slug) })} onRun={(plans) => actions.e2e.mutate({ plans, ...who })} />
               </li>
             ))}
           </ul>

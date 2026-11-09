@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import type { Who } from "@/components/agent-who";
 import { del, get, patch, post, put } from "@/lib/api";
+import { agentRequest, newPlanBody, type AgentStart } from "./logic";
 
 /** Web copy of the QA types the daemon serves under /api/qa. */
 export type StepPath = string;
@@ -177,6 +179,12 @@ export interface NewPlanInput {
   baseUrl?: string;
 }
 
+/** The POST each agent action makes: the route's own fields, plus the chosen engine and model. */
+const agentPost = <R>(root: string, a: AgentStart & Who) => {
+  const r = agentRequest(root, a);
+  return post<R>(r.path, r.body);
+};
+
 export interface BugDraft {
   title: string;
   kind: "functional";
@@ -221,9 +229,6 @@ export const useFeatures = (root: string) =>
     staleTime: 1000,
   });
 
-/** Who runs an agent session: the engine choice, as the lab and design launchers send it. */
-export type AgentChoice = { engine?: string | null; model?: string | null; effort?: string | null; agent?: string | null; pairId?: string | null };
-
 export function useQaActions(root: string) {
   const qc = useQueryClient();
   const refresh = () => void qc.invalidateQueries({ queryKey: ["qa", root] });
@@ -231,18 +236,18 @@ export function useQaActions(root: string) {
   const mut = <V, R>(fn: (v: V) => Promise<R>, ok: (r: R, v: V) => void = refresh) => useMutation({ mutationFn: fn, onSuccess: ok, onError });
   const plan = (slug: string) => `${base(root)}/plans/${encodeURIComponent(slug)}`;
   return {
-    create: mut((v: NewPlanInput) => post<{ plan: Plan; session: QaSession | null }>(`${base(root)}/plans`, v)),
+    create: mut((v: NewPlanInput & Who) => post<{ plan: Plan; session: QaSession | null }>(`${base(root)}/plans`, newPlanBody(v))),
     edit: mut((v: { slug: string; edit: PlanEdit }) => patch<{ plan: Plan }>(plan(v.slug), { edit: v.edit })),
     remove: mut((slug: string) => del<{ ok: true }>(plan(slug))),
     decide: mut((v: { slug: string; pid: string | "all"; decision: "accept" | "reject" }) => post<{ plan: Plan }>(`${plan(v.slug)}/proposals/${encodeURIComponent(v.pid)}`, { decision: v.decision })),
-    suggest: mut((v: { slug: string; focus: Focus[]; note: string }) => post<{ session: QaSession }>(`${plan(v.slug)}/suggest`, { focus: v.focus, note: v.note })),
+    suggest: mut((v: { slug: string; focus: Focus[]; note: string } & Who) => agentPost<{ session: QaSession }>(root, { kind: "suggest", ...v })),
     start: mut((slug: string) => post<RunReply>(`${plan(slug)}/runs`, {})),
     /** A run walked by an agent in its own browser: it records each step and logs the bugs it finds. */
-    startAgent: mut((v: { slug: string; baseUrl?: string; note?: string } & AgentChoice) => post<RunReply & { session: QaSession | null }>(`${plan(v.slug)}/runs`, { ...v, agent: true })),
-    explore: mut((v: { slug: string; baseUrl?: string; note?: string } & AgentChoice) => post<{ session: QaSession }>(`${plan(v.slug)}/explore`, v)),
-    mapFeatures: mut((v: { baseUrl?: string; note?: string } & AgentChoice) => post<{ session: QaSession }>(`${base(root)}/features/map`, v)),
-    planFeature: mut((v: { id: string } & AgentChoice) => post<{ plan: Plan; session: QaSession }>(`${base(root)}/features/${encodeURIComponent(v.id)}/plan`, v)),
-    e2e: mut((v: { features?: string[]; plans?: string[]; baseUrl?: string } & AgentChoice) => post<{ batch: BatchView }>(`${base(root)}/e2e`, v)),
+    startAgent: mut((v: { slug: string; baseUrl?: string; note?: string } & Who) => agentPost<RunReply & { session: QaSession | null }>(root, { kind: "run", ...v })),
+    explore: mut((v: { slug: string; baseUrl?: string; note?: string } & Who) => agentPost<{ session: QaSession }>(root, { kind: "explore", ...v })),
+    mapFeatures: mut((v: { baseUrl?: string; note?: string } & Who) => agentPost<{ session: QaSession }>(root, { kind: "map", ...v })),
+    planFeature: mut((v: { id: string } & Who) => agentPost<{ plan: Plan; session: QaSession }>(root, { kind: "feature-plan", ...v })),
+    e2e: mut((v: { features?: string[]; plans?: string[]; baseUrl?: string } & Who) => agentPost<{ batch: BatchView }>(root, { kind: "e2e", ...v })),
     cancelBatch: mut((id: string) => post<{ batch: BatchView }>(`${base(root)}/batches/${encodeURIComponent(id)}/cancel`, {})),
     mark: mut((v: { runId: string; stepId: string; outcome: OutcomeInput }) => put<RunReply>(`${base(root)}/runs/${encodeURIComponent(v.runId)}/steps/${encodeURIComponent(v.stepId)}`, { outcome: v.outcome }), (r, v) => {
       qc.setQueryData(qaKey.run(root, v.runId), r.run);

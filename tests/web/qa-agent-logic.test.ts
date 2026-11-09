@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Finding } from "../../web/src/features/lab/data";
 import { fixableBugs, unconfirmed } from "../../web/src/features/lab/logic";
-import { batchLine, e2ePlansOf, sessionLabel, sortFeatures } from "../../web/src/features/qa/logic";
+import { agentRequest, batchLine, e2ePlansOf, newPlanBody, sessionLabel, sortFeatures } from "../../web/src/features/qa/logic";
 
 const bug = (id: string, extra: Partial<NonNullable<Finding["bug"]>> = {}): Finding => ({ id, path: `lab/findings/${id}.md`, title: id, lens: "bug", scope: null, impact: "medium", effort: "s", status: "new", evidence: [], missing: [], unmeasured: false, roadmap: null, spec: null, checklist: null, bug: { url: "http://x", capture: null, shot: "agent", kind: "functional", ...extra }, session: null, fixSession: null, fixRunning: false, drifted: [], summary: "", body: "", updatedAt: 0, problem: null });
 
@@ -36,5 +36,38 @@ describe("QA agent helpers", () => {
     expect(batchLine(b)).toBe("2 of 3 plans · now: b");
     expect(batchLine({ ...b, running: false, current: null, next: 3, errors: [{ plan: "c", error: "no steps" }] })).toBe("Ran 2 of 3 plans · 1 could not start");
     expect(batchLine({ ...b, running: false, current: null, cancelled: true })).toBe("Cancelled after 2 of 3 plans");
+  });
+});
+
+describe("QA agent requests carry the chosen engine and model", () => {
+  const WHO = { engine: "claude", model: "claude-opus-5" };
+
+  test("every agent start sends the engine and model in its body", () => {
+    const starts = [
+      agentRequest("w_1", { kind: "map", note: "focus", baseUrl: "http://localhost:3000", ...WHO }),
+      agentRequest("w_1", { kind: "e2e", plans: ["checkout"], ...WHO }),
+      agentRequest("w_1", { kind: "feature-plan", id: "invite", ...WHO }),
+      agentRequest("w_1", { kind: "run", slug: "checkout", ...WHO }),
+      agentRequest("w_1", { kind: "explore", slug: "checkout", ...WHO }),
+      agentRequest("w_1", { kind: "suggest", slug: "checkout", focus: ["errors" as const], note: "", ...WHO }),
+    ];
+    for (const r of starts) expect(r.body).toMatchObject(WHO);
+    expect(starts.map((r) => r.path)).toEqual([
+      "/api/qa/w_1/features/map",
+      "/api/qa/w_1/e2e",
+      "/api/qa/w_1/features/invite/plan",
+      "/api/qa/w_1/plans/checkout/runs",
+      "/api/qa/w_1/plans/checkout/explore",
+      "/api/qa/w_1/plans/checkout/suggest",
+    ]);
+    expect(starts[3]!.body.agent).toBe(true);
+    expect(starts[4]!.body.note).toBeUndefined();
+  });
+
+  test("a new plan sends the engine and model only when an agent starts on it", () => {
+    expect(newPlanBody({ title: "Cart", ...WHO })).toEqual({ title: "Cart" });
+    expect(newPlanBody({ title: "Cart", from: { kind: "manual" }, ...WHO })).toEqual({ title: "Cart", from: { kind: "manual" } });
+    expect(newPlanBody({ title: "Cart", from: { kind: "spec", dir: "specs/001" }, note: "pay", ...WHO })).toEqual({ title: "Cart", from: { kind: "spec", dir: "specs/001" }, note: "pay", ...WHO });
+    expect(newPlanBody({ title: "Cart", explore: true, note: "try coupons", ...WHO })).toEqual({ title: "Cart", explore: true, note: "try coupons", ...WHO });
   });
 });

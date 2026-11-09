@@ -1,4 +1,5 @@
 import * as React from "react";
+import { WhoPicker, useWho, type Who } from "@/components/agent-who";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/form";
 import { SegTabs } from "@/components/ui/misc";
@@ -21,7 +22,8 @@ type Mode = "draft" | "explore";
  * A new plan: drafted from a source by an agent that reads it, or explored by an agent that drives the app in its own
  * browser, logs the bugs it meets and writes its walk as steps.
  */
-export function NewPlanDialog({ root, currentUrl, open, onOpenChange, busy, onSubmit }: { root: string; currentUrl: string | null; open: boolean; onOpenChange: (o: boolean) => void; busy: boolean; onSubmit: (input: NewPlanInput) => void }) {
+export function NewPlanDialog({ root, currentUrl, open, onOpenChange, busy, onSubmit }: { root: string; currentUrl: string | null; open: boolean; onOpenChange: (o: boolean) => void; busy: boolean; onSubmit: (input: NewPlanInput & Who) => void }) {
+  const [who, setWho] = useWho();
   const page = currentUrl ? pathOf(currentUrl) : null;
   const specs = useSpecs(root);
   const dirs = specs.data?.features.map((f) => f.dir) ?? [];
@@ -43,6 +45,8 @@ export function NewPlanDialog({ root, currentUrl, open, onOpenChange, busy, onSu
   }, [open]);
 
   const explore = mode === "explore";
+  // A blank plan starts no session: the engine choice only shows when one will run.
+  const starts = explore || kind !== "manual";
   // An exploration always has something to go on: a blank source becomes the title and the note.
   const effective: FromKind = explore && kind === "manual" ? "text" : kind;
   const from = sourceOf({ kind: effective, page, dir: dir.trim(), base: base.trim() });
@@ -54,6 +58,7 @@ export function NewPlanDialog({ root, currentUrl, open, onOpenChange, busy, onSu
       ...(from ? { from } : {}),
       ...(note.trim() ? { note: note.trim() } : {}),
       ...(explore ? { explore: true, ...(appUrl.trim() ? { baseUrl: appUrl.trim() } : {}) } : {}),
+      ...who,
     });
   const kinds = explore ? KINDS.filter((k) => k.value !== "manual").map((k) => (k.value === "text" ? { ...k, label: "What I describe" } : k)) : KINDS;
   return (
@@ -108,6 +113,7 @@ export function NewPlanDialog({ root, currentUrl, open, onOpenChange, busy, onSu
             <Input value={appUrl} onChange={(e) => setAppUrl(e.target.value)} placeholder="http://localhost:3000" className="font-mono" />
           </Field>
         )}
+        {starts && <WhoPicker who={who} onChange={setWho} />}
       </div>
     </Dialog>
   );
