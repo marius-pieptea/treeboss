@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import type { Who } from "@/components/agent-who";
 import { get, post, put } from "@/lib/api";
 
 /** The release bumps the operator can pick. "auto" lets the agent propose one from the commits. */
@@ -7,6 +8,25 @@ export const BUMPS = ["auto", "patch", "minor", "major", "prerelease"] as const;
 export type DraftBump = (typeof BUMPS)[number];
 export const AUDIENCES = ["users", "developers", "both"] as const;
 export type Audience = (typeof AUDIENCES)[number];
+
+/** The range and options a changelog draft is written from, and the engine and model that write it. */
+export interface DraftInput extends Who {
+  base: string;
+  bump: DraftBump;
+  audience: Audience;
+}
+
+/** What the draft endpoint receives. An empty base is sent as null: the server then uses the last tag. */
+export interface DraftBody extends Who {
+  base: string | null;
+  bump: DraftBump;
+  audience: Audience;
+}
+
+/** The POST a changelog draft starts: the range, the options, and the chosen engine and model. */
+export function draftRequest(root: string, v: DraftInput): { path: string; body: DraftBody } {
+  return { path: `/api/releases/${encodeURIComponent(root)}/draft`, body: { base: v.base || null, bump: v.bump, audience: v.audience, engine: v.engine, model: v.model } };
+}
 
 export interface ReleaseDoc {
   version: string;
@@ -104,7 +124,10 @@ export function useReleaseActions(root: string) {
   const onError = (e: unknown) => toast.error(e instanceof Error ? e.message : "That did not work.");
 
   const draft = useMutation({
-    mutationFn: (o: { base: string; bump: DraftBump; audience: Audience }) => post<{ sessionId: string; version: string | null; commits: number; base: string; suggested: { bump: string; reason: string } }>(`/api/releases/${encodeURIComponent(root)}/draft`, { base: o.base || null, bump: o.bump, audience: o.audience }),
+    mutationFn: (v: DraftInput) => {
+      const r = draftRequest(root, v);
+      return post<{ sessionId: string; version: string | null; commits: number; base: string; suggested: { bump: string; reason: string } }>(r.path, r.body);
+    },
     onSuccess: (r) => {
       toast.success("Drafting the notes", { description: `${r.commits} commit${r.commits === 1 ? "" : "s"} since ${r.base}. The draft appears here when the session is done.` });
       void refresh();
@@ -160,10 +183,23 @@ export const useProductReleases = (productId: string | null) =>
     queryFn: () => get<ProductReleases>(`/api/releases/product/${encodeURIComponent(productId!)}`),
   });
 
+/** The audience a combined product note is written for, and the engine and model that write it. */
+export interface ProductNotesInput extends Who {
+  audience: Audience;
+}
+
+/** The POST a combined product note starts: the audience and the chosen engine and model. */
+export function productNotesRequest(productId: string, v: ProductNotesInput): { path: string; body: ProductNotesInput } {
+  return { path: `/api/releases/product/${encodeURIComponent(productId)}/draft`, body: { audience: v.audience, engine: v.engine, model: v.model } };
+}
+
 export function useProductNotes(productId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (audience: Audience) => post<{ sessionId: string; file: string }>(`/api/releases/product/${encodeURIComponent(productId)}/draft`, { audience }),
+    mutationFn: (v: ProductNotesInput) => {
+      const r = productNotesRequest(productId, v);
+      return post<{ sessionId: string; file: string }>(r.path, r.body);
+    },
     onSuccess: (r) => {
       toast.success("Drafting the product notes", { description: r.file });
       void qc.invalidateQueries({ queryKey: ["releases", "product", productId] });

@@ -3,6 +3,7 @@ import { ListChecks, Pencil, Play, Plus, Sparkles, Trash2 } from "lucide-react";
 import { openSession } from "@/features/agent/agent-commands";
 import { openFindings } from "@/features/lab/open";
 import { openSettingsPage } from "@/features/settings/commands";
+import { WhoPicker, useWho } from "@/components/agent-who";
 import { Button } from "@/components/ui/button";
 import { confirm } from "@/components/ui/dialogs";
 import { Checkbox, Input, Select } from "@/components/ui/form";
@@ -38,6 +39,7 @@ export function ChecklistPanel({ focus }: { focus?: ChecklistFocus | null }) {
   const [target, setTarget] = useState(LOCAL_ONLY);
   const [auditSession, setAuditSession] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [who, setWho] = useWho();
 
   const list = attached.data ?? [];
   const current = list.find((c) => c.id === active) ?? list[0] ?? null;
@@ -66,7 +68,7 @@ export function ChecklistPanel({ focus }: { focus?: ChecklistFocus | null }) {
 
   const startAudit = (fix: boolean) => {
     if (!current) return;
-    actions.audit.mutate({ checklistId: current.id, fix }, { onSuccess: (r) => setAuditSession(r.sessionId) });
+    actions.audit.mutate({ checklistId: current.id, fix, ...who }, { onSuccess: (r) => setAuditSession(r.sessionId) });
   };
 
   const detachCurrent = async () => {
@@ -188,6 +190,7 @@ export function ChecklistPanel({ focus }: { focus?: ChecklistFocus | null }) {
         <Button variant="primary" size="sm" onClick={() => actions.run.mutate(target || null)} disabled={actions.run.isPending}>
           <Play /> {actions.run.isPending ? "Checking" : "Run checks"}
         </Button>
+        <WhoPicker who={who} onChange={setWho} inline />
         <Button variant="subtle" size="sm" onClick={() => startAudit(false)} disabled={actions.audit.isPending}>
           <ListChecks /> Audit with agent
         </Button>

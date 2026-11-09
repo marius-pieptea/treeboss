@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import type { Who } from "@/components/agent-who";
 import { del, get, patch, post, put } from "@/lib/api";
 
 export type CheckStatus = "pass" | "fail" | "unknown";
@@ -102,6 +103,17 @@ export interface StackInfo {
   stack: string;
   templateExts: string[];
   evidence: string[];
+}
+
+/** An audit of one attached checklist, or of all of them when `checklistId` is null. */
+export interface AuditInput extends Who {
+  checklistId: string | null;
+  fix: boolean;
+}
+
+/** The POST an audit starts: the checklist and fix flag, plus the chosen engine and model. */
+export function auditRequest(ws: string, v: AuditInput): { path: string; body: AuditInput } {
+  return { path: `/api/workspaces/${ws}/checklists/audit`, body: { checklistId: v.checklistId, fix: v.fix, engine: v.engine, model: v.model } };
 }
 
 const attachedKey = (ws: string) => ["checklists", ws] as const;
@@ -263,7 +275,10 @@ export function useChecklistActions(ws: string) {
 
   /** Starts an audit session. `checklistId` null covers every attached checklist. `fix` also fixes failing items first. */
   const audit = useMutation({
-    mutationFn: (v: { checklistId: string | null; fix: boolean }) => post<{ sessionId: string }>(`${base}/audit`, v),
+    mutationFn: (v: AuditInput) => {
+      const r = auditRequest(ws, v);
+      return post<{ sessionId: string }>(r.path, r.body);
+    },
     onSuccess: (r) => toast.success(`Audit session ${r.sessionId} started`),
     onError: fail,
   });
