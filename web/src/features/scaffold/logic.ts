@@ -2,6 +2,7 @@
  * Pure logic behind the Templates settings page and the New app dialog: the recipe shape, the form it is
  * edited in, and the small helpers between them. No React, no network.
  */
+import type { Who } from "@/components/agent-who";
 import { joinArgs, tokenizeArgs } from "../settings/logic";
 
 export interface RepoRef {
@@ -212,6 +213,22 @@ export function repoFolderName(url: string): string {
 
 /** Parent folder and name joined into the folder that will be created. */
 export const projectTarget = (parent: string, name: string): string => `${parent.replace(/\/+$/, "")}/${name.trim()}`;
+
+export interface ScaffoldRunInput extends Who {
+  recipe: string;
+  target: string;
+  describe: string;
+  /** The design system to write in; "" is none. */
+  design?: string;
+  /** Open a session with the starter prompt. */
+  session: boolean;
+}
+
+/** The scaffold run body. The starter session carries the picked engine and model; `true` asks for the server's defaults. */
+export function scaffoldRunBody(a: ScaffoldRunInput): Record<string, unknown> {
+  const who = { ...(a.engine ? { engine: a.engine } : {}), ...(a.model ? { model: a.model } : {}) };
+  return { recipe: a.recipe, target: a.target, describe: a.describe, ...(a.design ? { designSystem: a.design } : {}), session: a.session ? (Object.keys(who).length ? who : true) : false };
+}
 
 const LAST_PARENT = "trb.newproject.parent";
 export function readLastParent(): string {

@@ -106,6 +106,15 @@ describe("schedules: running", () => {
     expect(getSchedule(s.id)!.last_session_id).toBeNull();
   });
 
+  test("a prompt job runs on the engine and model it was given", () => {
+    const ws = workspace();
+    const s = createSchedule({ workspace_id: ws.id, name: "Chosen", cron: "0 9 * * *", kind: "prompt", payload: { prompt: "go", model: "chosen-model" }, engine: "fake" });
+    const r = runSchedule(s.id);
+    const session = getSession(r.session_id!)!;
+    expect(session.engine).toBe("fake");
+    expect(session.model).toBe("chosen-model");
+  });
+
   test("run-now starts the job without moving its slot", () => {
     const ws = workspace();
     const s = createSchedule({ workspace_id: ws.id, name: "Now", cron: "0 9 * * *", kind: "prompt", payload: { prompt: "go" } });

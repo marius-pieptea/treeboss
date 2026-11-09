@@ -4,11 +4,12 @@
  */
 import { useState } from "react";
 import { CalendarClock, Play, Plus, Trash2 } from "lucide-react";
+import { WhoPicker, useWho, type Who } from "@/components/agent-who";
 import { Button, IconButton } from "@/components/ui/button";
 import { Badge, Empty, Spinner } from "@/components/ui/misc";
 import { Field, Input, Select, Switch, Textarea } from "@/components/ui/form";
 import { useSchedules, useScheduleChange, type ScheduleKind } from "./data";
-import { CRON_HINT, KIND_LABEL, LENSES, lastResultText, when } from "./logic";
+import { CRON_HINT, KIND_LABEL, LENSES, lastResultText, scheduleCreateBody, when } from "./logic";
 
 const KINDS: ScheduleKind[] = ["prompt", "deps_update", "verify", "lab_sweep", "signals_sync"];
 
@@ -61,6 +62,9 @@ export function SchedulesEditor({ workspaceId }: { workspaceId: string }) {
 
 function AddSchedule({ onAdd, busy }: { onAdd: (body: Record<string, unknown>) => Promise<unknown>; busy: boolean }) {
   const [open, setOpen] = useState(false);
+  const [sharedWho] = useWho();
+  // The choice belongs to this schedule, not to the next session anywhere: seed it from the shared picker, keep changes local.
+  const [who, setWho] = useState<Who>(sharedWho);
   const [name, setName] = useState("");
   const [cron, setCron] = useState("0 9 * * 1");
   const [kind, setKind] = useState<ScheduleKind>("prompt");
@@ -70,17 +74,24 @@ function AddSchedule({ onAdd, busy }: { onAdd: (body: Record<string, unknown>) =
 
   if (!open) {
     return (
-      <Button variant="subtle" size="sm" className="self-start" onClick={() => setOpen(true)}>
+      <Button
+        variant="subtle"
+        size="sm"
+        className="self-start"
+        onClick={() => {
+          setWho(sharedWho);
+          setOpen(true);
+        }}
+      >
         <Plus />
         Add a scheduled job
       </Button>
     );
   }
 
-  const payload = kind === "prompt" ? { prompt } : kind === "lab_sweep" ? { lens } : {};
   const ready = name.trim() && cron.trim() && (kind !== "prompt" || prompt.trim());
   const submit = async () => {
-    await onAdd({ name: name.trim(), cron: cron.trim(), kind, payload, enabled });
+    await onAdd(scheduleCreateBody({ name: name.trim(), cron: cron.trim(), kind, prompt, lens, enabled, ...who }));
     setName("");
     setPrompt("");
     setOpen(false);
@@ -111,9 +122,12 @@ function AddSchedule({ onAdd, busy }: { onAdd: (body: Record<string, unknown>) =
         <Input value={cron} onChange={(e) => setCron(e.target.value)} className="font-mono text-[12px]" />
       </Field>
       {kind === "prompt" && (
-        <Field label="Prompt">
-          <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3} placeholder="What the session should do" />
-        </Field>
+        <>
+          <Field label="Prompt">
+            <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3} placeholder="What the session should do" />
+          </Field>
+          <WhoPicker who={who} onChange={setWho} />
+        </>
       )}
       {kind === "lab_sweep" && (
         <Field label="Lens">

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Ban, Check, Pencil } from "lucide-react";
+import { WhoPicker, useWho } from "@/components/agent-who";
 import { get, post } from "@/lib/api";
 import { navigate } from "@/lib/nav";
 import { Button } from "@/components/ui/button";
@@ -11,7 +12,7 @@ import { cn } from "@/lib/utils";
 import { openSettingsPage } from "../settings/commands";
 import { CreatePanel } from "./CreatePanel";
 import { RecipeIcon } from "./icons";
-import { projectTarget, saveLastParent } from "./logic";
+import { projectTarget, saveLastParent, scaffoldRunBody } from "./logic";
 import { useTemplates } from "./TemplatesPage";
 import { useSystems } from "../design/data";
 import { defaultSystemFor } from "../design/logic";
@@ -40,6 +41,7 @@ interface Job {
 export function NewAppPanel({ parent, onClose }: { parent: string; onClose: () => void }) {
   const recipes = useTemplates();
   const systems = useSystems();
+  const [who, setWho] = useWho();
   const [recipe, setRecipe] = useState("");
   /** The design system to write into the project; "" is none. */
   const [design, setDesign] = useState("");
@@ -85,7 +87,7 @@ export function NewAppPanel({ parent, onClose }: { parent: string; onClose: () =
   }, [job.data?.status, job.data?.workspaceId, onClose, parent]);
 
   const run = useMutation({
-    mutationFn: () => post<{ job: Job }>("/api/scaffold/run", { recipe, target, describe, session, ...(design ? { designSystem: design } : {}) }),
+    mutationFn: () => post<{ job: Job }>("/api/scaffold/run", scaffoldRunBody({ recipe, target, describe, design, session, ...who })),
     onSuccess: (r) => setJobId(r.job.id),
     onError: (e: Error) => toast.error(e.message),
   });
@@ -182,6 +184,7 @@ export function NewAppPanel({ parent, onClose }: { parent: string; onClose: () =
           <Checkbox checked={session} onChange={setSession} label="Open a session with the starter prompt" />
           <span>Open a session with the starter prompt</span>
         </div>
+        {session && <WhoPicker who={who} onChange={setWho} />}
         {(jobId || run.isPending) && (
           <div className="rounded-lg border border-line bg-panel p-2">
             <div className={cn("mb-1 text-[11px] font-medium", failed ? "text-red" : "text-fg-muted")}>{failed ? job.data?.error : job.data?.step ?? "Starting"}</div>

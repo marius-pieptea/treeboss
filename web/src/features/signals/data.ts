@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import type { Who } from "@/components/agent-who";
 import { get, post } from "@/lib/api";
 
 export type SignalSource = "sentry" | "posthog" | "feedback" | "manual";
@@ -38,6 +39,17 @@ export interface SignalFilter {
   status: SignalStatus | "all";
 }
 
+export interface TriageInput extends Who {
+  id: string;
+  action: TriageAction;
+}
+
+/** The triage POST body. Only a Fix starts a session, so only it can carry an engine and model. */
+export function triageBody(a: Who & { action: TriageAction }): Record<string, unknown> {
+  if (a.action !== "to_session") return { action: a.action };
+  return { action: a.action, ...(a.engine ? { engine: a.engine } : {}), ...(a.model ? { model: a.model } : {}) };
+}
+
 export const signalsKey = (root: string) => ["signals", root] as const;
 
 export const useSignals = (root: string | null, filter: SignalFilter) =>
@@ -67,7 +79,7 @@ export function useSignalActions(root: string) {
     onError: (e: Error) => toast.error(e.message),
   });
   const triage = useMutation({
-    mutationFn: ({ id, action }: { id: string; action: TriageAction }) => post<{ session?: string; finding?: string; roadmapItem?: string }>(`/api/signals/${encodeURIComponent(id)}/triage`, { action }),
+    mutationFn: ({ id, action, engine, model }: TriageInput) => post<{ session?: string; finding?: string; roadmapItem?: string }>(`/api/signals/${encodeURIComponent(id)}/triage`, triageBody({ action, engine, model })),
     onSuccess: (r) => {
       refresh();
       if (r.session) toast.success("A session is working on it.");
