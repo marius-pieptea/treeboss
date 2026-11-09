@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ArrowUpRight, Check, FlaskConical, Hammer, Kanban, Layers, Palette, Play, ScrollText, Trash2, Undo2, X } from "lucide-react";
+import { WhoPicker, useWho, type Who } from "@/components/agent-who";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/form";
 import { Badge, Empty, SegTabs, Skeleton, Spinner, StatusDot } from "@/components/ui/misc";
@@ -10,10 +11,10 @@ import { useSessions } from "@/lib/queries";
 import { useUi } from "@/lib/store";
 import { bus } from "@/lib/bus";
 import { cn } from "@/lib/utils";
-import { useModules, useSweepPlan, type Actions, type Finding, type Lens, type LabRun, type Who } from "./data";
+import { useModules, useSweepPlan, type Actions, type Finding, type Lens, type LabRun } from "./data";
 import { openChecklists, openFindings } from "./open";
 import { takePendingFindings } from "./views";
-import { LabGate, LabPage, SweepRow, WhoPicker, useLabView, useWho } from "./shared";
+import { LabGate, LabPage, SweepRow, useLabView } from "./shared";
 import { applyFilter, checklistRef, countByStatus, EFFORT_LABEL, IMPACT_TONE, isBug, NO_FILTER, splitEvidence, tokensLabel, type Filter, type StatusFilter } from "./logic";
 
 const SCOPE_PROJECT = "project";
@@ -31,7 +32,7 @@ function EvidenceLink({ root, value }: { root: string; value: string }) {
   );
 }
 
-function FindingCard({ root, f, actions, busy, fixBlocked, onOpenSession, focused }: { root: string; f: Finding; actions: Actions; busy: boolean; fixBlocked: string | null; onOpenSession: (id: string) => void; focused: boolean }) {
+function FindingCard({ root, f, who, actions, busy, fixBlocked, onOpenSession, focused }: { root: string; f: Finding; who: Who; actions: Actions; busy: boolean; fixBlocked: string | null; onOpenSession: (id: string) => void; focused: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLElement>(null);
   const closed = f.status === "dismissed" || f.status === "shipped";
@@ -117,14 +118,14 @@ function FindingCard({ root, f, actions, busy, fixBlocked, onOpenSession, focuse
                 <Kanban /> Roadmap
               </Button>
             )}
-            <Button size="xs" disabled={busy || !!f.spec} onClick={() => go(actions.toSpec.mutateAsync(f.id))} title={f.spec ? `Spec: ${f.spec}` : "Add to the roadmap and start its spec"}>
+            <Button size="xs" disabled={busy || !!f.spec} onClick={() => go(actions.toSpec.mutateAsync({ id: f.id, ...who }))} title={f.spec ? `Spec: ${f.spec}` : "Add to the roadmap and start its spec"}>
               <ScrollText /> {f.spec ? "Has spec" : "Spec"}
             </Button>
-            <Button size="xs" variant="primary" disabled={busy || !!fixBlocked} onClick={() => go(actions.fix.mutateAsync(f.id))} title={fixBlocked ?? "Start a session that fixes this"}>
+            <Button size="xs" variant="primary" disabled={busy || !!fixBlocked} onClick={() => go(actions.fix.mutateAsync({ id: f.id, ...who }))} title={fixBlocked ?? "Start a session that fixes this"}>
               <Hammer /> {f.fixRunning ? "Fix running" : "Fix now"}
             </Button>
             {(f.lens === "ui" || f.lens === "ux") && (
-              <Button size="xs" disabled={busy} onClick={() => go(actions.design.mutateAsync(f.id))}>
+              <Button size="xs" disabled={busy} onClick={() => go(actions.design.mutateAsync({ id: f.id, ...who }))}>
                 <Palette /> Design review
               </Button>
             )}
@@ -342,7 +343,7 @@ export function FindingsTab() {
             hint={listed.length === 0 ? "Pick a lens and a scope, then run a pass. Each finding is written to lab/findings/." : "Change the filter to see the others."}
           />
         ) : (
-          shown.map((f) => <FindingCard key={f.id} root={root} f={f} actions={actions} busy={busy} fixBlocked={fixBlockOf(f.id)} onOpenSession={openSession} focused={f.id === focusId} />)
+          shown.map((f) => <FindingCard key={f.id} root={root} f={f} who={who} actions={actions} busy={busy} fixBlocked={fixBlockOf(f.id)} onOpenSession={openSession} focused={f.id === focusId} />)
         )}
       </section>
 

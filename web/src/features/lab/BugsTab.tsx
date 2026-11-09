@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUpRight, BadgeCheck, Bot, Bug, Check, Hammer, Undo2, X } from "lucide-react";
+import { WhoPicker, useWho, type Who } from "@/components/agent-who";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/form";
 import { Badge, Empty, Spinner } from "@/components/ui/misc";
@@ -10,14 +11,14 @@ import { bus } from "@/lib/bus";
 import { cn } from "@/lib/utils";
 import { type Actions, type Finding } from "./data";
 import { takePendingBugs } from "./views";
-import { LabGate, LabPage, SweepRow, useLabView, useWho } from "./shared";
+import { LabGate, LabPage, SweepRow, useLabView } from "./shared";
 import { bugState, BUG_KINDS, byKind, fixableBugs, hasScreenshot, IMPACT_TONE, isBug, kindCounts, runningFix, unconfirmed, type BugState, type KindFilter } from "./logic";
 
 const BUG_TONE: Record<BugState, "red" | "accent" | "amber" | "green" | "neutral"> = { open: "red", fixing: "accent", "needs-check": "amber", fixed: "green", dismissed: "neutral" };
 const BUG_LABEL: Record<BugState, string> = { open: "open", fixing: "fixing", "needs-check": "needs check", fixed: "fixed", dismissed: "dismissed" };
 
 /** A bug logged from the browser, by a person or a QA agent: the page it was seen on, a thumbnail of what was captured, and the ways to deal with it. */
-function BugCard({ root, f, actions, busy, fixBlocked, onOpenSession, focused }: { root: string; f: Finding; actions: Actions; busy: boolean; fixBlocked: string | null; onOpenSession: (id: string) => void; focused: boolean }) {
+function BugCard({ root, f, who, actions, busy, fixBlocked, onOpenSession, focused }: { root: string; f: Finding; who: Who; actions: Actions; busy: boolean; fixBlocked: string | null; onOpenSession: (id: string) => void; focused: boolean }) {
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
     if (focused) ref.current?.scrollIntoView({ block: "center" });
@@ -62,7 +63,7 @@ function BugCard({ root, f, actions, busy, fixBlocked, onOpenSession, focused }:
             </Button>
           )}
           {!closed && (
-            <Button size="xs" variant={toConfirm ? "outline" : "primary"} disabled={busy || !!fixBlocked} onClick={() => go(actions.fix.mutateAsync(f.id))} title={fixBlocked ?? "Start a session that fixes this"}>
+            <Button size="xs" variant={toConfirm ? "outline" : "primary"} disabled={busy || !!fixBlocked} onClick={() => go(actions.fix.mutateAsync({ id: f.id, ...who }))} title={fixBlocked ?? "Start a session that fixes this"}>
               <Hammer /> {f.fixRunning ? "Fix running" : "Fix now"}
             </Button>
           )}
@@ -96,7 +97,7 @@ function BugCard({ root, f, actions, busy, fixBlocked, onOpenSession, focused }:
 /** Bugs logged from the browser by a person or a QA agent, with the page they were seen on. */
 export function BugsTab() {
   const { root, q, state, actions, busy, fixBlockOf } = useLabView();
-  const [who] = useWho();
+  const [who, setWho] = useWho();
   const [kind, setKind] = useState<KindFilter>("all");
   const [focusId, setFocusId] = useState<string | null>(null);
 
@@ -127,7 +128,8 @@ export function BugsTab() {
           <SweepRow key={s.id} sweep={s} onCancel={() => actions.cancelSweep.mutate(s.id)} />
         ))}
       <section className="flex flex-col gap-3" aria-label="Bugs">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <WhoPicker who={who} onChange={setWho} inline />
           <div className="flex-1" />
           {bugs.length > 0 && (
             <Select
@@ -149,7 +151,7 @@ export function BugsTab() {
           shownBugs.length === 0 ? (
             <Empty icon={<Bug />} title={`No ${kind} bugs`} hint="Pick another kind to see the rest." />
           ) : (
-            shownBugs.map((b) => <BugCard key={b.id} root={root} f={b} actions={actions} busy={busy} fixBlocked={fixBlockOf(b.id)} onOpenSession={openSession} focused={b.id === focusId} />)
+            shownBugs.map((b) => <BugCard key={b.id} root={root} f={b} who={who} actions={actions} busy={busy} fixBlocked={fixBlockOf(b.id)} onOpenSession={openSession} focused={b.id === focusId} />)
           )
         )}
       </section>

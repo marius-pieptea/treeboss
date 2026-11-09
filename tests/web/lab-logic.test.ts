@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { Finding } from "../../web/src/features/lab/data";
+import { LEGACY_WHO_KEY, WHO_KEY, getWho, readWho, setWho, subscribeWho, writeWho } from "../../web/src/components/agent-who";
+import { findingActionRequest, type Finding } from "../../web/src/features/lab/data";
 import { type BugKind, applyFilter, bugState, byKind, kindCounts, checklistRef, fixableBugs, fixBlock, hasScreenshot, isBug, countByStatus, inFilter, NO_FILTER, splitEvidence, tokensLabel } from "../../web/src/features/lab/logic";
 
 const f = (over: Partial<Finding> & { id: string }): Finding => ({ path: `lab/findings/${over.id}.md`, title: over.id, lens: "perf", scope: null, impact: "medium", effort: "m", status: "new", evidence: [], missing: [], unmeasured: false, roadmap: null, spec: null, checklist: null, bug: null, session: null, fixSession: null, fixRunning: false, drifted: [], summary: "", body: "", updatedAt: 0, problem: null, ...over });
@@ -79,6 +80,65 @@ describe("one fix at a time, and the screenshot thumbnail", () => {
     expect(hasScreenshot(b("rerender", "ev_1"))).toBe(true);
     expect(hasScreenshot(b("none", "ev_1"))).toBe(false);
     expect(hasScreenshot(b("desktop", null))).toBe(false);
+  });
+});
+
+describe("the engine and model every Lab session starts with", () => {
+  const mem = (init: Record<string, string> = {}) => {
+    const m = new Map(Object.entries(init));
+    return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v), raw: (k: string) => m.get(k) };
+  };
+
+  test("a choice is read from the shared key", () => {
+    const s = mem({ [WHO_KEY]: JSON.stringify({ engine: "codex", model: "gpt-5" }) });
+    expect(readWho(s)).toEqual({ engine: "codex", model: "gpt-5" });
+  });
+
+  test("the first read falls back to the old Lab key, then the shared key wins", () => {
+    const s = mem({ [LEGACY_WHO_KEY]: JSON.stringify({ engine: "claude", model: "opus" }) });
+    expect(readWho(s)).toEqual({ engine: "claude", model: "opus" });
+    writeWho({ engine: "codex" }, s);
+    expect(s.raw(WHO_KEY)).toBe(JSON.stringify({ engine: "codex" }));
+    expect(readWho(s)).toEqual({ engine: "codex", model: undefined });
+  });
+
+  test("an explicit default is kept, not replaced by the old key", () => {
+    const s = mem({ [LEGACY_WHO_KEY]: JSON.stringify({ engine: "claude" }), [WHO_KEY]: "{}" });
+    expect(readWho(s)).toEqual({ engine: undefined, model: undefined });
+  });
+
+  test("junk, a missing store or a throwing store means the engine default", () => {
+    expect(readWho(mem({ [WHO_KEY]: "not json" }))).toEqual({ engine: undefined, model: undefined });
+    expect(readWho(mem({ [WHO_KEY]: JSON.stringify({ engine: 7 }) }))).toEqual({ engine: undefined, model: undefined });
+    expect(readWho(null)).toEqual({ engine: undefined, model: undefined });
+    const bad = { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); } };
+    expect(readWho(bad)).toEqual({ engine: undefined, model: undefined });
+    expect(() => writeWho({ engine: "claude" }, bad)).not.toThrow();
+  });
+
+  test("one write reaches every mounted picker and button", () => {
+    const label = () => `${getWho().engine ?? ""}/${getWho().model ?? ""}`;
+    const first: string[] = [];
+    const second: string[] = [];
+    const offFirst = subscribeWho(() => first.push(label()));
+    const offSecond = subscribeWho(() => second.push(label()));
+    setWho({ engine: "claude", model: "opus" });
+    expect(first).toEqual(["claude/opus"]);
+    expect(second).toEqual(["claude/opus"]);
+    expect(getWho()).toEqual({ engine: "claude", model: "opus" });
+    offFirst();
+    setWho({ engine: "codex" });
+    expect(first).toHaveLength(1);
+    expect(second).toEqual(["claude/opus", "codex/"]);
+    expect(getWho()).toEqual({ engine: "codex", model: undefined });
+    offSecond();
+  });
+
+  test("spec, fix and design put the choice in the request body, not only run and sweep", () => {
+    const who = { engine: "claude", model: "opus" };
+    expect(findingActionRequest("w_1", "fix", { id: "f 1", ...who })).toEqual({ path: "/api/lab/w_1/findings/f%201/fix", body: who });
+    expect(findingActionRequest("w_1", "spec", { id: "f1", ...who }).body).toEqual(who);
+    expect(findingActionRequest("w_1", "design", { id: "f1", ...who }).body).toEqual(who);
   });
 });
 

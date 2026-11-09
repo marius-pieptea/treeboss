@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import type { Who } from "@/components/agent-who";
 import { del, get, patch, post } from "@/lib/api";
 import type { SessionView } from "@/lib/types";
 import type { BugKind } from "./logic";
@@ -100,15 +101,19 @@ export interface SweepPlan {
   skipped: string[];
 }
 
-export interface Who {
-  engine?: string;
-  model?: string;
-}
-
 export interface RunInput extends Who {
   lens: Lens;
   scope: string;
   note?: string;
+}
+
+export interface FindingActionInput extends Who {
+  id: string;
+}
+
+/** The POST a finding action makes: the finding id in the path, the chosen engine and model in the body. */
+export function findingActionRequest(root: string, action: "spec" | "fix" | "design", v: FindingActionInput): { path: string; body: Who } {
+  return { path: `/api/lab/${root}/findings/${encodeURIComponent(v.id)}/${action}`, body: { engine: v.engine, model: v.model } };
 }
 
 export const labKey = (root: string) => ["lab", root] as const;
@@ -143,6 +148,10 @@ export function useLabActions(root: string) {
   };
   const onError = (e: unknown) => toast.error(e instanceof Error ? e.message : "That did not work.");
   const mut = <V, R>(fn: (v: V) => Promise<R>) => useMutation({ mutationFn: fn, onSuccess: refresh, onError });
+  const findingAction = (action: "spec" | "fix" | "design", v: FindingActionInput) => {
+    const r = findingActionRequest(root, action, v);
+    return post<{ finding: Finding; session: SessionView }>(r.path, r.body);
+  };
   return {
     run: mut((v: RunInput) => post<{ session: SessionView }>(`${base}/run`, v)),
     sweep: mut((v: Who & { lens: Lens; scopes: string[]; limit: number; parallel: number; note?: string }) => post<{ sweepId: string; sessions: SessionView[]; plan: SweepPlan }>(`${base}/sweep`, v)),
@@ -153,9 +162,9 @@ export function useLabActions(root: string) {
     confirm: mut((id: string) => patch<{ finding: Finding }>(`${base}/findings/${encodeURIComponent(id)}`, { confirmed: true })),
     remove: mut((id: string) => del<{ ok: true }>(`${base}/findings/${encodeURIComponent(id)}`)),
     toRoadmap: mut((id: string) => post<{ finding: Finding; itemId: string }>(`${base}/findings/${encodeURIComponent(id)}/roadmap`, {})),
-    toSpec: mut((id: string) => post<{ finding: Finding; session: SessionView }>(`${base}/findings/${encodeURIComponent(id)}/spec`, {})),
-    fix: mut((id: string) => post<{ finding: Finding; session: SessionView }>(`${base}/findings/${encodeURIComponent(id)}/fix`, {})),
-    design: mut((id: string) => post<{ finding: Finding; session: SessionView }>(`${base}/findings/${encodeURIComponent(id)}/design`, {})),
+    toSpec: mut((v: FindingActionInput) => findingAction("spec", v)),
+    fix: mut((v: FindingActionInput) => findingAction("fix", v)),
+    design: mut((v: FindingActionInput) => findingAction("design", v)),
   };
 }
 
