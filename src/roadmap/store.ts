@@ -14,6 +14,7 @@ import path from "path";
 import { db } from "../db";
 import { UserError } from "../util";
 import { getSession } from "../sessions/manager";
+import { docsDirForDir } from "../docs/attach";
 import { addItem, addLane, deleteItem, deleteLane, findItem, moveItem, parseRoadmap, renameLane, roadmapTemplate, updateItem, type ItemPatch, type NewItem, type ParsedRoadmap } from "./format";
 import { checkLink, countTasks, itemStatus, specProgress, type ItemStatus, type LaneProgress, type LinkState, type SpecProgress } from "./progress";
 
@@ -55,10 +56,16 @@ export function cleanRoadmapPath(value: string): string {
   return v;
 }
 
+/**
+ * The roadmap file, relative to the workspace: the path the operator chose, else an existing ROADMAP.md at the root, in
+ * the workspace's docs folder or in docs/, else ROADMAP.md at the root (where a new one is created).
+ */
 export function roadmapPath(rootDir: string): string {
   tables();
   const row = db().prepare("SELECT path FROM roadmap_prefs WHERE root_dir = ?").get(realOf(rootDir)) as { path: string } | undefined;
-  return row?.path ?? DEFAULT_PATH;
+  if (row) return row.path;
+  const candidates = [DEFAULT_PATH, `${docsDirForDir(rootDir)}/${DEFAULT_PATH}`, `docs/${DEFAULT_PATH}`];
+  return candidates.find((rel) => fs.existsSync(path.join(rootDir, rel))) ?? DEFAULT_PATH;
 }
 
 export function setRoadmapPath(rootDir: string, value: string): string {

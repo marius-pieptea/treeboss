@@ -6,9 +6,9 @@ import { Badge, Skeleton, Spinner } from "@/components/ui/misc";
 import { cn } from "@/lib/utils";
 import { useEngines } from "@/lib/queries";
 import type { Setting } from "@/lib/types";
-import { api, keys, useAction, useConfig } from "./data";
-import { SETTING_GROUPS, coerceSetting, settingMeta, stepSetting } from "./logic";
-import { PageShell } from "./shared";
+import { api, keys, useAction, useCliLink, useConfig } from "./data";
+import { SETTING_GROUPS, cliLinkOffer, coerceSetting, settingMeta, stepSetting } from "./logic";
+import { PageShell, WarnNote } from "./shared";
 import { useSettingsUi } from "./ui-state";
 
 type Status = { kind: "idle" } | { kind: "saving" } | { kind: "saved" } | { kind: "error"; message: string };
@@ -107,6 +107,26 @@ function SettingRow({ s, engines }: { s: Setting; engines: Array<{ id: string; i
   );
 }
 
+/** Offers to put `trb` on the PATH: the app bundles it where no terminal looks. */
+function CliLinkCard() {
+  const q = useCliLink();
+  const install = useAction((target: string | null) => api.cliLink.install(target), { invalidate: [keys.cliLink], success: (r) => (r.note ? r.note : `Linked ${r.linked}. Open a new terminal to use trb.`) });
+  const offer = q.data ? cliLinkOffer(q.data) : null;
+  if (!offer) return null;
+  return (
+    <WarnNote>
+      <div className="flex items-center gap-3">
+        <span className="min-w-0 flex-1">{offer.text}</span>
+        {offer.target && (
+          <Button size="xs" variant="outline" disabled={install.isPending} onClick={() => install.mutate(offer.target)}>
+            {install.isPending ? <Spinner /> : null} Install the trb command
+          </Button>
+        )}
+      </div>
+    </WarnNote>
+  );
+}
+
 export function ConfigPage() {
   const q = useConfig();
   const engines = useEngines();
@@ -116,6 +136,7 @@ export function ConfigPage() {
   return (
     <PageShell title="Settings" description={`How the daemon runs sessions. ${modified ? `${modified} setting${modified === 1 ? " differs" : "s differ"} from the defaults.` : "Everything is at its default."} Changes apply to the next turn.`}>
       {q.isLoading && <Skeleton className="h-64" />}
+      <CliLinkCard />
       {groups.map((g, gi) => (
         <section key={g.name} style={{ animationDelay: `${gi * 40}ms` }} className="animate-slide-up">
           <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-fg-muted">{g.name}</h2>

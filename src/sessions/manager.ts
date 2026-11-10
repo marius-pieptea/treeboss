@@ -25,10 +25,10 @@ import { clean, newId, parseList } from "../util";
 import { paths } from "../paths";
 import { getEngine, resolveBinary, engineIds, type McpRunConfig } from "../engines/registry";
 import { runTurn, type RunTurnOptions, type TurnResult } from "../engines/runner";
-import { HydraPairs, type HydraPair } from "../hydra/pairs";
+import { HydraPairs, resolveRole, type HydraPair } from "../hydra/pairs";
 import { Agents, agentPromptBlock } from "../agents/store";
 import { PAIR_ROLE_LIBRARY } from "../hydra/roles";
-import { WorktreeManager, git, mergePatch, repoRootOf, type WorktreeSession } from "../git/worktree";
+import { WorktreeManager, git, mergePatch, repoRootOf, type DepsMode, type WorktreeSession } from "../git/worktree";
 import { pruneSharedTargets } from "../git/cargotarget";
 import { drainSerialized, gitKey, LOCAL_GIT_TIMEOUT_MS, runGit } from "../git/run";
 import { buildRunMcpConfig } from "../mcp/store";
@@ -103,6 +103,8 @@ export interface SessionRecord {
   base_sha: string | null;
   head_sha: string | null;
   merged_at: string | null;
+  /** The branch tip the last merge applied (null before the first, and on heads merged before this was recorded). */
+  merged_sha: string | null;
   /** Set once the last turn's commit, checkpoint and diff summary are recorded; NULL while pending (see finalize.ts). */
   finalized_at: string | null;
   /** The diff summary as of the last finalization (JSON), or NULL when not finalized yet. */
@@ -222,6 +224,8 @@ interface LiveTurn {
   parked?: boolean;
 }
 const liveTurns = new Map<string, LiveTurn>();
+/** The running turn's tokens so far (engines/stream.ts "turn" events), shown on top of the settled totals until it settles. */
+const liveTurnUsage = new Map<string, { input: number; output: number; cacheRead: number; cacheCreation: number }>();
 
 /** Aborts when the session's running turn is interrupted or closed. Undefined when it has no turn in flight. */
 export function turnSignal(id: string): AbortSignal | undefined {
@@ -482,7 +486,7 @@ export function createLead(input: CreateLeadInput): SessionRecord {
   let workspace = cwd;
   let wt: WorktreeSession | null = null;
   if (input.isolate && input.mode !== "ask") {
-    wt = new WorktreeManager(cwd).prepare({ sessionId: id, label: "lead", setupCmd: clean(getSetting("worktree_setup_cmd")), startRef: clean(input.startRef) });
+    wt = new WorktreeManager(cwd).prepare({ sessionId: id, label: "lead", setupCmd: clean(getSetting("worktree_setup_cmd")), deps: getSetting("worktree_deps") as DepsMode, startRef: clean(input.startRef) });
     if (!wt) throw new SessionError(`Cannot isolate: ${cwd} is not inside a git repository.`);
     workspace = wt.cwd;
   }
@@ -560,7 +564,7 @@ export function overlappingHeads(s: SessionRecord): HeadOverlap[] {
   const mine: string[] = s.files_json ? JSON.parse(s.files_json) : [];
   if (!mine.length || !s.parent_id) return [];
   const siblings = db()
-    .prepare("SELECT * FROM sessions WHERE parent_id = ? AND id != ? AND status != 'closed' AND merged_at IS NULL ORDER BY created_at")
+    .prepare("SELECT * FROM sessions WHERE parent_id = ? AND id != ? AND status != 'closed' AND (merged_at IS NULL OR (merged_sha IS NOT NULL AND head_sha IS NOT merged_sha)) ORDER BY created_at")
     .all(s.parent_id, s.id) as SessionRecord[];
   const out: HeadOverlap[] = [];
   for (const o of siblings) {
@@ -590,17 +594,20 @@ export function createChild(input: CreateChildInput): SessionRecord {
   }
 
   const pair = HydraPairs.get(parent.pair_id);
-  const role = clean(input.role);
+  const asked = clean(input.role);
+  let role: string | null = null;
   let roleCfg: NonNullable<HydraPair["roles"]>[string] | null = null;
-  if (role) {
+  if (asked) {
     const roles = pair?.roles ?? null;
-    if (!pair || !roles || !roles[role]) {
-      const available = roles ? Object.keys(roles) : [];
+    // A preset or pstack name (worker, explorer) finds the pair's role with that label or agent.
+    role = roles ? resolveRole(roles, asked) : null;
+    if (!pair || !roles || !role) {
+      const available = roles ? Object.entries(roles).map(([id, c]) => (c.label?.trim() && c.label.trim().toLowerCase() !== id ? `${id} ("${c.label.trim()}")` : id)) : [];
       throw new SessionError(
-        available.length ? `Unknown role "${role}". This pair's roles: ${available.join(", ")}.` : `Role "${role}" needs a Hydra pair with roles; none governs this session. Pass engine/model instead.`,
+        available.length ? `Unknown role "${asked}". This pair's roles: ${available.join(", ")}.` : `Role "${asked}" needs a Hydra pair with roles; none governs this session. Pass engine/model instead.`,
       );
     }
-    roleCfg = roles[role];
+    roleCfg = roles[role]!;
   } else if (pair?.mode === "roles" && !caller.operator) {
     // A roles pair has no heads config to fall back on, by design: the lead picks a role.
     throw new SessionError(`This pair runs heads by role. Pass role: one of ${Object.keys(pair.roles ?? {}).join(", ")}.`);
@@ -625,11 +632,15 @@ export function createChild(input: CreateChildInput): SessionRecord {
     ]);
   const effort = clean(input.effort) ?? clean(roleCfg?.effort) ?? clean(pair?.heads_effort) ?? clean(agent?.effort) ?? parent.effort;
 
-  // Caps.
-  const openForParent = db().prepare("SELECT COUNT(*) AS n FROM sessions WHERE parent_id = ? AND status != 'closed'").get(parent.id) as { n: number };
+  // Caps. A head that is idle with all its work merged holds no slot: it stays open only so follow-ups can reuse it.
+  const openHeads = db().prepare("SELECT * FROM sessions WHERE parent_id = ? AND status != 'closed' ORDER BY created_at").all(parent.id) as SessionRecord[];
+  const holding = openHeads.filter((h) => liveTurns.has(h.id) || h.status !== "idle" || !fullyMerged(h));
   const perParentCap = Math.min(getSetting("max_per_parent") as number, pair?.max_heads ?? Number.POSITIVE_INFINITY);
-  if (!caller.operator && openForParent.n >= perParentCap) {
-    throw new SessionError(`You already have ${openForParent.n} open subagent(s) (cap ${perParentCap}). Close finished ones with subagent_close, or send follow-ups to an idle one.`);
+  if (!caller.operator && holding.length >= perParentCap) {
+    const list = holding.map((h) => `${h.id} (${h.role ?? h.engine}, ${headState(h)})`).join(", ");
+    throw new SessionError(
+      `You already have ${holding.length} open subagent(s) holding a slot (cap ${perParentCap}): ${list}. Merge or close finished ones (an idle head with its work merged frees its slot), or send follow-ups to an idle one.`,
+    );
   }
   const maxConcurrent = getSetting("max_concurrent") as number;
   if (liveTurns.size >= maxConcurrent) {
@@ -648,7 +659,7 @@ export function createChild(input: CreateChildInput): SessionRecord {
   let workspace: string;
   let isolation: Isolation = "none";
   if (wantIsolation !== false && repoRootOf(parent.cwd)) {
-    wt = new WorktreeManager(parent.cwd).prepare({ sessionId: id, label: role || engine, setupCmd: clean(getSetting("worktree_setup_cmd")) });
+    wt = new WorktreeManager(parent.cwd).prepare({ sessionId: id, label: role || engine, setupCmd: clean(getSetting("worktree_setup_cmd")), deps: getSetting("worktree_deps") as DepsMode });
   }
   if (wt) {
     isolation = "worktree";
@@ -720,6 +731,23 @@ export function send(caller: Caller, id: string, message: string): SessionRecord
   return getSession(id)!;
 }
 
+/**
+ * The turn whose answer each caller last received from subagent_wait, per head: a later wait does not hand the same answer
+ * back as if it were new. In memory: after a restart an answer may be delivered once more, never lost.
+ */
+const deliveredTurn = new Map<string, string>();
+const deliveredKey = (caller: Caller, id: string) => `${caller.sessionId ?? "operator"}:${id}`;
+
+/** Whether `caller` already received this head's latest answer. */
+export function answerDelivered(caller: Caller, s: Pick<SessionRecord, "id" | "last_turn_id">): boolean {
+  return !!s.last_turn_id && deliveredTurn.get(deliveredKey(caller, s.id)) === s.last_turn_id;
+}
+
+/** Record that `caller` received the answers of these heads (the ones not still working). */
+export function markAnswersDelivered(caller: Caller, sessions: SessionRecord[]): void {
+  for (const s of sessions) if (s.status !== "running" && s.last_turn_id) deliveredTurn.set(deliveredKey(caller, s.id), s.last_turn_id);
+}
+
 export async function wait(
   caller: Caller,
   ids: string[],
@@ -733,9 +761,9 @@ export async function wait(
   // A target is busy while its turn runs, and until that turn is finalized (see finalize.ts): the caller reads the result then.
   const busy = (s: SessionRecord) => [liveTurns.get(s.id)?.promise, finalizingOf(s.id)].filter(Boolean) as Promise<void>[];
   const pending = targets.flatMap(busy);
-  // "any" is already satisfied when one of the targets settled before this call: racing only the
-  // busy ones would block on the slowest.
-  const anyAlreadyDone = opts.mode === "any" && targets.some((s) => busy(s).length === 0);
+  // "any" is already satisfied when one of the targets settled before this call with an answer the caller has not had:
+  // racing only the busy ones would block on the slowest. An answer an earlier wait returned does not count.
+  const anyAlreadyDone = opts.mode === "any" && targets.some((s) => busy(s).length === 0 && !!s.last_turn_id && !answerDelivered(caller, s));
   let timedOut = false;
   let aborted = false;
   if (pending.length > 0 && !anyAlreadyDone) {
@@ -810,8 +838,8 @@ function closeInternal(s: SessionRecord, reason: string | null): void {
       if (tip) db().prepare("UPDATE sessions SET head_sha = ? WHERE id = ?").run(tip, s.id);
       const fresh = getSession(s.id)!;
       const unchanged = !fresh.head_sha || fresh.head_sha === fresh.base_sha;
-      // An empty branch is noise; a merged one has already landed.
-      if ((unchanged || fresh.merged_at) && fresh.branch) {
+      // An empty branch is noise; a merged one has already landed, unless the head committed more after its last merge.
+      if ((unchanged || fullyMerged(fresh)) && fresh.branch) {
         git(["branch", "-D", fresh.branch], s.worktree_git_root);
         db().prepare("UPDATE sessions SET branch = NULL WHERE id = ?").run(s.id);
       }
@@ -840,7 +868,11 @@ function assertMemoryFree(): void {
   const min = getSetting("min_free_memory_mb") as number;
   if (min <= 0) return;
   const free = Math.floor(availableMemoryMb());
-  if (free < min) throw new SessionError(`only ${free} MB free, under min_free_memory_mb (${min}); wait for turns to finish, then retry.`);
+  if (free < min) {
+    throw new SessionError(
+      `only ${free} MB free, under min_free_memory_mb (${min}); wait for turns to finish, then retry. To change the limit: Settings > General > "Refuse new turns below free memory", or \`trb config set min_free_memory_mb <MB>\` (0 turns the guard off).`,
+    );
+  }
 }
 
 /**
@@ -864,17 +896,20 @@ export function merge(caller: Caller, id: string): { merged: boolean; message: s
   }
   if (liveTurns.has(id)) throw new SessionError(`Session ${id} is still working. Wait for it first.`);
   if (finalizingOf(id)) throw new SessionError(`Session ${id} is still finishing its last turn. Try again in a moment.`);
-  if (s.merged_at) return { merged: false, message: `Already merged at ${s.merged_at}.`, files: [], session: s };
-
   const headSha = branchTip(s) || "";
-  if (!headSha || !s.base_sha || headSha === s.base_sha) {
+  // A head reused after a merge (subagent_send) merges again: only the commits after the tip the last merge applied.
+  if (s.merged_at && (!s.merged_sha || headSha === s.merged_sha)) {
+    return { merged: false, message: `Already merged at ${s.merged_at}; no commits since.`, files: [], session: s };
+  }
+  const fromSha = s.merged_at ? s.merged_sha : s.base_sha;
+  if (!headSha || !fromSha || headSha === fromSha) {
     return { merged: false, message: "The subagent committed no changes; nothing to merge.", files: [], session: s };
   }
   const parent = s.parent_id ? getSession(s.parent_id) : null;
   const target = parent ? repoRootOf(parent.cwd) : null;
   if (!target) throw new SessionError(`The parent workspace (${parent?.cwd ?? "unknown"}) is no longer a git checkout.`);
 
-  const res = mergePatch({ fromGitRoot: s.worktree_git_root, baseSha: s.base_sha, headSha, targetDir: target });
+  const res = mergePatch({ fromGitRoot: s.worktree_git_root, baseSha: fromSha, headSha, targetDir: target });
   if (!res.ok) {
     return {
       merged: false,
@@ -883,9 +918,32 @@ export function merge(caller: Caller, id: string): { merged: boolean; message: s
       session: s,
     };
   }
-  db().prepare("UPDATE sessions SET merged_at = CURRENT_TIMESTAMP, head_sha = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(headSha, id);
+  db().prepare("UPDATE sessions SET merged_at = CURRENT_TIMESTAMP, merged_sha = ?, head_sha = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(headSha, headSha, id);
   if (parent) scheduleKeepInSync(parent.cwd, (line) => appendLog(parent, null, line, "info"));
   return { merged: true, message: `Applied ${res.files.length} file(s) from ${s.branch} to ${target} as uncommitted changes.`, files: res.files, session: getSession(id)! };
+}
+
+/** A head's state in a few words, for the cap refusal. */
+function headState(h: SessionRecord): string {
+  if (liveTurns.has(h.id) || h.status === "running") return "working";
+  if (h.status === "failed") return "failed, not merged";
+  if (h.merged_at) return "idle, committed more since its merge";
+  return h.head_sha && h.head_sha !== h.base_sha ? "idle, not merged" : "idle, no changes";
+}
+
+/** The settled token totals, plus the running turn's so far. */
+function tokensOf(s: SessionRecord): SessionView["tokens"] {
+  const live = liveTurns.has(s.id) ? liveTurnUsage.get(s.id) : undefined;
+  return {
+    input: s.input_tokens + (live ? live.input + live.cacheCreation : 0),
+    output: s.output_tokens + (live?.output ?? 0),
+    cache_read: s.cache_read_tokens + (live?.cacheRead ?? 0),
+  };
+}
+
+/** Merged, with nothing committed since the last merge. */
+function fullyMerged(s: Pick<SessionRecord, "merged_at" | "merged_sha" | "head_sha">): boolean {
+  return Boolean(s.merged_at) && (!s.merged_sha || s.head_sha === s.merged_sha);
 }
 
 /** The child's committed changes as a unified diff (worktree sessions only). Reads at most `maxBytes`: git is stopped there. */
@@ -1342,6 +1400,7 @@ function startTurn(s: SessionRecord, prompt: string, opts: { resume: boolean; fo
         onSpawn: (pid) => recordTurnGroup(s.id, turnId, pid),
         onSessionId: (sid) => db().prepare("UPDATE sessions SET cli_session_id = ? WHERE id = ?").run(sid, s.id),
         onUsage: (e) => {
+          if (e.kind === "turn") liveTurnUsage.set(s.id, e.usage);
           recordUsageEvent(s, e);
           if (e.kind === "limits") limitEventReset = resetFromRateLimitEvent(e.info) ?? limitEventReset;
         },
@@ -1382,6 +1441,7 @@ function startTurn(s: SessionRecord, prompt: string, opts: { resume: boolean; fo
       log(`[trb] resume refused; retrying fresh with the thread replayed.`);
       settle(s, turnId, result, { interrupted: false, superseded: true });
       liveTurns.delete(s.id);
+      liveTurnUsage.delete(s.id);
       db().prepare("UPDATE sessions SET cli_session_id = NULL WHERE id = ?").run(s.id);
       const stale = getSession(s.id)!;
       startTurn(stale, stale.depth === 0 ? opts.followUp : replayPrompt(stale, opts.followUp), { resume: false, isRetry: true });
@@ -1399,6 +1459,7 @@ function startTurn(s: SessionRecord, prompt: string, opts: { resume: boolean; fo
     settle(s, turnId, result, { interrupted, superseded: false });
     if (nextSteps.length) db().prepare("UPDATE turns SET next_json = ? WHERE id = ?").run(JSON.stringify(nextSteps), turnId);
     liveTurns.delete(s.id);
+    liveTurnUsage.delete(s.id);
     // Closed while this turn ran: its leftovers could not be reaped then, so they are now.
     if (leftover && getSession(s.id)?.status === "closed") reapLeftovers(s, "the session was closed");
     Hub.publish({ type: "turn_end", sessionId: s.id, rootId: s.root_id, turnId, status: interrupted ? "cancelled" : result.success ? "completed" : "failed" });
@@ -1470,6 +1531,7 @@ async function finalizeTurnWork(sessionId: string, turnId: string, seq: number, 
 }
 
 function settle(s: SessionRecord, turnId: string, result: TurnResult, flags: { interrupted: boolean; superseded: boolean }): void {
+  liveTurnUsage.delete(s.id);
   if (result.sessionId) db().prepare("UPDATE sessions SET cli_session_id = ? WHERE id = ?").run(result.sessionId, s.id);
 
   const u = result.usage;
@@ -1556,6 +1618,7 @@ function holdAfterRestart(s: SessionRecord, row: ParkRow): void {
     const stopped: TurnResult = { success: false, output: "Stopped by the operator.", sessionId: null, resumeRejected: false, aborted: true, timedOut: false, maxTurnsHit: false, usage: null, exitCode: null, stderr: "" };
     settle(getSession(s.id)!, row.turn_id, stopped, { interrupted: true, superseded: false });
     liveTurns.delete(s.id);
+    liveTurnUsage.delete(s.id);
     Hub.publish({ type: "turn_end", sessionId: s.id, rootId: s.root_id, turnId: row.turn_id, status: "cancelled" });
   })();
   liveTurns.set(s.id, { turnId: row.turn_id, controller, promise, startedAt: Date.now(), parked: true });
@@ -1684,11 +1747,11 @@ export function viewSession(s: SessionRecord, opts: { full?: boolean; withOutput
     head_sha: s.head_sha,
     cli_session_id: s.cli_session_id,
     changes,
-    merged: Boolean(s.merged_at),
+    merged: fullyMerged(s),
     finalized: s.finalized_at !== null,
     cost_usd: s.cost_usd,
     ask_cost_usd: (db().prepare("SELECT SUM(cost_usd) AS c FROM turns WHERE session_id = ? AND mode = 'ask'").get(s.id) as { c: number | null }).c,
-    tokens: { input: s.input_tokens, output: s.output_tokens, cache_read: s.cache_read_tokens },
+    tokens: tokensOf(s),
     ...contextOf(s),
     handoff_from: s.handoff_from,
     model_lock: modelLock(s),

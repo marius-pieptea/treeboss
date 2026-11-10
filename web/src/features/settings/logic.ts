@@ -244,6 +244,52 @@ export function normalizeRoleKey(name: string): string {
   return name.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
+/** The preset a role came from: the one its key names, else the one its label names (a preset role given its own key). */
+export function presetOfRole<P extends { id: string; label: string }>(role: Pick<RoleForm, "key" | "label">, presets: P[]): P | undefined {
+  const key = normalizeRoleKey(role.key);
+  const label = role.label.trim().toLowerCase();
+  return presets.find((p) => p.id === key) ?? (label ? presets.find((p) => p.label.toLowerCase() === label) : undefined);
+}
+
+/**
+ * The role with `agent` picked. A preset's untouched text is dropped: it was written for a plain role, the agent's own
+ * instructions replace it (as when a role is created with an agent), and kept it would be appended after them.
+ */
+export function withAgent(role: RoleForm, agent: string, preset: { instructions: string } | undefined): RoleForm {
+  const untouched = !!preset && role.instructions.trim() === preset.instructions.trim();
+  return { ...role, agent, instructions: agent && untouched ? "" : role.instructions };
+}
+
+/**
+ * A warning when a role runs an agent and its instructions are still a preset's text: heads get the agent's instructions,
+ * then this text, and the two were written apart (a "Docs" preset says write docs; the comment-sicko agent, never write).
+ */
+export function presetAgentConflict(role: RoleForm, preset: { label: string; instructions: string } | undefined, agentTitle: string | null): string | null {
+  if (!agentTitle || !preset || !role.instructions.trim() || role.instructions.trim() !== preset.instructions.trim()) return null;
+  return `These instructions are the ${preset.label} preset's text. Heads get the agent “${agentTitle}” instructions first, then this, so the two may contradict. Clear it unless the role needs both.`;
+}
+
+/** What /api/cli-link reports (src/cli-link.ts). */
+export interface CliLinkStatus {
+  binary: string | null;
+  installed: boolean;
+  targets: Array<{ path: string; state: "absent" | "ours" | "stale" | "other"; writable: boolean; onPath: boolean }>;
+}
+
+/**
+ * The settings card for the `trb` command: null when there is nothing to say (already on PATH, or a daemon run from
+ * source), else a line and, when trb can do it, the folder to link into: one on PATH first, then any writable one.
+ */
+export function cliLinkOffer(s: CliLinkStatus): { text: string; target: string | null } | null {
+  if (!s.binary || s.installed) return null;
+  const usable = s.targets.filter((t) => t.writable && t.state !== "other");
+  const target = usable.find((t) => t.onPath) ?? usable[0] ?? null;
+  if (!target) return { text: `The trb command is not on your PATH, and neither ${s.targets.map((t) => t.path).join(" nor ")} can be written. Run: sudo ln -sf "${s.binary}" /usr/local/bin/trb`, target: null };
+  const linked = s.targets.find((t) => t.state === "ours");
+  if (linked && !linked.onPath) return { text: `trb is linked at ${linked.path}, but that folder is not on your PATH. Add it to your shell profile: export PATH="${linked.path.replace(/\/trb$/, "")}:$PATH"`, target: null };
+  return { text: `The trb command is not on your PATH, so commands like \`trb config set\` do not work in a terminal. Link it into ${target.path.replace(/\/trb$/, "")}${target.onPath ? "" : " (then add that folder to your PATH)"}.`, target: target.path };
+}
+
 export const emptyPairForm = (): PairForm => ({ title: "", mode: "heads", leadEngine: "claude", leadModel: "", leadEffort: "", headsEngine: "claude", headsModel: "", headsEffort: "", roles: [], maxHeads: null, leadInstructions: "" });
 
 export function pairToForm(p: PairLike): PairForm {
@@ -365,6 +411,7 @@ export const SETTING_META: Record<string, Omit<SettingMeta, "key" | "kind"> & { 
   claude_max_turns: { group: "Turns", label: "Claude turn cap (0 = none)", min: 0, max: 100000 },
   mcp_isolation: { group: "Tools", label: "MCP isolation", kind: "enum", options: ["strict", "merge"] },
   worktree_setup_cmd: { group: "Tools", label: "Worktree setup command" },
+  worktree_deps: { group: "Tools", label: "node_modules in subagent worktrees", kind: "enum", options: ["clone", "link", "off"] },
   skills_link: { group: "Tools", label: "Link skills into the workspace", kind: "toggle", options: TOGGLE },
   agent_browser: { group: "Tools", label: "Browser tools for agents", kind: "toggle", options: TOGGLE },
   computer_use: { group: "Tools", label: "Computer use (control the screen)", kind: "toggle", options: TOGGLE },

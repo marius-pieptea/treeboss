@@ -46,6 +46,7 @@ import { executeTreebossTool, TREEBOSS_TOOL_SET } from "../../treeboss/tools";
 import { CHECKLIST_TOOL_SET, executeChecklistTool } from "../../checklists/tools";
 import { followSession } from "../live";
 import { HttpError, json, type RouteModule } from "../http";
+import { cliLinkStatus, installCliLink } from "../../cli-link";
 
 function needSession(id: string): SessionRecord {
   const s = getSession(id);
@@ -280,6 +281,9 @@ export function coreRoutes(opts: { onShutdown?: () => void }): RouteModule {
 
     /* ---- config ---- */
     if (c.path === "/api/config" && c.method === "GET") return json({ settings: allSettings() });
+    // The `trb` command on the operator's PATH (cli-link.ts): the app bundles it where no shell looks.
+    if (c.path === "/api/cli-link" && c.method === "GET") return json(cliLinkStatus());
+    if (c.path === "/api/cli-link" && c.method === "POST") return json(installCliLink(typeof c.body.target === "string" ? c.body.target : null));
     if ((mm = c.match(/^\/api\/config\/([^/]+)$/))) {
       if (!isSettingKey(mm[1])) throw new HttpError(404, `Unknown setting "${mm[1]}".`);
       if (c.method === "PUT") {

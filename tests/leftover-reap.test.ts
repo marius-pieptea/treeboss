@@ -5,7 +5,7 @@ import { groupProcessCount, groupProcesses, type GroupProcess } from "../src/pro
 import { setSetting } from "../src/settings";
 import { close, createChild, createLead, getSession, interruptAll, readLog, reapIdle, recoverOnStartup, send, setTurnRunner, type TurnRunner } from "../src/sessions/manager";
 import { endTurnGroup, mcpTree } from "../src/sessions/leftovers";
-import { setMemoryReader } from "../src/sessions/memory";
+import { parseVmStat, setMemoryReader } from "../src/sessions/memory";
 import { makeDir, resetState, settled } from "./helpers";
 
 const posix = process.platform !== "win32";
@@ -241,6 +241,33 @@ describe("MCP servers left in a turn's group", () => {
 });
 
 describe("minimum free memory (min_free_memory_mb)", () => {
+  // Measured on a 48 GB Mac with no memory pressure: under 1 GB free, about 20 GB inactive.
+  const VM_STAT = `Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                   50000.
+Pages active:                                1187121.
+Pages inactive:                              1280000.
+Pages speculative:                            10000.
+Pages throttled:                                   0.
+Pages wired down:                             202615.
+Pages purgeable:                               4000.
+"Translation faults":                      252981521.
+`;
+
+  test("macOS: available counts the inactive, speculative and purgeable pages the kernel hands back, not just free ones", () => {
+    expect(parseVmStat(VM_STAT)).toBe(((50000 + 1280000 + 10000 + 4000) * 16384) / (1024 * 1024));
+    expect(parseVmStat(VM_STAT)!).toBeGreaterThan(20000);
+  });
+
+  test("macOS: unreadable vm_stat output gives null, so the reader falls back", () => {
+    expect(parseVmStat("")).toBeNull();
+    expect(parseVmStat("Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free: 10.\n")).toBeNull();
+  });
+
+  test("the refusal names the setting and the exact command that changes it", () => {
+    setMemoryReader(() => 800);
+    expect(() => lead("SAY hi")).toThrow(/trb config set min_free_memory_mb <MB>/);
+  });
+
   test("default 1500: a lead is refused when less is available, and nothing is created", () => {
     setMemoryReader(() => 800);
     expect(() => lead("SAY hi")).toThrow(/only 800 MB free, under min_free_memory_mb \(1500\)/);

@@ -5,7 +5,7 @@ import { BUILTIN_AGENTS, restoreBuiltinAgents, seedBuiltinAgents } from "../src/
 import { Agents } from "../src/agents/store";
 import { db } from "../src/db";
 import { effortsFor } from "../src/engines/models";
-import { HydraPairs, LEAD_INSTRUCTIONS_CHARS, PAIR_COOKBOOK } from "../src/hydra/pairs";
+import { HydraPairs, LEAD_INSTRUCTIONS_CHARS, PAIR_COOKBOOK, resolveRole } from "../src/hydra/pairs";
 import { PAIR_ROLE_LIBRARY } from "../src/hydra/roles";
 import { home } from "../src/paths";
 
@@ -129,6 +129,41 @@ describe("the lead contract", () => {
     expect(HydraPairs.leadBrief(roles, "lead")).toContain("pass `role`");
     const heads = HydraPairs.create({ title: "H", heads_engine: "codex", heads_model: "gpt-x" });
     expect(HydraPairs.leadBrief(heads, "lead")).toContain("codex");
+  });
+});
+
+describe("custom-named roles", () => {
+  const roles = {
+    "harry-potter": { engine: "codex", label: "Worker", instructions: "Build the slice you are given. Run the tests." },
+    "ron-weasley": { engine: "agy", agent: "pstack-explorer", label: "Scout" },
+    hermione: { engine: "claude", label: "Docs" },
+  };
+
+  test("the lead brief shows each role's label, agent and what it is for, not just engine and effort", () => {
+    const p = HydraPairs.create({ title: "HP", lead_engine: "claude", roles });
+    const brief = HydraPairs.leadBrief(p, "lead");
+    expect(brief).toContain('- `harry-potter` "Worker" (codex @ medium): Build the slice you are given.');
+    expect(brief).not.toContain("Run the tests."); // the first sentence only
+    expect(brief).toContain('- `ron-weasley` "Scout" (agy @ medium, as agent `pstack-explorer`): Maps the codebase'); // the preset its label names
+    expect(brief).toMatch(/- `hermione` "Docs" \(claude @ medium\): \S/);
+  });
+
+  test("a preset or pstack name resolves to the pair's role with that label or agent", () => {
+    expect(resolveRole(roles, "harry-potter")).toBe("harry-potter");
+    expect(resolveRole(roles, "worker")).toBe("harry-potter"); // by label
+    expect(resolveRole(roles, "Scout")).toBe("ron-weasley");
+    expect(resolveRole(roles, "explorer")).toBe("ron-weasley"); // pstack's explorer runs as pstack-explorer
+    expect(resolveRole(roles, "builder")).toBeNull(); // no role runs poteto-agent
+    expect(resolveRole({ a: { label: "Worker" }, b: { label: "worker" } }, "worker")).toBeNull(); // ambiguous: refused, not guessed
+  });
+
+  test("pstack's lead text and the lead brief give one rule for reusing heads", () => {
+    const pstack = PAIR_COOKBOOK.find((r) => r.id === "pstack-claude")!;
+    expect(pstack.lead_instructions).toContain("Open a fresh head per new unit; fixes to a unit go back to the head that built it");
+    const brief = HydraPairs.leadBrief(HydraPairs.create({ title: "R", roles: { worker: { engine: "codex" } } }), "lead");
+    expect(brief).toContain("fixes and follow-ups to what a head did go back to that head");
+    expect(brief).toContain("A separate unit of work gets its own head");
+    expect(brief).not.toContain("follow-up work in an area");
   });
 });
 

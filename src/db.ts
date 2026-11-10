@@ -253,6 +253,8 @@ export function migrate(conn: Database): void {
   addColumn(conn, "sessions", "model_pending", "INTEGER NOT NULL DEFAULT 0");
   // Pinned to the top of the sessions list, across workspaces. Set to the time of pinning; NULL: not pinned.
   addColumn(conn, "sessions", "pinned_at", "TEXT");
+  // The branch tip a head's last merge applied: a later merge applies only the commits after it.
+  addColumn(conn, "sessions", "merged_sha", "TEXT");
   // Evidence within investigations (see evidence/investigations.ts). finding is set only on a note; finding_status only on a finding.
   addColumn(conn, "evidence", "investigation_id", "TEXT");
   addColumn(conn, "evidence", "finding", "TEXT CHECK(finding IN ('feature','ui'))");

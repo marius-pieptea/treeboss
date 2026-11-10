@@ -79,7 +79,12 @@ function workspaceIdFor(dir: string): string | null {
 
 /** The docs folder a session's workspace uses. */
 export function docsDirForSession(s: Pick<SessionRecord, "base_cwd">): string {
-  return docsDirOf(workspaceIdFor(s.base_cwd)).dir;
+  return docsDirForDir(s.base_cwd);
+}
+
+/** The docs folder (relative) of the workspace holding `dir`: its configured one, else the default. */
+export function docsDirForDir(dir: string): string {
+  return docsDirOf(workspaceIdFor(dir)).dir;
 }
 
 export function listAttached(sessionId: string): SessionDoc[] {

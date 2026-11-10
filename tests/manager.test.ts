@@ -201,6 +201,33 @@ describe("subagents", () => {
     expect(sh("git branch --list 'trb/*'", repo)).toBe("");
   });
 
+  test("a head sent more work after a merge merges again: only the commits since the last merge", async () => {
+    const { repo, l } = await withLead();
+    const c = spawn(l.id, "WRITE first.txt one");
+    await settled(c.id);
+    expect(merge({ sessionId: l.id }, c.id)).toMatchObject({ merged: true, files: ["first.txt"] });
+    send({ sessionId: l.id }, c.id, "WRITE second.txt two");
+    await settled(c.id);
+    await finalizingOf(c.id);
+    expect(viewSession(getSession(c.id)!).merged).toBe(false); // new commits: not merged any more
+    const again = merge({ sessionId: l.id }, c.id);
+    expect(again).toMatchObject({ merged: true, files: ["second.txt"] }); // first.txt is not re-applied
+    expect(fs.readFileSync(path.join(repo, "second.txt"), "utf-8")).toBe("two\n");
+    expect(merge({ sessionId: l.id }, c.id).message).toMatch(/no commits since/);
+  });
+
+  test("closing a merged head that committed more since keeps its branch", async () => {
+    const { repo, l } = await withLead();
+    const c = spawn(l.id, "WRITE first.txt one");
+    await settled(c.id);
+    merge({ sessionId: l.id }, c.id);
+    send({ sessionId: l.id }, c.id, "WRITE second.txt two");
+    await settled(c.id);
+    const closed = await close({ sessionId: l.id }, c.id);
+    expect(closed.branch).toBeTruthy();
+    expect(sh(`git branch --list '${closed.branch}'`, repo)).toContain(closed.branch!);
+  });
+
   test("closing an UNMERGED child with changes keeps its branch", async () => {
     const { repo, l } = await withLead();
     const c = spawn(l.id, "WRITE child.txt x");
@@ -326,6 +353,33 @@ describe("subagents", () => {
     await Bun.sleep(1700);
   });
 
+  test("a preset name the pair does not use as an id resolves to the role labelled with it", async () => {
+    const pair = HydraPairs.create({ title: "HP", lead_engine: "fake", roles: { "harry-potter": { engine: "fake", label: "Worker" } } });
+    const l = await settled(lead("SAY ready", { pairId: pair.id }).id);
+    expect(spawn(l.id, "SAY x", { role: "worker" })).toMatchObject({ role: "harry-potter" });
+    expect(() => spawn(l.id, "SAY x", { role: "ghost" })).toThrow(/This pair's roles: harry-potter \("Worker"\)/);
+  });
+
+  test("an idle head with its work merged frees its slot; the refusal lists the heads that hold one", async () => {
+    setSetting("max_per_parent", "2");
+    const { l } = await withLead();
+    const done = spawn(l.id, "WRITE a.txt a");
+    await settled(done.id);
+    await finalizingOf(done.id);
+    const busy = spawn(l.id, "SLEEP 1500");
+    let err = "";
+    try {
+      spawn(l.id, "SAY x");
+    } catch (e: any) {
+      err = e.message;
+    }
+    expect(err).toContain(`${done.id} (fake, idle, not merged)`);
+    expect(err).toContain(`${busy.id} (fake, working)`);
+    merge({ sessionId: l.id }, done.id);
+    expect(spawn(l.id, "SAY x").status).toBe("running"); // the merged idle head no longer counts
+    await Bun.sleep(1700);
+  });
+
   test("daemon-wide concurrency cap", async () => {
     setSetting("max_concurrent", "2");
     const { l } = await withLead();
@@ -437,6 +491,20 @@ describe("the tool surface", () => {
     expect(waited.still_running).toEqual([slow.id]);
     await executeSubagentTool("subagent_wait", { ids: [slow.id], timeout_sec: 20 }, caller);
   });
+
+  test("wait mode any does not return at once on an answer an earlier wait already delivered: it waits for the next finisher", async () => {
+    const l = await settled(lead("SAY ready").id);
+    const caller = { sessionId: l.id };
+    const fast = JSON.parse(await executeSubagentTool("subagent_create", { brief: "SAY quick" }, caller));
+    const first = JSON.parse(await executeSubagentTool("subagent_wait", { ids: [fast.id], mode: "any", timeout_sec: 20 }, caller));
+    expect(first.already_delivered).toBeUndefined(); // new the first time
+    const slow = JSON.parse(await executeSubagentTool("subagent_create", { brief: "SLEEP 800\nSAY slow done" }, caller));
+    const t0 = Date.now();
+    const second = JSON.parse(await executeSubagentTool("subagent_wait", { mode: "any", timeout_sec: 20 }, caller)); // ids omitted: both heads
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(600); // it waited for slow instead of re-returning fast
+    expect(second.subagents.find((s: any) => s.id === slow.id).status).toBe("idle");
+    expect(second.already_delivered).toEqual([fast.id]);
+  });
 });
 
 describe("lifecycle", () => {
@@ -461,6 +529,22 @@ describe("lifecycle", () => {
     expect(reapIdle()).toBe(1);
     expect(getSession(c.id)!.status).toBe("closed");
     expect(getSession(l.id)!.status).toBe("idle");
+  });
+
+  test("a running turn's tokens show before it settles (agy reports usage per step, its result comes minutes later)", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    setTurnRunner(async (opts) => {
+      opts.onUsage?.({ kind: "turn", usage: { input: 9028, output: 1044, cacheRead: 5, cacheCreation: 0 } });
+      await gate;
+      return { success: true, output: "ok", sessionId: null, resumeRejected: false, aborted: false, timedOut: false, maxTurnsHit: false, usage: null, exitCode: 0, stderr: "" };
+    });
+    const s = lead("SAY x");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(viewSession(getSession(s.id)!).tokens).toEqual({ input: 9028, output: 1044, cache_read: 5 });
+    release();
+    const done = await settled(s.id);
+    expect(viewSession(done).tokens).toEqual({ input: 0, output: 0, cache_read: 0 }); // usage: null at settle, so nothing is kept twice
   });
 
   test("a turn that crashes the runner is a failed turn, not a hung session", async () => {

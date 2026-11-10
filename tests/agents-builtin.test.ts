@@ -188,6 +188,10 @@ describe("the shipped pstack agents", () => {
   test("the rules the brief names survive the port: the write limits, the cleaner's report-only default, the verdict line", () => {
     expect(byName("poteto-agent").instructions).toContain("Never force-push, deploy, delete data or message customers.");
     expect(byName("poteto-agent").instructions).toContain("`.agents/skills/<name>/SKILL.md` for Codex and Antigravity");
+    // OpenCode has no skills folder; its prompt's skill index carries the paths. Every pstack agent says so.
+    for (const name of ["poteto-agent", "comment-sicko", "pstack-explorer", "pstack-architect", "pstack-verifier"]) {
+      expect(byName(name).instructions).toContain('OpenCode has no skills folder: the "Available skills" index in your prompt');
+    }
     expect(byName("comment-sicko").instructions).toContain("Report only, by default");
     expect(byName("comment-sicko").instructions).toContain("Only when your brief explicitly asks you to apply the deletions");
     expect(byName("pstack-explorer").instructions).toContain("never create, edit or delete files");

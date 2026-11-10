@@ -15,9 +15,12 @@ import {
   switchPairMode,
   tokenizeArgs,
   validatePairForm,
+  presetAgentConflict,
+  presetOfRole,
+  withAgent,
 } from "../../web/src/features/settings/logic";
 import { HydraPairs } from "../../src/hydra/pairs";
-import { normalizeRoleKey as serverNormalize } from "../../src/hydra/roles";
+import { PAIR_ROLE_LIBRARY, normalizeRoleKey as serverNormalize } from "../../src/hydra/roles";
 import { db } from "../../src/db";
 
 describe("tokenizeArgs", () => {
@@ -261,5 +264,29 @@ describe("daemon settings as toggles and search", () => {
     expect(settingMatches("tools screen", row)).toBe(true);
     expect(settingMatches("screen browser", row)).toBe(false);
     expect(settingMatches("   ", row)).toBe(true);
+  });
+});
+
+describe("role cards: preset text and agents", () => {
+  const docs = PAIR_ROLE_LIBRARY.find((p) => p.id === "docs")!;
+  const fromDocs = { key: "hermione", engine: "", model: "", effort: "", agent: "", instructions: docs.instructions, label: docs.label };
+
+  test("a role keeps its preset when renamed: the label still names it", () => {
+    expect(presetOfRole(fromDocs, PAIR_ROLE_LIBRARY)?.id).toBe("docs");
+    expect(presetOfRole({ key: "docs", label: "" }, PAIR_ROLE_LIBRARY)?.id).toBe("docs");
+    expect(presetOfRole({ key: "harry", label: "Wizard" }, PAIR_ROLE_LIBRARY)).toBeUndefined();
+  });
+
+  test("picking an agent drops the preset's untouched text, but keeps text the operator wrote", () => {
+    expect(withAgent(fromDocs, "comment-sicko", docs)).toMatchObject({ agent: "comment-sicko", instructions: "" });
+    const edited = { ...fromDocs, instructions: "Only touch docs/." };
+    expect(withAgent(edited, "comment-sicko", docs).instructions).toBe("Only touch docs/.");
+  });
+
+  test("a saved role with an agent and the preset's text is flagged: the two are sent one after the other", () => {
+    const saved = { ...fromDocs, agent: "comment-sicko" };
+    expect(presetAgentConflict(saved, docs, "Comment sicko")).toContain("Docs preset's text");
+    expect(presetAgentConflict({ ...saved, instructions: "" }, docs, "Comment sicko")).toBeNull();
+    expect(presetAgentConflict(fromDocs, docs, null)).toBeNull(); // no agent: the preset text is the whole brief
   });
 });

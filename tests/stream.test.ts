@@ -185,6 +185,21 @@ describe("other engines", () => {
     expect(acc.isError()).toBe(false);
   });
 
+  test("agy: each step's usage is reported live, before the result, as turn tokens and a context reading", () => {
+    // Captured from agy 2026-11 (gemini-3.8-flash-high): usage arrives on the agent_response step, the result comes much later.
+    const events: any[] = [];
+    const acc = createStreamAccumulator(() => {}, undefined, "agy", { onUsage: (e) => events.push(e) });
+    const step = (i: number, input: number, output: number) => ({
+      event: "step_update",
+      step_update: { conversation_id: "c", step_index: i, state: "DONE", step_type: "agent_response", duration_seconds: 62.2, usage: { input_tokens: input, output_tokens: output, thinking_tokens: 773, cache_read_tokens: 0, total_tokens: input + output } },
+    });
+    acc.push(JSON.stringify(step(1, 9028, 1044)) + "\n");
+    expect(events.filter((e) => e.kind === "turn").at(-1).usage).toMatchObject({ input: 9028, output: 1044 });
+    expect(events.filter((e) => e.kind === "context").at(-1).sample.tokens).toBe(9028 + 1044);
+    acc.push(JSON.stringify(step(3, 12000, 500)) + "\n");
+    expect(events.filter((e) => e.kind === "turn").at(-1).usage).toMatchObject({ input: 21028, output: 1544 });
+  });
+
   test("opencode: real step_finish carries tokens (input excludes the cache portions)", () => {
     const { acc } = feed(
       [

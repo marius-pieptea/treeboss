@@ -79,7 +79,7 @@ const PSTACK_LEAD = [
   "- builder: poteto-agent code delegates, one unit each",
   "- verifier: independent verdicts, interrogate and swarm gauntlets; never the head that wrote the code",
   "- cleaner: comment-sicko, no-comments and unslop passes",
-  "Brief each head with file pointers, the named data shape and the success criteria. Open a fresh head per unit. You own every diff: review it and run the checks before you merge. Pause only for irreversible actions: force-push, deploys, data deletion, customer messages.",
+  "Brief each head with file pointers, the named data shape and the success criteria. Open a fresh head per new unit; fixes to a unit go back to the head that built it with subagent_send, and a verifier is never that head. You own every diff: review it and run the checks before you merge. Pause only for irreversible actions: force-push, deploys, data deletion, customer messages.",
 ].join("\n");
 
 /** One line per pstack role. Each role carries its own line, so the library's text for a role is never appended. */
@@ -196,6 +196,36 @@ export const PAIR_COOKBOOK: Array<HydraPairInput & { id: string; tagline: string
     },
   },
 ];
+
+/** The agent each pstack role runs as, from the pstack recipe: a pstack lead asking for `explorer` in another pair means the role running that agent. */
+const PSTACK_ROLE_AGENTS: Record<string, string> = Object.fromEntries(
+  Object.entries(PAIR_COOKBOOK.find((r) => r.id === "pstack-claude")!.roles!).map(([id, c]) => [id, c.agent ?? ""]),
+);
+
+/**
+ * The pair role a lead's `role` names: the id itself, else the one role whose label is that name (`worker` finds a role
+ * labelled "Worker" whatever its id), else the one role running the agent that pstack role names (`explorer` finds the
+ * role running pstack-explorer). Null when nothing, or more than one role, matches.
+ */
+export function resolveRole(roles: HydraHeadRoles, asked: string): string | null {
+  if (roles[asked]) return asked;
+  const name = asked.trim().toLowerCase();
+  const only = (pred: (c: HydraHeadRoleConfig) => boolean): string | null => {
+    const hits = Object.entries(roles).filter(([, c]) => pred(c));
+    return hits.length === 1 ? hits[0]![0] : null;
+  };
+  const agent = PSTACK_ROLE_AGENTS[name];
+  return only((c) => c.label?.trim().toLowerCase() === name) ?? (agent ? only((c) => c.agent === agent) : null);
+}
+
+/** What a role is for, in one line: the first sentence of its instructions, else its preset's description, else its agent's. */
+export function roleSummary(id: string, c: HydraHeadRoleConfig): string | null {
+  const first = c.instructions?.trim().split(/(?<=[.!?])\s/)[0]?.trim();
+  if (first) return first.length > 200 ? `${first.slice(0, 199)}…` : first;
+  const label = c.label?.trim().toLowerCase();
+  const preset = PAIR_ROLE_LIBRARY.find((p) => p.id === id || (label && p.label.toLowerCase() === label));
+  return preset?.description ?? Agents.get(c.agent ?? null)?.description ?? null;
+}
 
 function clampCap(n: number | null | undefined): number | null {
   if (n == null || !Number.isFinite(n)) return null;
@@ -395,7 +425,7 @@ export const HydraPairs = {
       `Then collect them with \`subagent_wait\` using mode "any", so you review each head as soon as it finishes instead of idling until the slowest is done. Review each answer and diff yourself: run the test / typecheck / lint gates, and read what changed. When the pair offers a reviewer on another engine, send it the diff for a second opinion.`,
       `Blocking problems go back to the SAME head with \`subagent_send\` — it keeps its context. Do not fix them yourself.`,
       `\`subagent_merge\` the work that passes, then give the operator the combined result: what changed, which head did what, how it was verified, what is left.`,
-      `Reuse heads. A head keeps its whole context, so follow-up work in an area a head already worked on goes back to that head with \`subagent_send\` instead of a new head. Close a head with \`subagent_close\` only when its work is merged or dropped AND no more work in its area is likely; open heads carry over to your next turn.`,
+      `Reuse heads for their own work: a head keeps its whole context, so fixes and follow-ups to what a head did go back to that head with \`subagent_send\`. A separate unit of work gets its own head. Close a head with \`subagent_close\` only when its work is merged or dropped AND no more work in its area is likely; open heads carry over to your next turn.`,
       `Never dead-end on a gap in your own knowledge: open a head to find out.`,
       `Heads run only on this pair's engines and models — the operator chose them, and \`subagent_create\` refuses anything else. When a head fails on a provider error (503, rate limit, auth), you may retry it once on the same config. If it fails again, do not switch engines and do not do the work yourself: stop, tell the operator which heads failed and the exact error, and ask whether to wait or switch engine/model.`,
     ];
@@ -403,8 +433,11 @@ export const HydraPairs = {
       const specs = Object.entries(pair.roles)
         .map(([r, c]) => {
           const runs = [c.engine, c.model].filter(Boolean).join("/") || "default";
-          const what = PAIR_ROLE_LIBRARY.find((p) => p.id === r)?.description;
-          return `- \`${r}\` (${runs} @ ${c.effort || "medium"})${what ? `: ${what}` : ""}`;
+          const label = c.label?.trim();
+          const named = label && label.toLowerCase() !== r ? ` "${label}"` : "";
+          const agent = c.agent ? `, as agent \`${c.agent}\`` : "";
+          const what = roleSummary(r, c);
+          return `- \`${r}\`${named} (${runs} @ ${c.effort || "medium"}${agent})${what ? `: ${what}` : ""}`;
         })
         .join("\n");
       return (

@@ -52,6 +52,7 @@ export function recordContext(ref: Ref, sample: ContextSample): void {
 export function recordUsageEvent(ref: Ref, e: UsageEvent): void {
   if (e.kind === "context") return recordContext(ref, e.sample);
   if (e.kind === "limits") return recordLimits(ref.engine, e.info);
+  if (e.kind === "turn") return;
   db().prepare("UPDATE sessions SET compactions = compactions + 1 WHERE id = ?").run(ref.id);
   // The window just shrank: the meter should show the post-compaction size at once, not at the next message.
   if (e.to != null) {

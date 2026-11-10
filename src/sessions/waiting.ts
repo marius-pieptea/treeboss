@@ -21,7 +21,7 @@ import { randomBytes } from "crypto";
 import { db } from "../db";
 import { getSetting } from "../settings";
 import { Hub } from "./hub";
-import { getSession, listForCaller, turnSignal, wait, SessionError, type Caller, type SessionRecord } from "./manager";
+import { answerDelivered, getSession, listForCaller, markAnswersDelivered, turnSignal, wait, SessionError, type Caller, type SessionRecord } from "./manager";
 
 type Mode = "all" | "any";
 
@@ -137,7 +137,7 @@ export function openWaitCount(): number {
 
 export type WaitOutcome =
   | { pending: string }
-  | { pending?: undefined; sessions: SessionRecord[]; timedOut: boolean; aborted: boolean; elapsedMs: number; budgetSec: number };
+  | { pending?: undefined; sessions: SessionRecord[]; /** Finished heads whose answer an earlier wait already returned. */ delivered: string[]; timedOut: boolean; aborted: boolean; elapsedMs: number; budgetSec: number };
 
 const clampSec = (n: number, lo: number, hi: number) => Math.min(Math.max(n, lo), hi);
 
@@ -193,5 +193,8 @@ export async function waitStep(
   if (call && res.timedOut && !res.aborted && stillRunning && deadline - Date.now() > 250) return { pending: call.id };
 
   if (call) drop(call);
-  return { sessions: res.sessions, timedOut: res.timedOut, aborted: res.aborted, elapsedMs: Date.now() - (call?.since ?? started), budgetSec };
+  // Marked only here, on the answer the caller actually gets: an intermediate block returns nothing to the model.
+  const delivered = res.sessions.filter((s) => s.status !== "running" && answerDelivered(caller, s)).map((s) => s.id);
+  markAnswersDelivered(caller, res.sessions);
+  return { sessions: res.sessions, delivered, timedOut: res.timedOut, aborted: res.aborted, elapsedMs: Date.now() - (call?.since ?? started), budgetSec };
 }

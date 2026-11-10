@@ -100,7 +100,8 @@ export function subagentToolDefs(): ToolDef[] {
         'Wait for your subagents and get their answers. Blocks until all of `ids` finish (mode "all", default) or the first one does (mode "any"). ' +
         "Omit ids to wait on every subagent you have open. This is ONE call however long the work takes (up to about 15 minutes): it costs you nothing while it blocks, " +
         "so do not poll and do not set a short timeout_sec just to check in. Only if a subagent is still running when that budget ends is it reported as running, " +
-        "and then you may call again. Each finished subagent comes back with its final answer, status, changed-file stats and cost.",
+        "and then you may call again. Each finished subagent comes back with its final answer, status, changed-file stats and cost. " +
+        'An answer an earlier wait already returned is listed under already_delivered, and does not end a mode "any" wait.',
       inputSchema: {
         type: "object",
         properties: {
@@ -157,6 +158,7 @@ function describeWait(res: Extract<WaitOutcome, { sessions: unknown }>): string 
     subagents: res.sessions.map((s) => viewSession(s)),
     waited_sec: Math.round(res.elapsedMs / 1000),
     ...(stillRunning.length ? { still_running: stillRunning, note: res.aborted ? "Your turn was interrupted while waiting." : "Some are still working. Call subagent_wait again for them." } : {}),
+    ...(res.delivered.length ? { already_delivered: res.delivered, delivered_note: "An earlier subagent_wait already returned these answers: nothing new from them." } : {}),
   });
 }
 

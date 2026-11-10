@@ -9,7 +9,7 @@ import { inheritHint, inheritedEffort, inheritedEngine, inheritedModel, type Inh
 import { cn } from "@/lib/utils";
 import type { Agent, EngineInfo, RolePreset } from "@/lib/types";
 import { useUi } from "@/lib/store";
-import { LEAD_INSTRUCTIONS_MAX, MAX_HEADS, normalizeRoleKey, switchPairMode, validatePairForm, formToPayload, type PairForm, type RoleForm } from "./logic";
+import { LEAD_INSTRUCTIONS_MAX, MAX_HEADS, normalizeRoleKey, presetAgentConflict, presetOfRole, switchPairMode, validatePairForm, withAgent, formToPayload, type PairForm, type RoleForm } from "./logic";
 import { ErrorNote, WarnNote } from "./shared";
 import { NewAgentDialog } from "./NewAgentDialog";
 import { applyTemplate, assignmentLabel, emptyAgentForm, type AgentForm } from "./agents-logic";
@@ -62,6 +62,7 @@ function RoleCard({ role, preset, engines, agents, lead, onChange, onRemove, onC
   const key = normalizeRoleKey(role.key);
   const agent = agents.find((a) => a.name === role.agent) ?? null;
   const agentMissing = !!role.agent && !agent;
+  const conflict = presetAgentConflict(role, preset, agent?.title ?? null);
 
   // Where each blank field gets its value from. A by-role pair has no heads config, so the order here is
   // role, then the agent, then the lead.
@@ -77,6 +78,7 @@ function RoleCard({ role, preset, engines, agents, lead, onChange, onRemove, onC
       <div className="mb-2 flex items-center gap-2">
         <Input value={role.key} onChange={(e) => onChange({ ...role, key: e.target.value })} placeholder="role name" spellCheck={false} className="h-7 w-40 font-mono text-xs" aria-label="Role name" />
         {key && key !== role.key.trim() && <span className="font-mono text-[10px] text-fg-faint">→ {key}</span>}
+        <Input value={role.label} onChange={(e) => onChange({ ...role, label: e.target.value })} placeholder="label" title="Shown to the lead next to the role name; a preset or pstack name (worker, explorer) also finds this role by its label" className="h-7 w-28 text-xs" aria-label="Role label" />
         {agentMissing && (
           <Badge tone="amber" title={`This role names the agent “${role.agent}”, which no longer exists`}>
             <TriangleAlert className="size-2.5" /> agent missing
@@ -91,15 +93,29 @@ function RoleCard({ role, preset, engines, agents, lead, onChange, onRemove, onC
           <Trash2 />
         </Button>
       </div>
-      <AgentSelect value={role.agent} agents={agents} onChange={(a) => onChange({ ...role, agent: a })} onCreate={onCreateAgent} />
+      <AgentSelect value={role.agent} agents={agents} onChange={(a) => onChange(withAgent(role, a, preset))} onCreate={onCreateAgent} />
+      {conflict && (
+        <WarnNote>
+          {conflict}{" "}
+          <Button variant="ghost" size="xs" onClick={() => onChange({ ...role, instructions: "" })}>
+            Clear the preset text
+          </Button>
+        </WarnNote>
+      )}
       <div className="mt-2">
         <EngineModelEffort engines={engines} engine={role.engine} effectiveEngine={eng.value} model={role.model} effort={role.effort} hints={hints} onChange={(p) => onChange({ ...role, ...p })} />
         <p className="mt-1.5 text-[10.5px] leading-snug text-fg-faint">A value set here wins. Blank fields come from {agent ? `the agent “${agent.title}”, then ` : ""}the lead's own engine, model and effort.</p>
       </div>
       {open && (
         <div className="mt-2 flex flex-col gap-1.5 animate-slide-up">
+          {agent && (
+            <details className="rounded-md border border-line bg-raised px-2 py-1 text-xs text-fg-faint">
+              <summary className="cursor-pointer">The agent “{agent.title}” instructions, sent first</summary>
+              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap font-mono">{agent.instructions.trim() || "(none)"}</pre>
+            </details>
+          )}
           <Textarea value={role.instructions} onChange={(e) => onChange({ ...role, instructions: e.target.value })} placeholder={agent ? `Added after the agent “${agent.title}” instructions` : "Standing instructions for every head opened in this role"} className="min-h-24 text-xs" aria-label="Instructions" />
-          {agent && <p className="text-[10.5px] text-fg-faint">These are appended to the agent's own instructions for heads in this role.</p>}
+          {agent && <p className="text-xs text-fg-faint">Appended to the agent's instructions above, for every head in this role.</p>}
           {preset && role.instructions !== preset.instructions && (
             <Button variant="ghost" size="xs" className="self-start" onClick={() => onChange({ ...role, instructions: preset.instructions })}>
               <RotateCcw /> Reset to the library text
@@ -203,7 +219,7 @@ export function PairEditor({ open, initial, editing, engines, presets, agents, s
               <p className="text-xs text-fg-muted">Every head names a role and runs that role's config. The lead picks the role when it opens a head.</p>
               <div className="flex flex-col gap-2">
                 {form.roles.map((r, i) => (
-                  <RoleCard key={i} role={r} preset={presets.find((p) => p.id === normalizeRoleKey(r.key))} engines={engines} agents={agents} lead={lead} onCreateAgent={() => setCreating({ initial: emptyAgentForm(), done: (a) => set({ roles: form.roles.map((x, j) => (j === i ? { ...x, agent: a.name } : x)) }) })} onChange={(nr) => set({ roles: form.roles.map((x, j) => (j === i ? nr : x)) })} onRemove={() => set({ roles: form.roles.filter((_, j) => j !== i) })} />
+                  <RoleCard key={i} role={r} preset={presetOfRole(r, presets)} engines={engines} agents={agents} lead={lead} onCreateAgent={() => setCreating({ initial: emptyAgentForm(), done: (a) => set({ roles: form.roles.map((x, j) => (j === i ? { ...x, agent: a.name } : x)) }) })} onChange={(nr) => set({ roles: form.roles.map((x, j) => (j === i ? nr : x)) })} onRemove={() => set({ roles: form.roles.filter((_, j) => j !== i) })} />
                 ))}
               </div>
               <DropdownMenu
