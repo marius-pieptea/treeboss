@@ -1,3 +1,12 @@
 {
-   "signedContributors": []
+  "signedContributors": [
+    {
+      "name": "spotless2",
+      "id": 69159041,
+      "comment_id": 6763140817,
+      "created_at": "2026-11-10T08:53:08Z",
+      "repoId": 1448687721,
+      "pullRequestNo": 1
+    }
+  ]
 }
