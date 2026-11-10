@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Archive, ArrowUpRight, Play, Plus, Trash2, Undo2 } from "lucide-react";
+import { WhoPicker, useWho } from "@/components/agent-who";
 import { Button, IconButton } from "@/components/ui/button";
 import { ask } from "@/components/ui/dialogs";
 import { Field, Input, Select } from "@/components/ui/form";
@@ -55,13 +56,14 @@ function RunState({ inv }: { inv: Investigation }) {
 
 function NewInvestigation({ root, onCreated, onCancel }: { root: string; onCreated: (r: CreatedInvestigation) => void; onCancel: () => void }) {
   const act = useEvidenceActions(root);
+  const [who, setWho] = useWho();
   const [title, setTitle] = useState("");
   const [targetKind, setTargetKind] = useState<TargetKindChoice>("auto");
   const [target, setTarget] = useState("");
   const [focus, setFocus] = useState("");
   const busy = act.createInvestigation.isPending;
   const create = (run: boolean) =>
-    act.createInvestigation.mutate({ title: title.trim(), target: target.trim() || undefined, target_kind: targetKind, run, note: focus.trim() || undefined }, { onSuccess: onCreated });
+    act.createInvestigation.mutate({ title: title.trim(), target: target.trim() || undefined, target_kind: targetKind, run, note: focus.trim() || undefined, ...who }, { onSuccess: onCreated });
   return (
     <form
       className="flex flex-col gap-2 border-b border-line p-3"
@@ -82,6 +84,7 @@ function NewInvestigation({ root, onCreated, onCancel }: { root: string; onCreat
       <Field label="Focus">
         <Input value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="Optional, e.g. the checkout flow" />
       </Field>
+      <WhoPicker who={who} onChange={setWho} />
       <div className="flex justify-end gap-2">
         <Button type="button" variant="ghost" onClick={onCancel}>
           Cancel
@@ -142,9 +145,10 @@ export function InvestigationsColumn({ root, investigations, scope, onScope, cre
 export function InvestigationBar({ root, inv, onGone, runError, onRunError }: { root: string; inv: Investigation; onGone: () => void; runError: string | null; onRunError: (id: string, message: string | null) => void }) {
   const act = useEvidenceActions(root);
   const run = useRunInvestigation(root);
+  const [who, setWho] = useWho();
   const [deleting, setDeleting] = useState(false);
   const latest = inv.runs[0];
-  const start = () => run.mutate({ id: inv.id }, { onSuccess: () => onRunError(inv.id, null) });
+  const start = () => run.mutate({ id: inv.id, ...who }, { onSuccess: () => onRunError(inv.id, null) });
   const close = async () => {
     const summary = await ask({
       title: `Close "${inv.title}"`,
@@ -192,6 +196,7 @@ export function InvestigationBar({ root, inv, onGone, runError, onRunError }: { 
             <ArrowUpRight /> Open session
           </Button>
         )}
+        <WhoPicker who={who} onChange={setWho} inline />
         <Button variant={latest ? "subtle" : "primary"} onClick={start} disabled={run.isPending || inv.running} title={inv.running ? "A run is already going" : "Start an agent session that studies the target"}>
           {run.isPending ? <Spinner /> : <Play />} {latest ? "Run again" : "Run"}
         </Button>

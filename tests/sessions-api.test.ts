@@ -100,3 +100,16 @@ describe("delete", () => {
     expect(getSession(head)).toBeNull();
   });
 });
+
+describe("detail", () => {
+  test("names the workspace the session belongs to, so a toast can switch there before opening it", async () => {
+    resetState();
+    const { Workspaces } = await import("../src/workspaces");
+    const dir = makeDir();
+    const ws = Workspaces.open(dir);
+    const inside = await started("SAY hi", { cwd: ws.path });
+    expect((await call("GET", `/api/sessions/${inside}`)).body.workspace_id).toBe(ws.id);
+    const outside = await started("SAY hi");
+    expect((await call("GET", `/api/sessions/${outside}`)).body.workspace_id).toBeNull();
+  });
+});

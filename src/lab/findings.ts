@@ -45,8 +45,11 @@ export const STATUSES = ["new", "accepted", "dismissed", "shipped"] as const;
 export type Impact = (typeof IMPACTS)[number];
 export type Effort = (typeof EFFORTS)[number];
 export type Status = (typeof STATUSES)[number];
-/** `bug` findings are logged from the built-in browser (lab/capture.ts), not found by a run. */
-export const SHOT_KINDS = ["desktop", "rerender", "none"] as const;
+/**
+ * `bug` findings are logged from the built-in browser by a person, or by a QA agent with bug_log (lab/capture.ts), not
+ * found by a run. `agent` is a screenshot the agent's own browser took.
+ */
+export const SHOT_KINDS = ["desktop", "rerender", "agent", "none"] as const;
 export type ShotKind = (typeof SHOT_KINDS)[number];
 /** functional: something does not work; visual: layout or styling; logic: wrong data or result; content: copy, text, images; performance: slow or janky. */
 export const BUG_KINDS = ["functional", "visual", "logic", "content", "performance"] as const;
@@ -58,7 +61,16 @@ export interface BugInfo {
   capture: string | null;
   shot: ShotKind;
   kind: BugKind;
+  /**
+   * Set on a bug a QA agent logged (`found_by: agent`). Such a bug is unconfirmed until a person confirms it
+   * (`confirmed: true`): fix-all leaves it alone, so a false alarm never becomes a code change by itself.
+   */
+  by?: "agent";
+  confirmed?: boolean;
 }
+
+/** A bug an agent logged that no person has confirmed yet. */
+export const unconfirmedBug = (f: { bug: BugInfo | null }): boolean => f.bug?.by === "agent" && f.bug.confirmed !== true;
 
 export interface Finding {
   /** The file's name without `.md`. */
@@ -183,7 +195,10 @@ export function parseFinding(rel: string, text: string, updatedAt = 0, rootDir?:
   const lens = lensRaw && (LENSES as readonly string[]).includes(lensRaw) ? (lensRaw as Lens) : null;
   if (lensRaw && !lens) warnings.push(`lens "${lensRaw}" is not one of ${LENSES.join(", ")}.`);
   const url = strOrNull(d.url);
-  const bug: BugInfo | null = lens === "bug" ? { url: url ?? "", capture: strOrNull(d.capture), shot: pick(SHOT_KINDS, "shot", "none"), kind: oneOf(BUG_KINDS, d.kind, "functional") } : null;
+  const bug: BugInfo | null =
+    lens === "bug"
+      ? { url: url ?? "", capture: strOrNull(d.capture), shot: pick(SHOT_KINDS, "shot", "none"), kind: oneOf(BUG_KINDS, d.kind, "functional"), ...(String(d.found_by ?? "").trim() === "agent" ? { by: "agent" as const, confirmed: String(d.confirmed).trim() === "true" } : {}) }
+      : null;
   if (bug && !url) warnings.push("A bug needs a url in the front matter.");
   const evidenceHashes: Record<string, string> = {};
   for (const h of Array.isArray(d.evidence_hashes) ? d.evidence_hashes : []) {
@@ -309,6 +324,8 @@ export interface FindingPatch {
   session?: string | null;
   fix_session?: string | null;
   evidence_hashes?: string[] | null;
+  /** A person confirmed (or un-confirmed) a bug an agent logged. */
+  confirmed?: boolean;
 }
 
 function writeText(abs: string, text: string): void {
@@ -332,7 +349,8 @@ export function shipChecklistFindings(rootDir: string, checklistId: string, keep
 /** Change a few keys of a finding in place. `null` removes a link. */
 export function patchFinding(rootDir: string, id: string, patch: FindingPatch): Finding {
   const abs = fileOf(rootDir, id);
-  readFinding(rootDir, id);
+  const before = readFinding(rootDir, id);
+  if (patch.confirmed !== undefined && before.bug?.by !== "agent") throw new UserError("Only a bug a QA agent logged needs confirming.");
   if (patch.status !== undefined && !(STATUSES as readonly string[]).includes(patch.status)) throw new UserError(`Status must be one of ${STATUSES.join(", ")}.`);
   if (patch.impact !== undefined && !(IMPACTS as readonly string[]).includes(patch.impact)) throw new UserError(`Impact must be one of ${IMPACTS.join(", ")}.`);
   if (patch.effort !== undefined && !(EFFORTS as readonly string[]).includes(patch.effort)) throw new UserError(`Effort must be one of ${EFFORTS.join(", ")}.`);
@@ -383,6 +401,7 @@ export function writeFinding(rootDir: string, id: string, f: FindingFields, body
     ...(f.roadmap ? [`roadmap: ${yamlScalar(f.roadmap)}`] : []),
     ...(f.spec ? [`spec: ${yamlScalar(f.spec)}`] : []),
     ...(f.bug ? [`url: ${yamlScalar(f.bug.url)}`, ...(f.bug.capture ? [`capture: ${yamlScalar(f.bug.capture)}`] : []), `shot: ${f.bug.shot}`, `kind: ${f.bug.kind}`] : []),
+    ...(f.bug?.by === "agent" ? ["found_by: agent", `confirmed: ${f.bug.confirmed === true}`] : []),
     "---",
   ];
   fs.mkdirSync(path.dirname(abs), { recursive: true });

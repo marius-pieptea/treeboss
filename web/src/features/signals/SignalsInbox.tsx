@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ExternalLink, RefreshCw } from "lucide-react";
+import { WhoPicker, useWho } from "@/components/agent-who";
 import { Button } from "@/components/ui/button";
 import { Badge, Empty, SegTabs, Skeleton, Spinner } from "@/components/ui/misc";
 import { useWorkspace } from "@/lib/workspace";
@@ -91,6 +92,7 @@ function SignalRow({ s, busy, onTriage }: { s: Signal; busy: boolean; onTriage: 
 
 export function SignalsInbox() {
   const { root } = useWorkspace();
+  const [who, setWho] = useWho();
   const [filter, setFilter] = useState<SignalFilter>({ source: "all", status: "new" });
   const list = useSignals(root, filter);
   const { sync, triage } = useSignalActions(root);
@@ -104,7 +106,8 @@ export function SignalsInbox() {
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-[14px] font-semibold text-fg">Signals</h2>
         <span className="text-[11px] text-fg-muted">What users and production report back</span>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <WhoPicker who={who} onChange={setWho} inline />
           <Button size="sm" variant="outline" disabled={sync.isPending} onClick={() => sync.mutate()}>
             {sync.isPending ? <Spinner /> : <RefreshCw />}
             Sync
@@ -131,7 +134,7 @@ export function SignalsInbox() {
       ) : data && data.signals.length ? (
         <ul className="flex flex-col gap-2">
           {data.signals.map((s) => (
-            <SignalRow key={s.id} s={s} busy={busy} onTriage={(action) => triage.mutate({ id: s.id, action })} />
+            <SignalRow key={s.id} s={s} busy={busy} onTriage={(action) => triage.mutate({ id: s.id, action, ...who })} />
           ))}
         </ul>
       ) : (

@@ -27,6 +27,12 @@ export class RootError extends Error {
   }
 }
 
+/**
+ * Now, in SQLite's UTC format with milliseconds, for the recent order: switching twice within a second must still
+ * put the later one first. `toMillis` on the web side reads it like the plain form.
+ */
+const NOW_MS = "strftime('%Y-%m-%d %H:%M:%f', 'now')";
+
 export const Workspaces = {
   list(): Workspace[] {
     return db().prepare("SELECT id, path, name, last_opened FROM workspaces ORDER BY last_opened DESC, rowid DESC").all() as Workspace[];
@@ -47,16 +53,28 @@ export const Workspaces = {
     if (!fs.statSync(real).isDirectory()) throw new RootError(`${real} is not a directory.`);
     const existing = db().prepare("SELECT id FROM workspaces WHERE path = ?").get(real) as { id: string } | undefined;
     if (existing) {
-      db().prepare("UPDATE workspaces SET last_opened = CURRENT_TIMESTAMP WHERE id = ?").run(existing.id);
+      db().prepare(`UPDATE workspaces SET last_opened = ${NOW_MS} WHERE id = ?`).run(existing.id);
       return this.get(existing.id)!;
     }
     const id = newId("w");
-    db().prepare("INSERT INTO workspaces (id, path, name) VALUES (?, ?, ?)").run(id, real, (name?.trim() || path.basename(real) || real).slice(0, 80));
+    db().prepare(`INSERT INTO workspaces (id, path, name, last_opened, seen_at) VALUES (?, ?, ?, ${NOW_MS}, CURRENT_TIMESTAMP)`).run(id, real, (name?.trim() || path.basename(real) || real).slice(0, 80));
     return this.get(id)!;
   },
 
+  /** The operator switched to the workspace: it moves to the top of the recent list, and what finished there is seen. */
   touch(id: string): void {
-    db().prepare("UPDATE workspaces SET last_opened = CURRENT_TIMESTAMP WHERE id = ?").run(id);
+    db().prepare(`UPDATE workspaces SET last_opened = ${NOW_MS}, seen_at = CURRENT_TIMESTAMP WHERE id = ?`).run(id);
+  },
+
+  /** What finished in the workspace while it is on screen is seen; the recent order is left alone. */
+  markSeen(id: string): void {
+    db().prepare("UPDATE workspaces SET seen_at = CURRENT_TIMESTAMP WHERE id = ?").run(id);
+  },
+
+  /** Per workspace id, when it was last seen (what finished after that is news). */
+  seenSince(): Map<string, string> {
+    const rows = db().prepare("SELECT id, COALESCE(seen_at, created_at) AS since FROM workspaces").all() as Array<{ id: string; since: string }>;
+    return new Map(rows.map((r) => [r.id, r.since]));
   },
 
   rename(id: string, name: string): Workspace | null {

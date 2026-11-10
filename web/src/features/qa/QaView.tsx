@@ -1,15 +1,19 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Bug, ChevronRight, ClipboardCheck, Globe, Plus, Sparkles, Trash2 } from "lucide-react";
+import { Bot, Bug, Check, ChevronRight, ClipboardCheck, Compass, Globe, Plus, Sparkles, Trash2, X } from "lucide-react";
+import { WhoPicker, useWho } from "@/components/agent-who";
 import { Button } from "@/components/ui/button";
 import { confirm } from "@/components/ui/dialogs";
 import { Badge, Empty, SegTabs, Skeleton, Spinner } from "@/components/ui/misc";
 import { PaneSplitter, usePaneWidth } from "@/components/ui/splitter";
+import { openSession } from "@/features/agent/agent-commands";
 import { ago } from "@/features/specs/logic";
 import { cn } from "@/lib/utils";
-import { type PlanSummary, type PlanView, type QaSession, type RunSummary, type StepHistory, usePlan, usePlans, useQaActions, useRun } from "./api";
+import { type PlanSummary, type PlanView, type QaActions, type RunSummary, type StepHistory, usePlan, usePlans, useQaActions, useRun } from "./api";
 import { Banner } from "./Banner";
-import { bugOf, countsLine, lastRunLine, outcomeDetail, runNumber, runsNewestFirst, sortPlans, summaryProgress } from "./logic";
+import { FeaturesView } from "./FeaturesView";
+import { bugOf, countsLine, lastRunLine, outcomeDetail, rowsOf, runNumber, runsNewestFirst, sessionLabel, sortPlans, summaryProgress } from "./logic";
+import { ProposalRow } from "./ProposalRow";
 import { NewPlanDialog } from "./NewPlanDialog";
 import { ProgressBar } from "./RunHeader";
 import { OutcomeIcon } from "./StepRow";
@@ -23,12 +27,37 @@ export interface QaViewProps {
   onRunInBrowser?: (slug: string) => void;
 }
 
-const sessionLabel = (s: QaSession | null) => (s?.running ? (s.kind === "draft" ? "Drafting…" : "Suggesting…") : null);
+type Pane = "plans" | "features";
 
-export function QaView({ root, onOpenBug, onRunInBrowser }: QaViewProps) {
+/** QA: the plans and their runs, and the feature map that says what each plan covers. */
+export function QaView(props: QaViewProps) {
+  const [pane, setPane] = React.useState<Pane>("plans");
+  const [picked, setPicked] = React.useState<string | null>(null);
+  const openPlan = (slug: string) => {
+    setPicked(slug);
+    setPane("plans");
+  };
+  return (
+    <div className="flex h-full flex-col bg-bg text-fg">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line bg-panel px-3">
+        <SegTabs
+          value={pane}
+          onChange={setPane}
+          items={[
+            { value: "plans", label: "Plans" },
+            { value: "features", label: "Features" },
+          ]}
+        />
+      </div>
+      <div className="min-h-0 flex-1">{pane === "plans" ? <PlansPane {...props} picked={picked} setPicked={setPicked} /> : <FeaturesView root={props.root} onOpenPlan={openPlan} />}</div>
+    </div>
+  );
+}
+
+function PlansPane({ root, onOpenBug, onRunInBrowser, picked, setPicked }: QaViewProps & { picked: string | null; setPicked: (slug: string | null) => void }) {
   const plans = usePlans(root);
   const actions = useQaActions(root);
-  const [picked, setPicked] = React.useState<string | null>(null);
+  const [who] = useWho();
   const [dialog, setDialog] = React.useState<null | "new" | "suggest">(null);
   const listWidth = usePaneWidth("qa.list", 360);
 
@@ -65,7 +94,7 @@ export function QaView({ root, onOpenBug, onRunInBrowser }: QaViewProps) {
               <Plus /> New plan
             </Button>
           </div>
-          <p className="text-xs leading-relaxed text-fg-muted">Manual test plans and how each run went.</p>
+          <p className="text-xs leading-relaxed text-fg-muted">Test plans, run by hand in the browser or by an agent, and how each run went.</p>
         </header>
         <div className="min-h-0 flex-1 overflow-auto">
           {plans.isPending ? (
@@ -79,7 +108,7 @@ export function QaView({ root, onOpenBug, onRunInBrowser }: QaViewProps) {
             <Empty
               icon={<ClipboardCheck />}
               title="No QA plans yet"
-              hint="Draft one from a page, a spec or your changes. Plans run in the browser's QA panel, and every run lands here."
+              hint="Draft one from a page, a spec or your changes, or let an agent explore the app. Run it by hand or with an agent; every run lands here."
               action={
                 <Button size="sm" variant="primary" onClick={() => setDialog("new")}>
                   <Plus /> New plan
@@ -107,6 +136,7 @@ export function QaView({ root, onOpenBug, onRunInBrowser }: QaViewProps) {
             summary={current}
             view={view.data}
             busy={actions.remove.isPending}
+            actions={actions}
             onOpenBug={onOpenBug}
             onRunInBrowser={onRunInBrowser}
             onSuggest={() => setDialog("suggest")}
@@ -141,7 +171,7 @@ export function QaView({ root, onOpenBug, onRunInBrowser }: QaViewProps) {
         open={dialog === "suggest"}
         onOpenChange={(o) => !o && setDialog(null)}
         busy={actions.suggest.isPending}
-        onSubmit={(focus, note) => slug && actions.suggest.mutate({ slug, focus, note }, { onSuccess: () => setDialog(null) })}
+        onSubmit={(focus, note) => slug && actions.suggest.mutate({ slug, focus, note, ...who }, { onSuccess: () => setDialog(null) })}
       />
     </div>
   );
@@ -196,28 +226,42 @@ interface DetailProps {
   summary: PlanSummary;
   view: PlanView;
   busy: boolean;
+  actions: QaActions;
   onOpenBug?: (findingId: string) => void;
   onRunInBrowser?: (slug: string) => void;
   onSuggest: () => void;
   onDelete: () => void;
 }
 
-function PlanDetail({ root, summary, view, busy, onOpenBug, onRunInBrowser, onSuggest, onDelete }: DetailProps) {
+function PlanDetail({ root, summary, view, busy, actions, onOpenBug, onRunInBrowser, onSuggest, onDelete }: DetailProps) {
+  const [who, setWho] = useWho();
   const { plan, session } = view;
   const runs = React.useMemo(() => runsNewestFirst(view.runs), [view.runs]);
   const [tab, setTab] = React.useState<Tab>("steps");
   const marker = sessionLabel(session);
+  const working = !!session?.running;
+  // The run an agent is recording now: its results are read again as they come in.
+  const liveRun = working && session?.kind === "run" ? session.runId : null;
+  const starting = actions.startAgent.isPending || actions.explore.isPending;
+  const decide = (pid: string | "all", decision: "accept" | "reject") => actions.decide.mutate({ slug: plan.slug, pid, decision });
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-3 p-4">
       <header className="flex flex-col gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="min-w-0 flex-1 truncate text-[15px] font-semibold">{plan.title}</h2>
+          <WhoPicker who={who} onChange={setWho} inline />
           {onRunInBrowser && (
             <Button size="sm" variant="primary" disabled={plan.steps.length === 0} onClick={() => onRunInBrowser(plan.slug)}>
               <Globe /> Run in browser
             </Button>
           )}
-          <Button size="sm" variant="outline" disabled={!!session?.running} onClick={onSuggest}>
+          <Button size="sm" variant="outline" disabled={plan.steps.length === 0 || working || starting} title="An agent runs each step in its own browser, records the outcome and logs the bugs it finds" onClick={() => actions.startAgent.mutate({ slug: plan.slug, ...who }, { onSuccess: () => setTab("runs") })}>
+            <Bot /> Run with agent
+          </Button>
+          <Button size="sm" variant="outline" disabled={working || starting} title="An agent uses the app around this plan, logs the bugs it finds and suggests the steps it took" onClick={() => actions.explore.mutate({ slug: plan.slug, ...who })}>
+            <Compass /> Explore
+          </Button>
+          <Button size="sm" variant="outline" disabled={working} onClick={onSuggest}>
             <Sparkles /> Suggest missing steps
           </Button>
           <Button size="sm" variant="dangerGhost" disabled={busy} onClick={onDelete}>
@@ -228,9 +272,12 @@ function PlanDetail({ root, summary, view, busy, onOpenBug, onRunInBrowser, onSu
           <span>{plan.steps.length === 1 ? "1 step" : `${plan.steps.length} steps`}</span>
           <span aria-hidden>·</span>
           <span>updated {ago(summary.updatedAt)}</span>
-          {marker && (
+          {marker && session && (
             <span className="flex items-center gap-1">
               <Spinner /> {marker}
+              <button type="button" onClick={() => openSession(session.sessionId)} className="text-fg underline underline-offset-2 outline-none hover:text-accent">
+                Open session
+              </button>
             </span>
           )}
         </div>
@@ -238,7 +285,20 @@ function PlanDetail({ root, summary, view, busy, onOpenBug, onRunInBrowser, onSu
         {plan.problem && <Banner tone="danger">{plan.problem}</Banner>}
         {plan.proposalsProblem && <Banner>{plan.proposalsProblem}</Banner>}
         {session?.problem && !session.running && <Banner>{session.problem}</Banner>}
-        {plan.proposals.length > 0 && <Banner>{plan.proposals.length === 1 ? "1 suggested step is" : `${plan.proposals.length} suggested steps are`} waiting for a decision in the browser's QA panel.</Banner>}
+        {plan.proposals.length > 0 && (
+          <div role="status" className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-line-strong px-3 py-2">
+            <Sparkles className="size-3.5 text-violet" />
+            <span className="min-w-0 flex-1 text-xs text-fg">
+              {plan.proposals.length === 1 ? "1 suggested step" : `${plan.proposals.length} suggested steps`} below, marked +. Keep the ones worth running.
+            </span>
+            <Button size="xs" variant="primary" disabled={working || actions.decide.isPending} onClick={() => decide("all", "accept")}>
+              <Check /> Accept all
+            </Button>
+            <Button size="xs" variant="ghost" disabled={working || actions.decide.isPending} onClick={() => decide("all", "reject")}>
+              <X /> Reject all
+            </Button>
+          </div>
+        )}
       </header>
       <SegTabs
         value={tab}
@@ -248,22 +308,30 @@ function PlanDetail({ root, summary, view, busy, onOpenBug, onRunInBrowser, onSu
           { value: "runs", label: "Runs", badge: runs.length > 0 ? <span className="font-mono text-[10px] text-fg-faint">{runs.length}</span> : undefined },
         ]}
       />
-      {tab === "steps" ? <StepsList view={view} runs={runs} /> : <RunsList root={root} runs={runs} onOpenBug={onOpenBug} />}
+      {tab === "steps" ? <StepsList view={view} runs={runs} busy={working || actions.decide.isPending} onDecide={decide} /> : <RunsList root={root} runs={runs} liveRun={liveRun} onOpenBug={onOpenBug} />}
     </div>
   );
 }
 
-function StepsList({ view, runs }: { view: PlanView; runs: RunSummary[] }) {
+/** The plan's steps with the suggested ones in place (marked +), each with Accept and Reject. */
+function StepsList({ view, runs, busy, onDecide }: { view: PlanView; runs: RunSummary[]; busy: boolean; onDecide: (pid: string, d: "accept" | "reject") => void }) {
   const { plan, lastOutcomes } = view;
-  if (plan.steps.length === 0) return <Empty title="No steps yet" hint="Add steps in the browser's QA panel, or suggest some." />;
+  if (plan.steps.length === 0 && plan.proposals.length === 0) return <Empty title="No steps yet" hint="Draft some with Suggest missing steps or Explore, or add them in the browser's QA panel." />;
   return (
     <ol className="flex flex-col divide-y divide-line rounded-xl border border-line bg-panel">
-      {plan.steps.map((s, i) => {
+      {rowsOf(plan.steps, plan.proposals).map((r) => {
+        if (r.kind === "proposal")
+          return (
+            <li key={r.proposal.id} data-proposal={r.proposal.id} className="p-1.5">
+              <ProposalRow proposal={r.proposal} busy={busy} onDecide={(d) => onDecide(r.proposal.id, d)} />
+            </li>
+          );
+        const s = r.step;
         const last: StepHistory | undefined = lastOutcomes[s.id];
         const detail = last ? outcomeDetail(last.outcome) : "";
         return (
           <li key={s.id} data-step={s.id} className="flex items-start gap-2 px-3 py-2">
-            <span className="w-5 shrink-0 pt-px text-right font-mono text-[11px] leading-[18px] text-fg-muted">{i + 1}</span>
+            <span className="w-5 shrink-0 pt-px text-right font-mono text-[11px] leading-[18px] text-fg-muted">{r.number}</span>
             <div className="min-w-0 flex-1">
               <div className="text-[13px] leading-snug">{s.action}</div>
               {s.expected && <div className="mt-1 text-xs leading-snug text-fg-muted">{s.expected}</div>}
@@ -282,9 +350,13 @@ function StepsList({ view, runs }: { view: PlanView; runs: RunSummary[] }) {
   );
 }
 
-function RunsList({ root, runs, onOpenBug }: { root: string; runs: RunSummary[]; onOpenBug?: (findingId: string) => void }) {
-  const [open, setOpen] = React.useState<string | null>(null);
-  if (runs.length === 0) return <Empty title="No runs yet" hint="Run this plan in the browser. Each run is kept here." />;
+function RunsList({ root, runs, liveRun, onOpenBug }: { root: string; runs: RunSummary[]; liveRun: string | null; onOpenBug?: (findingId: string) => void }) {
+  const [open, setOpen] = React.useState<string | null>(liveRun);
+  // An agent run that starts while the list is shown opens, so its steps can be watched as they are recorded.
+  React.useEffect(() => {
+    if (liveRun) setOpen(liveRun);
+  }, [liveRun]);
+  if (runs.length === 0) return <Empty title="No runs yet" hint="Run this plan in the browser, or with an agent. Each run is kept here." />;
   return (
     <ul className="flex flex-col gap-1">
       {runs.map((r) => {
@@ -298,11 +370,22 @@ function RunsList({ root, runs, onOpenBug }: { root: string; runs: RunSummary[];
                 <ProgressBar progress={summaryProgress(r.counts)} />
               </div>
               <span className="font-mono text-xs">{countsLine(summaryProgress(r.counts))}</span>
-              {!r.finished && <Badge>in progress</Badge>}
+              {r.agentSession && (
+                <Badge tone="violet" title="An agent walked this run in its own browser">
+                  <Bot className="size-3" /> agent
+                </Badge>
+              )}
+              {r.id === liveRun ? (
+                <span className="flex items-center gap-1 text-xs text-fg-muted">
+                  <Spinner /> running
+                </span>
+              ) : (
+                !r.finished && <Badge>{r.agentSession ? "stopped early" : "in progress"}</Badge>
+              )}
               <span className="flex-1" />
               <span className="text-[11px] text-fg-faint">{ago(r.startedAt)}</span>
             </button>
-            {isOpen && <RunResults root={root} id={r.id} onOpenBug={onOpenBug} />}
+            {isOpen && <RunResults root={root} id={r.id} live={r.id === liveRun} onOpenBug={onOpenBug} />}
           </li>
         );
       })}
@@ -310,8 +393,8 @@ function RunsList({ root, runs, onOpenBug }: { root: string; runs: RunSummary[];
   );
 }
 
-function RunResults({ root, id, onOpenBug }: { root: string; id: string; onOpenBug?: (findingId: string) => void }) {
-  const run = useRun(root, id);
+function RunResults({ root, id, live, onOpenBug }: { root: string; id: string; live: boolean; onOpenBug?: (findingId: string) => void }) {
+  const run = useRun(root, id, live);
   if (run.isPending) return <Skeleton className="m-3 h-16" />;
   if (!run.data) return <div className="px-3 pb-3 text-xs text-red">{(run.error as Error | null)?.message ?? "That run is gone."}</div>;
   return (

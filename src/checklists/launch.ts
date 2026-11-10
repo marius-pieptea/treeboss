@@ -17,11 +17,19 @@ export interface PassStart {
   chunks: number;
 }
 
+/** A pass's options: what it does, and which engine and model it runs on. An empty one takes the default engine. */
+export interface PassOpts {
+  fix?: boolean;
+  engine?: string | null;
+  model?: string | null;
+  effort?: string | null;
+}
+
 /**
  * Starts a pass over one attached checklist, or over all of them. `fix` changes the failing and unknown items; without it
  * the pass only reads the code and records. Refuses when nothing is attached or nothing is open.
  */
-export function startChecklistPass(workspaceId: string, checklistId: string | null, opts: { fix?: boolean } = {}): PassStart {
+export function startChecklistPass(workspaceId: string, checklistId: string | null, opts: PassOpts = {}): PassStart {
   const w = Workspaces.get(workspaceId);
   if (!w) throw new UserError(`No workspace "${workspaceId}".`);
   const fix = !!opts.fix;
@@ -39,7 +47,7 @@ export function startChecklistPass(workspaceId: string, checklistId: string | nu
   if (!ids.length) throw new UserError("No checklist is attached to this workspace. Attach one first.");
   const chunks = passChunks(w.path, ids, fix);
   if (!chunks.length) throw new UserError(`Nothing to ${fix ? "fix" : "audit"}: every item in ${title} passes or was decided by hand.`);
-  const r = startSweep(w.path, "checklist", chunks, { workspaceId, fix });
+  const r = startSweep(w.path, "checklist", chunks, { workspaceId, fix, engine: opts.engine, model: opts.model, effort: opts.effort });
   const first = r.sessions[0];
   if (!first) {
     cancelSweep(w.path, r.sweepId);

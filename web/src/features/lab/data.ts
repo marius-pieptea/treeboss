@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import type { Who } from "@/components/agent-who";
 import { del, get, patch, post } from "@/lib/api";
 import type { SessionView } from "@/lib/types";
 import type { BugKind } from "./logic";
@@ -26,8 +27,11 @@ export interface Finding {
   spec: string | null;
   /** `<checklistId>/<itemId>` for a finding raised by a failing checklist item. */
   checklist: string | null;
-  /** Set exactly when `lens` is `bug`: the page, its evidence capture id, and how the screenshot was taken. */
-  bug: { url: string; capture: string | null; shot: "desktop" | "rerender" | "none"; kind: BugKind } | null;
+  /**
+   * Set exactly when `lens` is `bug`: the page, its evidence capture id, and how the screenshot was taken. `by: "agent"` is a
+   * bug a QA agent logged; it is unconfirmed (and left out of fix-all) until a person confirms it.
+   */
+  bug: { url: string; capture: string | null; shot: "desktop" | "rerender" | "agent" | "none"; kind: BugKind; by?: "agent"; confirmed?: boolean } | null;
   /** The session that wrote or last changed the file during a run. */
   session: string | null;
   /** The fix session started from this finding. */
@@ -97,15 +101,19 @@ export interface SweepPlan {
   skipped: string[];
 }
 
-export interface Who {
-  engine?: string;
-  model?: string;
-}
-
 export interface RunInput extends Who {
   lens: Lens;
   scope: string;
   note?: string;
+}
+
+export interface FindingActionInput extends Who {
+  id: string;
+}
+
+/** The POST a finding action makes: the finding id in the path, the chosen engine and model in the body. */
+export function findingActionRequest(root: string, action: "spec" | "fix" | "design", v: FindingActionInput): { path: string; body: Who } {
+  return { path: `/api/lab/${root}/findings/${encodeURIComponent(v.id)}/${action}`, body: { engine: v.engine, model: v.model } };
 }
 
 export const labKey = (root: string) => ["lab", root] as const;
@@ -140,17 +148,23 @@ export function useLabActions(root: string) {
   };
   const onError = (e: unknown) => toast.error(e instanceof Error ? e.message : "That did not work.");
   const mut = <V, R>(fn: (v: V) => Promise<R>) => useMutation({ mutationFn: fn, onSuccess: refresh, onError });
+  const findingAction = (action: "spec" | "fix" | "design", v: FindingActionInput) => {
+    const r = findingActionRequest(root, action, v);
+    return post<{ finding: Finding; session: SessionView }>(r.path, r.body);
+  };
   return {
     run: mut((v: RunInput) => post<{ session: SessionView }>(`${base}/run`, v)),
     sweep: mut((v: Who & { lens: Lens; scopes: string[]; limit: number; parallel: number; note?: string }) => post<{ sweepId: string; sessions: SessionView[]; plan: SweepPlan }>(`${base}/sweep`, v)),
     fixAllBugs: mut((v: Who) => post<{ sweep: SweepView; sessions: SessionView[] }>(`${base}/bugs/fix-all`, v)),
     cancelSweep: mut((id: string) => post<{ sweep: SweepView }>(`${base}/sweeps/${encodeURIComponent(id)}/cancel`, {})),
     setStatus: mut((v: { id: string; status: Status }) => patch<{ finding: Finding }>(`${base}/findings/${encodeURIComponent(v.id)}`, { status: v.status })),
+    /** A person vouches for a bug a QA agent logged: fix-all may then pick it up. */
+    confirm: mut((id: string) => patch<{ finding: Finding }>(`${base}/findings/${encodeURIComponent(id)}`, { confirmed: true })),
     remove: mut((id: string) => del<{ ok: true }>(`${base}/findings/${encodeURIComponent(id)}`)),
     toRoadmap: mut((id: string) => post<{ finding: Finding; itemId: string }>(`${base}/findings/${encodeURIComponent(id)}/roadmap`, {})),
-    toSpec: mut((id: string) => post<{ finding: Finding; session: SessionView }>(`${base}/findings/${encodeURIComponent(id)}/spec`, {})),
-    fix: mut((id: string) => post<{ finding: Finding; session: SessionView }>(`${base}/findings/${encodeURIComponent(id)}/fix`, {})),
-    design: mut((id: string) => post<{ finding: Finding; session: SessionView }>(`${base}/findings/${encodeURIComponent(id)}/design`, {})),
+    toSpec: mut((v: FindingActionInput) => findingAction("spec", v)),
+    fix: mut((v: FindingActionInput) => findingAction("fix", v)),
+    design: mut((v: FindingActionInput) => findingAction("design", v)),
   };
 }
 

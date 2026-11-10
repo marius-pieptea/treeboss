@@ -1,59 +1,9 @@
-import { useState } from "react";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Field, Select } from "@/components/ui/form";
 import { Badge, Empty, Skeleton, Spinner } from "@/components/ui/misc";
-import { EngineIcon } from "@/components/ui/engine-icon";
-import { ModelSelect } from "@/components/ui/model-select";
-import { useEngines } from "@/lib/queries";
 import { useWorkspace } from "@/lib/workspace";
 import { fixBlock } from "./logic";
-import { useLab, useLabActions, type SweepView, type Who } from "./data";
-
-const WHO_KEY = "trb.lab.who";
-
-function readWho(): Who {
-  try {
-    const v = JSON.parse(localStorage.getItem(WHO_KEY) ?? "{}");
-    return { engine: typeof v.engine === "string" ? v.engine : undefined, model: typeof v.model === "string" ? v.model : undefined };
-  } catch {
-    return {};
-  }
-}
-
-/** Which engine and model run a pass, remembered between visits. */
-export function useWho(): [Who, (w: Who) => void] {
-  const [who, setWhoState] = useState<Who>(readWho);
-  const setWho = (w: Who) => {
-    setWhoState(w);
-    try {
-      localStorage.setItem(WHO_KEY, JSON.stringify(w));
-    } catch {}
-  };
-  return [who, setWho];
-}
-
-/** Which engine and model run a pass. Empty means the default. Remembered between visits. */
-export function WhoPicker({ who, onChange }: { who: Who; onChange: (w: Who) => void }) {
-  const engines = useEngines();
-  const installed = (engines.data ?? []).filter((e) => e.installed);
-  return (
-    <div className="grid grid-cols-2 gap-3">
-      <Field label="Engine">
-        <Select
-          aria-label="Engine"
-          value={who.engine ?? ""}
-          onChange={(engine) => onChange({ engine: engine || undefined, model: undefined })}
-          placeholder="Default"
-          options={[{ value: "", label: "Default" }, ...installed.map((e) => ({ value: e.id, label: (<span className="flex items-center gap-1.5"><EngineIcon engine={e.id} className="size-3.5" />{e.label}</span>) }))]}
-        />
-      </Field>
-      <Field label="Model">
-        <ModelSelect engine={who.engine ?? ""} value={who.model ?? ""} onChange={(model) => onChange({ ...who, model: model || undefined })} disabled={!who.engine} disabledReason="Pick an engine first" />
-      </Field>
-    </div>
-  );
-}
+import { useLab, useLabActions, type SweepView } from "./data";
 
 /** A sweep that is still going: how far along it is, and a way to stop starting new modules. */
 export function SweepRow({ sweep: s, onCancel }: { sweep: SweepView; onCancel: () => void }) {

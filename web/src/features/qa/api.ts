@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import type { Who } from "@/components/agent-who";
 import { del, get, patch, post, put } from "@/lib/api";
+import { agentRequest, newPlanBody, type AgentStart } from "./logic";
 
 /** Web copy of the QA types the daemon serves under /api/qa. */
 export type StepPath = string;
@@ -70,6 +72,8 @@ export interface RunSummary {
   counts: RunCounts;
   finished: boolean;
   states: Record<string, OutcomeState>;
+  /** The session of the agent that walked this run; null for a run a person did. */
+  agentSession?: string | null;
 }
 
 /** A step's newest marked outcome across the plan's runs. */
@@ -99,12 +103,57 @@ export interface PlanSummary {
   lastRun: RunSummary | null;
 }
 
+/** draft and suggest write proposals; explore drives the app and logs bugs; run walks a run's steps; map writes the feature map. */
 export interface QaSession {
   sessionId: string;
-  kind: "draft" | "suggest";
+  kind: "draft" | "suggest" | "explore" | "run" | "map";
   running: boolean;
-  /** The turn ended without usable proposals. */
+  /** The turn ended without its work: no usable proposals, steps left unrecorded, no feature map. */
   problem: string | null;
+  /** The run an agent run walks. */
+  runId: string | null;
+  batchId: string | null;
+}
+
+export type Coverage = "no-plan" | "not-run" | "failing" | "partial" | "passing";
+
+export interface FeaturePlan {
+  slug: string;
+  title: string | null;
+  exists: boolean;
+  steps: number;
+  lastRun: RunSummary | null;
+}
+
+/** A feature from lab/features.md, with how well its plans test it. */
+export interface Feature {
+  id: string;
+  title: string;
+  where: string[];
+  plans: string[];
+  summary: string;
+  planInfo: FeaturePlan[];
+  coverage: Coverage;
+}
+
+/** An end-to-end run: plans run by an agent one after another. */
+export interface BatchView {
+  id: string;
+  plans: string[];
+  next: number;
+  current: string | null;
+  running: boolean;
+  cancelled: boolean;
+  errors: Array<{ plan: string; error: string }>;
+  createdAt: number;
+}
+
+export interface FeaturesView {
+  features: Feature[];
+  problem: string | null;
+  exists: boolean;
+  session: QaSession | null;
+  batch: BatchView | null;
 }
 
 /** Runs are newest first. */
@@ -124,7 +173,17 @@ export interface NewPlanInput {
   title: string;
   from?: PlanSource;
   note?: string;
+  /** An agent explores the app instead of drafting from the source. */
+  explore?: boolean;
+  /** Where the app runs, for an exploring agent. Without it the agent finds the app itself. */
+  baseUrl?: string;
 }
+
+/** The POST each agent action makes: the route's own fields, plus the chosen engine and model. */
+const agentPost = <R>(root: string, a: AgentStart & Who) => {
+  const r = agentRequest(root, a);
+  return post<R>(r.path, r.body);
+};
 
 export interface BugDraft {
   title: string;
@@ -141,6 +200,7 @@ export const qaKey = {
   plans: (root: string) => ["qa", root, "plans"] as const,
   plan: (root: string, slug: string) => ["qa", root, "plan", slug] as const,
   run: (root: string, id: string) => ["qa", root, "run", id] as const,
+  features: (root: string) => ["qa", root, "features"] as const,
 };
 
 export const usePlans = (root: string) =>
@@ -156,8 +216,18 @@ export const usePlan = (root: string, slug: string | null) =>
     staleTime: 1000,
   });
 
-export const useRun = (root: string, id: string | null) =>
-  useQuery({ queryKey: qaKey.run(root, id ?? ""), enabled: !!id, queryFn: () => get<RunReply>(`${base(root)}/runs/${encodeURIComponent(id!)}`).then((r) => r.run), staleTime: 1000 });
+/** `live`: an agent is recording this run's steps now, so it is read again every 2s. */
+export const useRun = (root: string, id: string | null, live = false) =>
+  useQuery({ queryKey: qaKey.run(root, id ?? ""), enabled: !!id, queryFn: () => get<RunReply>(`${base(root)}/runs/${encodeURIComponent(id!)}`).then((r) => r.run), staleTime: 1000, refetchInterval: live ? 2000 : false });
+
+/** The feature map, its mapping session and the newest end-to-end run: read again every 3s while either works. */
+export const useFeatures = (root: string) =>
+  useQuery({
+    queryKey: qaKey.features(root),
+    queryFn: () => get<FeaturesView>(`${base(root)}/features`),
+    refetchInterval: (q) => (q.state.data?.session?.running || q.state.data?.batch?.running ? 3000 : false),
+    staleTime: 1000,
+  });
 
 export function useQaActions(root: string) {
   const qc = useQueryClient();
@@ -166,12 +236,19 @@ export function useQaActions(root: string) {
   const mut = <V, R>(fn: (v: V) => Promise<R>, ok: (r: R, v: V) => void = refresh) => useMutation({ mutationFn: fn, onSuccess: ok, onError });
   const plan = (slug: string) => `${base(root)}/plans/${encodeURIComponent(slug)}`;
   return {
-    create: mut((v: NewPlanInput) => post<{ plan: Plan; session: QaSession | null }>(`${base(root)}/plans`, v)),
+    create: mut((v: NewPlanInput & Who) => post<{ plan: Plan; session: QaSession | null }>(`${base(root)}/plans`, newPlanBody(v))),
     edit: mut((v: { slug: string; edit: PlanEdit }) => patch<{ plan: Plan }>(plan(v.slug), { edit: v.edit })),
     remove: mut((slug: string) => del<{ ok: true }>(plan(slug))),
     decide: mut((v: { slug: string; pid: string | "all"; decision: "accept" | "reject" }) => post<{ plan: Plan }>(`${plan(v.slug)}/proposals/${encodeURIComponent(v.pid)}`, { decision: v.decision })),
-    suggest: mut((v: { slug: string; focus: Focus[]; note: string }) => post<{ session: QaSession }>(`${plan(v.slug)}/suggest`, { focus: v.focus, note: v.note })),
+    suggest: mut((v: { slug: string; focus: Focus[]; note: string } & Who) => agentPost<{ session: QaSession }>(root, { kind: "suggest", ...v })),
     start: mut((slug: string) => post<RunReply>(`${plan(slug)}/runs`, {})),
+    /** A run walked by an agent in its own browser: it records each step and logs the bugs it finds. */
+    startAgent: mut((v: { slug: string; baseUrl?: string; note?: string } & Who) => agentPost<RunReply & { session: QaSession | null }>(root, { kind: "run", ...v })),
+    explore: mut((v: { slug: string; baseUrl?: string; note?: string } & Who) => agentPost<{ session: QaSession }>(root, { kind: "explore", ...v })),
+    mapFeatures: mut((v: { baseUrl?: string; note?: string } & Who) => agentPost<{ session: QaSession }>(root, { kind: "map", ...v })),
+    planFeature: mut((v: { id: string } & Who) => agentPost<{ plan: Plan; session: QaSession }>(root, { kind: "feature-plan", ...v })),
+    e2e: mut((v: { features?: string[]; plans?: string[]; baseUrl?: string } & Who) => agentPost<{ batch: BatchView }>(root, { kind: "e2e", ...v })),
+    cancelBatch: mut((id: string) => post<{ batch: BatchView }>(`${base(root)}/batches/${encodeURIComponent(id)}/cancel`, {})),
     mark: mut((v: { runId: string; stepId: string; outcome: OutcomeInput }) => put<RunReply>(`${base(root)}/runs/${encodeURIComponent(v.runId)}/steps/${encodeURIComponent(v.stepId)}`, { outcome: v.outcome }), (r, v) => {
       qc.setQueryData(qaKey.run(root, v.runId), r.run);
       refresh();

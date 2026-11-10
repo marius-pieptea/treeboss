@@ -272,6 +272,12 @@ export function migrate(conn: Database): void {
     addColumn(conn, "sessions", "finalized_at", "TEXT");
     conn.exec("UPDATE sessions SET finalized_at = COALESCE(updated_at, CURRENT_TIMESTAMP) WHERE finalized_at IS NULL");
   }
+  // When the operator last had a workspace on screen. A lead whose turn completed after it is "done, not seen" in the
+  // workspace switcher. Workspaces that predate the column start seen, so an upgrade does not light up every old turn.
+  if (!(conn.prepare("PRAGMA table_info(workspaces)").all() as Array<{ name: string }>).some((c) => c.name === "seen_at")) {
+    addColumn(conn, "workspaces", "seen_at", "TEXT");
+    conn.exec("UPDATE workspaces SET seen_at = CURRENT_TIMESTAMP");
+  }
   // The diff summary as of the last finalization (JSON; "null" when there were no changes; NULL: not finalized yet).
   addColumn(conn, "sessions", "changes_json", "TEXT");
   // The files a head said it will touch (JSON array of repo-relative paths or directory prefixes; NULL: none named). Used
@@ -328,6 +334,16 @@ export function migrate(conn: Database): void {
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
   )`);
   addColumn(conn, "qa_sessions", "proposals_sig", "TEXT");
+  // An agent run (kind 'run') walks one run of the plan: run_id. A run started by an end-to-end batch names it: batch_id.
+  addColumn(conn, "qa_sessions", "run_id", "TEXT");
+  addColumn(conn, "qa_sessions", "batch_id", "TEXT");
+  // End-to-end batches (qa/batches.ts): plans run by an agent one after another. `next` is the index of the plan to start
+  // when the current run's turn ends; `opts` is the engine choice as JSON.
+  conn.exec(`CREATE TABLE IF NOT EXISTS qa_batches (
+    id TEXT PRIMARY KEY, root_dir TEXT NOT NULL, plans TEXT NOT NULL, next INTEGER NOT NULL DEFAULT 0, current TEXT,
+    base_url TEXT, opts TEXT NOT NULL DEFAULT '{}', cancelled INTEGER NOT NULL DEFAULT 0, errors TEXT NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL
+  )`);
 }
 
 /**

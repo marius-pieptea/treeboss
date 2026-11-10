@@ -9,6 +9,7 @@ import { bus } from "@/lib/bus";
 import { get, post, url } from "@/lib/api";
 import { qk, queryClient } from "@/lib/queries";
 import { useUi } from "@/lib/store";
+import { navigate } from "@/lib/nav";
 import type { SessionDetail, SessionView } from "@/lib/types";
 import { setSessionTreeboss } from "./TreebossControl";
 import { sessionTreeboss } from "./treeboss-logic";
@@ -30,6 +31,18 @@ export function openSession(id: string): void {
   const ui = useUi.getState();
   ui.setActiveSession(id);
   ui.setRightTab("agent");
+}
+
+/**
+ * Open a session wherever it lives. One from another workspace is made that workspace's active session and the app
+ * switches there, so it never opens inside the workspace on screen. Unknown workspace (null): open it here.
+ */
+export function openSessionIn(workspaceId: string | null | undefined, id: string): void {
+  const ui = useUi.getState();
+  if (!workspaceId || workspaceId === ui.current) return openSession(id);
+  ui.setActiveSessionIn(workspaceId, id);
+  ui.setRightTab("agent");
+  navigate(`/w/${workspaceId}`);
 }
 
 function sessionsInCache(): SessionView[] {

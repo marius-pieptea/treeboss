@@ -5,8 +5,8 @@
 import { liveSource, type LiveSource } from "./live";
 import { QueryClient, useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
-import { get, url } from "./api";
-import type { Agent, EngineInfo, GitStatus, Pair, PinnedSession, RootInfo, SessionDetail, SessionView, Workspace } from "./types";
+import { get, post, url } from "./api";
+import type { Agent, EngineInfo, GitStatus, Pair, PinnedSession, RootInfo, SessionDetail, SessionView, Workspace, WorkspaceActivity } from "./types";
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -40,9 +40,26 @@ export const qk = {
 
 export const useWorkspaces = () => useQuery({ queryKey: qk.workspaces, queryFn: () => get<{ workspaces: Workspace[] }>("/api/workspaces").then((r) => r.workspaces) });
 
-/** Running and failed work per workspace id; a workspace with neither is absent. Kept fresh by the global stream. */
+/** Running, failed and finished-but-unseen work per workspace id; a workspace with none is absent. Kept fresh by the global stream. */
 export const useWorkspaceActivity = () =>
-  useQuery({ queryKey: qk.workspaceActivity, queryFn: () => get<{ activity: Record<string, { running: number; failed: number }> }>("/api/workspaces/activity").then((r) => r.activity) });
+  useQuery({ queryKey: qk.workspaceActivity, queryFn: () => get<{ activity: Record<string, WorkspaceActivity> }>("/api/workspaces/activity").then((r) => r.activity) });
+
+/**
+ * The operator is in this workspace. Entering it moves it to the top of the recent list (the switcher and Home sort by
+ * that) and marks what finished there as seen. While it stays on screen, work that finishes in it is seen at once, so
+ * it never shows as "done" in the switcher after the operator leaves.
+ */
+export function useWorkspaceVisit(workspaceId: string): void {
+  const qc = useQueryClient();
+  const done = useWorkspaceActivity().data?.[workspaceId]?.done ?? 0;
+  useEffect(() => {
+    // qk.workspaces is a prefix of qk.workspaceActivity: both refetch.
+    void post(`/api/workspaces/${workspaceId}/open`).then(() => qc.invalidateQueries({ queryKey: qk.workspaces }), () => {});
+  }, [qc, workspaceId]);
+  useEffect(() => {
+    if (done > 0) void post(`/api/workspaces/${workspaceId}/seen`).then(() => qc.invalidateQueries({ queryKey: qk.workspaceActivity }), () => {});
+  }, [qc, workspaceId, done]);
+}
 
 export const useRoot =(ref: string | null) =>
   useQuery({ queryKey: qk.root(ref ?? ""), enabled: !!ref, queryFn: () => get<RootInfo>(`/api/roots/${ref}`), staleTime: 30_000 });

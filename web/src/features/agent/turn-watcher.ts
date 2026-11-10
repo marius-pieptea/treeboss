@@ -6,8 +6,10 @@ import { liveSource } from "@/lib/live";
 import { toast } from "sonner";
 import { get, url } from "@/lib/api";
 import { useUi } from "@/lib/store";
+import { qk, queryClient } from "@/lib/queries";
 import { drainOnTurnEnd } from "./queue-store";
-import type { SessionView } from "@/lib/types";
+import { openSessionIn } from "./agent-commands";
+import type { SessionDetail, Workspace } from "@/lib/types";
 
 let started = false;
 
@@ -25,17 +27,18 @@ export function ensureTurnWatcher(): void {
       const ws = ui.current ? ui.byWs[ui.current] : null;
       const watching = ws?.activeSession === d.sessionId && ui.rightOpen && ui.rightTab === "agent" && document.visibilityState === "visible";
       if (watching) return;
-      const detail = await get<{ session: SessionView }>(url.session(d.sessionId)).catch(() => null);
+      const detail = await get<SessionDetail>(url.session(d.sessionId)).catch(() => null);
       if (!detail) return;
       const s = detail.session;
-      const open = { label: "Open", onClick: () => {
-        const u = useUi.getState();
-        u.setActiveSession(s.id);
-        u.setRightTab("agent");
-      } };
-      if (d.status === "failed") toast.error(`${s.title} failed`, { description: s.error?.split("\n")[0], action: open });
-      else if (d.status === "cancelled") toast.message(`${s.title} was interrupted`, { action: open });
-      else toast.success(`${s.title} finished`, { description: s.changes ? `${s.changes.files} file${s.changes.files === 1 ? "" : "s"} changed` : undefined, action: open });
+      const wsId = detail.workspace_id ?? null;
+      // A session from another workspace says where it is, and Open switches there before opening it.
+      const elsewhere = wsId && wsId !== useUi.getState().current ? (queryClient.getQueryData<Workspace[]>(qk.workspaces)?.find((w) => w.id === wsId)?.name ?? "another workspace") : null;
+      const describe = (...parts: Array<string | null | undefined>) => parts.filter(Boolean).join(" · ") || undefined;
+      const where = elsewhere ? `in ${elsewhere}` : null;
+      const open = { label: "Open", onClick: () => openSessionIn(wsId, s.id) };
+      if (d.status === "failed") toast.error(`${s.title} failed`, { description: describe(where, s.error?.split("\n")[0]), action: open });
+      else if (d.status === "cancelled") toast.message(`${s.title} was interrupted`, { description: describe(where), action: open });
+      else toast.success(`${s.title} finished`, { description: describe(where, s.changes ? `${s.changes.files} file${s.changes.files === 1 ? "" : "s"} changed` : undefined), action: open });
     });
     es.onerror = () => {
       es.close();

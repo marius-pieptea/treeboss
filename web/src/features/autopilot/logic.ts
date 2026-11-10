@@ -1,3 +1,4 @@
+import type { Who } from "@/components/agent-who";
 import type { RunStatus, ScheduleKind } from "./data";
 
 type Tone = "neutral" | "accent" | "green" | "red" | "amber" | "violet" | "blue";
@@ -54,3 +55,21 @@ export const CRON_HINT = "minute hour day month weekday, e.g. 0 9 * * 1 for Mond
 
 /** The runs that wait on the operator, in list order. */
 export const gatedRuns = <R extends { status: RunStatus; gate: unknown }>(runs: R[]): R[] => runs.filter((r) => r.status === "awaiting_approval" && !!r.gate);
+
+export interface ScheduleDraft extends Who {
+  name: string;
+  cron: string;
+  kind: ScheduleKind;
+  prompt?: string;
+  lens?: string;
+  enabled: boolean;
+}
+
+/**
+ * The create body for a scheduled job. The engine is a column on the schedule; the model rides in its payload, which is
+ * where the scheduler reads it. A prompt job sends both; other kinds keep their own payload shape.
+ */
+export function scheduleCreateBody(d: ScheduleDraft): Record<string, unknown> {
+  const payload = d.kind === "prompt" ? { prompt: d.prompt, ...(d.model ? { model: d.model } : {}) } : d.kind === "lab_sweep" ? { lens: d.lens } : {};
+  return { name: d.name, cron: d.cron, kind: d.kind, payload, enabled: d.enabled, ...(d.engine ? { engine: d.engine } : {}) };
+}

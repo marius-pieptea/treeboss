@@ -1,5 +1,6 @@
 import * as React from "react";
 import { ChevronsUpDown, ClipboardCheck, Plus } from "lucide-react";
+import { WhoPicker, useWho } from "@/components/agent-who";
 import { Button, IconButton } from "@/components/ui/button";
 import { confirm } from "@/components/ui/dialogs";
 import { Banner } from "./Banner";
@@ -35,6 +36,7 @@ const isField = (t: EventTarget | null) => {
 export function QaPanel({ root, currentUrl, onNavigate, onFail, recordedSince, compact }: QaPanelProps) {
   const plans = usePlans(root);
   const actions = useQaActions(root);
+  const [who, setWho] = useWho();
   const [slug, setSlug] = React.useState<string | null>(null);
   const [runId, setRunId] = React.useState<string | null>(null);
   const [editing, setEditing] = React.useState(false);
@@ -235,6 +237,12 @@ export function QaPanel({ root, currentUrl, onNavigate, onFail, recordedSince, c
         onOpenRun={(id) => (setEditing(false), setRunId(id))}
         onAcceptAll={() => accept("all", "accept")}
       />
+      {slug && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-1.5">
+          <span className="text-label uppercase tracking-label text-fg-muted">Agent</span>
+          <WhoPicker who={who} onChange={setWho} inline />
+        </div>
+      )}
       <div className="min-h-0 flex-1 overflow-y-auto">{body}</div>
       {run && !editing && (
         <footer className="flex shrink-0 items-center gap-2 border-t border-line px-3 py-1.5 text-[11px] text-fg-muted">
@@ -274,7 +282,7 @@ export function QaPanel({ root, currentUrl, onNavigate, onFail, recordedSince, c
         open={dialog === "suggest"}
         onOpenChange={(o) => !o && setDialog(null)}
         busy={actions.suggest.isPending}
-        onSubmit={(focus, n) => slug && actions.suggest.mutate({ slug, focus, note: n }, { onSuccess: () => setDialog(null) })}
+        onSubmit={(focus, n) => slug && actions.suggest.mutate({ slug, focus, note: n, ...who }, { onSuccess: () => setDialog(null) })}
       />
     </div>
   );

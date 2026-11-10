@@ -4,14 +4,14 @@
  *
  *   GET    /api/releases/:root                                  the version, tags, drafts, published releases and sessions
  *   GET    /api/releases/:root/range?base=&prs=1                the range from a base (a tag, a sha, a date, or empty for the last tag)
- *   POST   /api/releases/:root/draft                            { base?, bump?, audience? } start a changelog session (201)
+ *   POST   /api/releases/:root/draft                            { base?, bump?, audience?, engine?, model?, effort? } start a changelog session (201)
  *   GET    /api/releases/:root/drafts/:version                  one draft, with its notes
  *   PUT    /api/releases/:root/drafts/:version                  { body } the operator's edit of the notes
  *   POST   /api/releases/:root/drafts/:version/revise           { instructions } a follow-up in the session that wrote it (202)
  *   POST   /api/releases/:root/drafts/:version/publish          { push?, ghRelease?, deploy? } commit, tag, and the optional steps
  *   POST   /api/releases/:root/releases/:version/undo           { deleteRemoteTag? } revert the release commit and remove its tag
  *   GET    /api/releases/product/:productId                     the product's repos and their latest releases, and its notes
- *   POST   /api/releases/product/:productId/draft               { audience? } start a combined product note (201)
+ *   POST   /api/releases/product/:productId/draft               { audience?, engine?, model?, effort? } start a combined product note (201)
  *   POST   /api/releases/product/:productId/notes/:name/publish { push? } commit and tag a product note
  */
 import fs from "fs";
@@ -74,7 +74,7 @@ export const releasesRoutes: RouteModule = async (c: Ctx) => {
   if ((m = c.match(/^\/api\/releases\/product\/([^/]+)\/draft$/)) && method === "POST") {
     const product = getProduct(decodeURIComponent(m[1]!));
     if (!product) throw new HttpError(404, "No such product.");
-    return json(startProductReleaseNotes(product.id, { audience: audienceOf(b.audience) }), 201);
+    return json(startProductReleaseNotes(product.id, { audience: audienceOf(b.audience), engine: str(b.engine), model: str(b.model), effort: str(b.effort) }), 201);
   }
 
   if ((m = c.match(/^\/api\/releases\/product\/([^/]+)$/)) && method === "GET") {
@@ -117,7 +117,7 @@ export const releasesRoutes: RouteModule = async (c: Ctx) => {
 
   if ((m = c.match(/^\/api\/releases\/([^/]+)\/draft$/)) && method === "POST") {
     const ws = workspaceOf(decodeURIComponent(m[1]!));
-    return json(startChangelogSession(ws.id, { base: str(b.base), bump: bumpOf(b.bump), audience: audienceOf(b.audience) }), 201);
+    return json(startChangelogSession(ws.id, { base: str(b.base), bump: bumpOf(b.bump), audience: audienceOf(b.audience), engine: str(b.engine), model: str(b.model), effort: str(b.effort) }), 201);
   }
 
   if ((m = c.match(/^\/api\/releases\/([^/]+)\/drafts\/([^/]+)$/))) {

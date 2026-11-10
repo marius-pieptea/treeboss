@@ -87,7 +87,7 @@ function itemOfFinding(rootDir: string, f: Finding): { checklist: Checklist; ite
  * Changes a finding's status (or impact and effort) from Lab. A dismissal of a checklist finding marks its item n/a; reopening
  * it clears that mark. Refused for a required item, before anything changes.
  */
-export function patchLabFinding(rootDir: string, id: string, patch: { status?: Status; impact?: Impact; effort?: Finding["effort"] }): Finding {
+export function patchLabFinding(rootDir: string, id: string, patch: { status?: Status; impact?: Impact; effort?: Finding["effort"]; confirmed?: boolean }): Finding {
   const f = listFindings(rootDir).find((x) => x.id === id);
   if (f && patch.status !== undefined && (STATUSES as readonly string[]).includes(patch.status)) {
     const linked = itemOfFinding(rootDir, f);

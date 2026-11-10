@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { GitBranch, Package, Sparkles } from "lucide-react";
+import { WhoPicker, useWho } from "@/components/agent-who";
 import { Button } from "@/components/ui/button";
 import { confirm } from "@/components/ui/dialogs";
 import { Checkbox, Field, Input, Select, Textarea } from "@/components/ui/form";
@@ -40,6 +41,7 @@ function WorkspaceReleases({ root }: { root: string }) {
   const [audience, setAudience] = useState<Audience>("users");
   const [selected, setSelected] = useState<string | null>(null);
   const [lastSession, setLastSession] = useState<string | null>(null);
+  const [who, setWho] = useWho();
 
   // The base point: a tag from the list, or a commit or date typed in and committed on Enter or blur.
   const committed = kind === "tag" ? tag : kind === "last" ? "" : base;
@@ -60,7 +62,7 @@ function WorkspaceReleases({ root }: { root: string }) {
 
   const startDraft = () => {
     actions.draft.mutate(
-      { base: committed, bump, audience },
+      { base: committed, bump, audience, ...who },
       { onSuccess: (r) => setLastSession(r.sessionId) },
     );
   };
@@ -115,6 +117,7 @@ function WorkspaceReleases({ root }: { root: string }) {
           <Field label="Audience">
             <SegTabs value={audience} onChange={setAudience} items={AUDIENCES.map((a) => ({ value: a, label: a }))} />
           </Field>
+          <WhoPicker who={who} onChange={setWho} inline />
           <Button variant="primary" disabled={!ready || !range.data || range.data.commits.length === 0 || actions.draft.isPending} onClick={startDraft}>
             {actions.draft.isPending ? <Spinner /> : <Sparkles />}
             Draft with agent
@@ -361,6 +364,7 @@ function ProductReleases() {
   const products = useProducts();
   const [productId, setProductId] = useState<string | null>(null);
   const [audience, setAudience] = useState<Audience>("users");
+  const [who, setWho] = useWho();
   const current = productId ?? products.data?.[0]?.id ?? null;
   const detail = useProductReleases(current);
   const notes = useProductNotes(current ?? "");
@@ -376,7 +380,8 @@ function ProductReleases() {
         <Field label="Audience">
           <SegTabs value={audience} onChange={setAudience} items={AUDIENCES.map((a) => ({ value: a, label: a }))} />
         </Field>
-        <Button variant="primary" disabled={!current || notes.isPending} onClick={() => notes.mutate(audience)}>
+        <WhoPicker who={who} onChange={setWho} inline />
+        <Button variant="primary" disabled={!current || notes.isPending} onClick={() => notes.mutate({ audience, ...who })}>
           {notes.isPending ? <Spinner /> : <Sparkles />}
           Draft combined notes
         </Button>

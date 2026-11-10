@@ -200,6 +200,58 @@ describe("other engines", () => {
     expect(events.filter((e) => e.kind === "turn").at(-1).usage).toMatchObject({ input: 21028, output: 1544 });
   });
 
+  test("agy: token deltas are buffered and emitted as a single block on DONE", () => {
+    const { acc, lines } = feed(
+      [
+        { event: "init", conversation_id: "conv-10", init: { cwd: "/w" } },
+        { event: "step_update", step_update: { step_type: "agent_response", state: "ACTIVE", text_delta: "Hello" } },
+        { event: "step_update", step_update: { step_type: "agent_response", state: "ACTIVE", text_delta: " " } },
+        { event: "step_update", step_update: { step_type: "agent_response", state: "ACTIVE", text_delta: "world" } },
+        { event: "step_update", step_update: { step_type: "agent_response", state: "DONE", text_delta: "!" } },
+        { event: "result", result: { status: "SUCCESS", response: "Hello world!" } },
+      ],
+      "agy",
+    );
+    expect(lines.filter((l) => l.includes("Hello world!"))).toHaveLength(1);
+    expect(lines).not.toContain("Hello");
+    expect(lines).not.toContain("world");
+    expect(acc.finalText()).toBe("Hello world!");
+  });
+
+  test("agy: buffered text is shown before the tool call that follows it", () => {
+    const { lines } = feed(
+      [
+        { event: "step_update", step_update: { step_type: "agent_response", state: "ACTIVE", text_delta: "Let me " } },
+        { event: "step_update", step_update: { step_type: "agent_response", state: "ACTIVE", text_delta: "look." } },
+        { event: "step_update", step_update: { step_type: "tool", state: "ACTIVE", tool_name: "view_file", tool_info: { parameters: { path: "/w/a" } } } },
+        { event: "result", result: { status: "SUCCESS" } },
+      ],
+      "agy",
+    );
+    const text = lines.indexOf("Let me look.");
+    expect(text).toBeGreaterThanOrEqual(0);
+    expect(text).toBeLessThan(lines.findIndex((l) => l.startsWith("[agy] → view_file")));
+  });
+
+  test("agy: text still buffered when the stream ends without a result is not lost", () => {
+    const { acc, lines } = feed(
+      [
+        { event: "step_update", step_update: { step_type: "agent_response", state: "ACTIVE", text_delta: "Partial " } },
+        { event: "step_update", step_update: { step_type: "agent_response", state: "ACTIVE", text_delta: "answer" } },
+      ],
+      "agy",
+    );
+    expect(lines).toContain("Partial answer");
+    expect(acc.finalText()).toBe("Partial answer");
+    expect(acc.completed()).toBe(false);
+  });
+
+  test("agy: a result with a response but no deltas still shows the answer once", () => {
+    const { acc, lines } = feed([{ event: "result", result: { status: "SUCCESS", response: "Only here" } }], "agy");
+    expect(lines.filter((l) => l === "Only here")).toHaveLength(1);
+    expect(acc.finalText()).toBe("Only here");
+  });
+
   test("opencode: real step_finish carries tokens (input excludes the cache portions)", () => {
     const { acc } = feed(
       [

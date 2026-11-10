@@ -34,8 +34,11 @@ export function kindCounts(bugs: Pick<Finding, "bug">[]): Record<KindFilter, num
 
 export const byKind = <T extends Pick<Finding, "bug">>(bugs: T[], kind: KindFilter): T[] => (kind === "all" ? bugs : bugs.filter((b) => b.bug?.kind === kind));
 
-/** Bugs a "fix all" would start: not yet fixed, not dismissed, and not being fixed now. */
-export const fixableBugs = (list: Finding[]): Finding[] => list.filter((f) => isBug(f) && !f.problem && (bugState(f, f.fixRunning) === "open" || bugState(f, f.fixRunning) === "needs-check"));
+/** A bug a QA agent logged that no person has confirmed: fix-all leaves it alone. */
+export const unconfirmed = (f: Pick<Finding, "bug">): boolean => f.bug?.by === "agent" && f.bug.confirmed !== true;
+
+/** Bugs a "fix all" would start: confirmed, not yet fixed, not dismissed, and not being fixed now. */
+export const fixableBugs = (list: Finding[]): Finding[] => list.filter((f) => isBug(f) && !f.problem && !unconfirmed(f) && (bugState(f, f.fixRunning) === "open" || bugState(f, f.fixRunning) === "needs-check"));
 
 /** The finding whose fix is running. Every fix edits the project folder, so while one runs no other may start. */
 export const runningFix = (list: Pick<Finding, "id" | "title" | "fixRunning" | "fixSession">[]) => list.find((x) => x.fixRunning) ?? null;

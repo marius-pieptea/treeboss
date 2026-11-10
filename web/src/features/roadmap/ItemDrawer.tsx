@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ExternalLink, FileText, Hammer, Layers, Sparkles, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
+import { WhoPicker, useWho } from "@/components/agent-who";
 import { Button, IconButton } from "@/components/ui/button";
 import { confirm } from "@/components/ui/dialogs";
 import { Field, Input, Select, Switch, Textarea } from "@/components/ui/form";
@@ -17,6 +18,7 @@ import { parseTags, parseTarget, STATUS_LABEL } from "./logic";
 export function ItemDrawer({ root, item, lanes, roadmapPath, actions, onClose, line }: { root: string; item: RoadmapItem; lanes: RoadmapLane[]; roadmapPath: string; actions: Actions; onClose: () => void; line?: number }) {
   const drawerW = usePaneWidth("roadmap.drawer", 372);
   const choices = useChoices(root, true);
+  const [who, setWho] = useWho();
   const openTab = useUi((s) => s.openTab);
   const [starting, setStarting] = useState<"spec" | "build" | null>(null);
   const k = item.key;
@@ -26,7 +28,7 @@ export function ItemDrawer({ root, item, lanes, roadmapPath, actions, onClose, l
   const start = async (kind: "spec" | "build") => {
     setStarting(kind);
     try {
-      const r = await actions.start.mutateAsync({ key: item.key, kind });
+      const r = await actions.start.mutateAsync({ key: item.key, kind, ...who });
       openSession(r.session.id);
       toast.success(kind === "spec" ? "Spec session started" : "Build session started", { description: item.title });
     } catch {
@@ -125,6 +127,7 @@ export function ItemDrawer({ root, item, lanes, roadmapPath, actions, onClose, l
 
         <div className="space-y-1.5 pt-1">
           <div className="text-[11px] font-medium uppercase tracking-wide text-fg-faint">Work</div>
+          <WhoPicker who={who} onChange={setWho} />
           <div className="flex flex-wrap gap-2">
             <Button variant={item.spec && item.links.spec?.ok ? "subtle" : "primary"} size="sm" data-start="spec" disabled={starting !== null} onClick={() => void start("spec")}>
               {starting === "spec" ? <Spinner /> : <Sparkles />} {item.spec && item.links.spec?.ok ? "Revise spec" : "Create spec from this item"}

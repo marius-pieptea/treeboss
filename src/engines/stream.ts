@@ -176,6 +176,7 @@ export function createStreamAccumulator(
   let buffer = "";
   let resultText = "";
   let lastAssistantText = "";
+  let agyStepText = "";
   let sawResult = false;
   let errored = false;
   let toolCount = 0;
@@ -235,6 +236,17 @@ export function createStreamAccumulator(
   const emitText = () => {
     const text = (resultText || lastAssistantText || "").trim();
     if (text) extras?.onText?.(text);
+  };
+
+  // agy streams its answer as token-sized `text_delta`s; shown one per line, the chat
+  // read as two or three words per line. The step's text is buffered and shown whole.
+  const flushAgyStep = () => {
+    if (!agyStepText.trim()) return false;
+    lastAssistantText = agyStepText;
+    onLine(agyStepText.trimEnd());
+    emitText();
+    agyStepText = "";
+    return true;
   };
 
   /**
@@ -481,6 +493,7 @@ export function createStreamAccumulator(
         const su = event.step_update;
         if (!su || typeof su !== "object") return;
         if (su.step_type === "tool") {
+          flushAgyStep();
           const toolName = su.tool_name || su.tool_info?.name || "tool";
           if (su.state === "ACTIVE") {
             toolCount++;
@@ -507,11 +520,10 @@ export function createStreamAccumulator(
             const sample = sampleOf(usage);
             if (sample) noteContext(sample);
           }
-          if (typeof su.text_delta === "string" && su.text_delta.trim()) {
-            lastAssistantText += su.text_delta;
-            onLine(su.text_delta.trimEnd());
-            emitText();
+          if (typeof su.text_delta === "string") {
+            agyStepText += su.text_delta;
           }
+          if (su.state === "DONE") flushAgyStep();
         }
         return;
       }
@@ -524,6 +536,11 @@ export function createStreamAccumulator(
         if (typeof res?.num_turns === "number") resultNumTurns = res.num_turns;
         if (typeof res?.total_cost_usd === "number") resultCostUsd = res.total_cost_usd;
         if (typeof res?.response === "string") resultText = res.response;
+        if (!flushAgyStep() && !lastAssistantText && typeof res?.response === "string" && res.response.trim()) {
+          lastAssistantText = res.response;
+          onLine(res.response.trimEnd());
+          emitText();
+        }
         const secs = res?.duration_seconds ? Math.round(res.duration_seconds) : null;
         onLine(
           `[${label}] ${errored ? "failed" : "done"}` +
@@ -749,10 +766,11 @@ export function createStreamAccumulator(
     end() {
       if (buffer.trim()) consumeLine(buffer);
       buffer = "";
+      flushAgyStep();
       finishCompact(null);
     },
     context: () => lastContext,
-    finalText: () => (resultText || lastAssistantText || "").trim(),
+    finalText: () => (resultText || lastAssistantText || agyStepText || "").trim(),
     completed: () => sawResult,
     isError: () => errored,
     sessionId: () => sessionId,

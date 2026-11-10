@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import type { Who } from "@/components/agent-who";
 import { del, get, patch, post, put } from "@/lib/api";
 import type { SessionView } from "@/lib/types";
 
@@ -46,6 +47,21 @@ export interface EvidenceItem {
   finding_status: FindingStatus | null;
   /** Who made it: a browser capture, REA, an agent's note, or the operator. */
   source: "browser" | "rea" | "agent" | "operator" | null;
+}
+
+export interface CreateInvestigationInput extends Who {
+  title: string;
+  target?: string;
+  target_kind?: TargetKindChoice;
+  /** Start a run as well as creating it. */
+  run?: boolean;
+  /** The focus line the run's prompt carries. */
+  note?: string;
+}
+
+/** The create POST body: the picked engine and model travel with the run, and are left out when unpicked. */
+export function createInvestigationBody(a: CreateInvestigationInput): Record<string, unknown> {
+  return { title: a.title, target: a.target, target_kind: a.target_kind, note: a.note, run: a.run === true, ...(a.engine ? { engine: a.engine } : {}), ...(a.model ? { model: a.model } : {}) };
 }
 
 export interface Investigation {
@@ -151,7 +167,7 @@ export function useEvidenceActions(root: string) {
     markPlanned: useMutation({ mutationFn: (ids: string[]) => Promise.all(ids.map((id) => patch(`${base(root)}/${encodeURIComponent(id)}`, { finding_status: "planned" }))), onSuccess: refresh, onError }),
     build: useMutation({ mutationFn: (ids: string[]) => post<{ prompt: string; ids: string[] }>(`${base(root)}/build`, { ids }), onError }),
     createInvestigation: useMutation({
-      mutationFn: (a: { title: string; target?: string; target_kind?: TargetKindChoice; run?: boolean; note?: string }) => post<CreatedInvestigation>(`${base(root)}/investigations`, a),
+      mutationFn: (a: CreateInvestigationInput) => post<CreatedInvestigation>(`${base(root)}/investigations`, createInvestigationBody(a)),
       onSuccess: (r) => {
         if (r.session) toast.success("Run started");
         void refresh();
