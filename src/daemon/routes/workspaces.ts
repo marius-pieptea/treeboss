@@ -2,6 +2,7 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { db } from "../../db";
 import { RootError, Workspaces, owningWorkspace, resolveRoot, type Workspace } from "../../workspaces";
 import { repoInfo } from "../../git/ops";
 import { listeningPorts } from "../../terminal/ports";
@@ -28,15 +29,37 @@ async function listDrives(): Promise<string[]> {
   return list;
 }
 
-/** What is happening in every workspace at once: only the ones with running or failed work appear. */
-export function workspaceActivity(): Record<string, { running: number; failed: number }> {
+export interface WorkspaceActivity {
+  running: number;
+  failed: number;
+  /** Open leads whose last turn completed after the operator last had the workspace on screen. */
+  done: number;
+}
+
+/** What is happening in every workspace at once: only the ones with running, failed or unseen finished work appear. */
+export function workspaceActivity(): Record<string, WorkspaceActivity> {
   const open = listSessions({ leadsOnly: false, status: "open", limit: 500 });
-  const activity: Record<string, { running: number; failed: number }> = {};
+  const seen = Workspaces.seenSince();
+  // Idle leads whose last turn completed, newer than the oldest "seen" mark (older ones are seen everywhere).
+  const oldest = [...seen.values()].sort()[0] ?? "";
+  const finished = db()
+    .prepare(
+      `SELECT s.base_cwd, t.finished_at FROM sessions s JOIN turns t ON t.id = s.last_turn_id
+       WHERE s.depth = 0 AND s.status = 'idle' AND t.status = 'completed' AND t.finished_at > ?`,
+    )
+    .all(oldest) as Array<{ base_cwd: string; finished_at: string }>;
+  const doneBy: Record<string, number> = {};
+  for (const f of finished) {
+    const ws = owningWorkspace(f.base_cwd);
+    if (ws && f.finished_at > (seen.get(ws) ?? "")) doneBy[ws] = (doneBy[ws] ?? 0) + 1;
+  }
+  const activity: Record<string, WorkspaceActivity> = {};
   for (const w of Workspaces.list()) {
     const mine = open.filter((s) => owningWorkspace(s.base_cwd) === w.id);
     const running = mine.filter((s) => s.status === "running").length;
     const failed = mine.filter((s) => s.status === "failed" && s.depth === 0).length;
-    if (running || failed) activity[w.id] = { running, failed };
+    const done = doneBy[w.id] ?? 0;
+    if (running || failed || done) activity[w.id] = { running, failed, done };
   }
   return activity;
 }
@@ -69,6 +92,11 @@ export const workspaceRoutes: RouteModule = async (c) => {
   if ((m = c.match(/^\/api\/workspaces\/(w_[^/]+)\/open$/)) && c.method === "POST") {
     Workspaces.touch(m[1]);
     return json({ workspace: Workspaces.get(m[1]) });
+  }
+  // The workspace is on screen: what just finished in it is seen (the recent order is left alone).
+  if ((m = c.match(/^\/api\/workspaces\/(w_[^/]+)\/seen$/)) && c.method === "POST") {
+    Workspaces.markSeen(m[1]);
+    return json({ ok: true });
   }
 
   /** What is happening in every workspace at once, so the switcher can show work finishing elsewhere. */

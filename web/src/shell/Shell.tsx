@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo } from "react";
 import { Navigate } from "./Navigate";
 import { useUi, useWs } from "@/lib/store";
-import { useGitStatus, useGlobalStream, useRoot, useSession, useWorkspaces } from "@/lib/queries";
+import { useGitStatus, useGlobalStream, useRoot, useSession, useWorkspaceVisit, useWorkspaces } from "@/lib/queries";
 import { WorkspaceContext } from "@/lib/workspace";
 import { useElementSize, useHotkey } from "@/lib/hooks";
 import { bus } from "@/lib/bus";
@@ -81,6 +81,7 @@ function Layout({ workspaceId }: { workspaceId: string }) {
   const ws = useWs();
   const session = useSession(ws.activeSession);
   useGlobalStream(workspaceId);
+  useWorkspaceVisit(workspaceId);
   const git = useGitStatus(workspaceId);
   useShellCommands();
 

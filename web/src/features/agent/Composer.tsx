@@ -46,7 +46,7 @@ import { EffortSlider, ModelPicker } from "@/components/ui/model-select";
 import { UsageHover } from "./UsageHover";
 import { shortModelName, showsModelMark } from "@/lib/models-logic";
 import { cachedCatalog, effortAfterEngineChange, loadCatalog, modelAfterEngineChange } from "@/lib/models";
-import { Button } from "@/components/ui/button";
+import { Button, IconButton } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/misc";
 import {
   EFFORTS,
@@ -707,10 +707,13 @@ export function Composer({ session, running, draft, setDraft, onStarted, onNewSe
                   open={modelOpen}
                   onOpenChange={(o) => {
                     setModelOpen(o);
-                    if (o) setRunTab(pair ? "hydra" : "harness");
+                    if (!o) return;
+                    setRunTab(pair ? "hydra" : "harness");
+                    // Agents can be created from the terminal or another tab: look at the daemon's current list.
+                    void agentsQuery.refetch();
                   }}
                   trigger={
-                    <button data-engine-chip data-pair-chip={pair ? "" : undefined} aria-label={`Run with: ${pair ? pairText(pair) : chipLabel}`} title={pair ? pairText(pair) : "Choose the harness or a Hydra pair"} className={cn(chipClass, "hover:bg-hover hover:text-fg focus-visible:bg-hover", problem && "text-amber")}>
+                    <button data-engine-chip data-pair-chip={pair ? "" : undefined} aria-label={`Run with: ${pair ? pairText(pair) : chipLabel}`} title={`${pair ? pairText(pair) : "Choose the harness or a Hydra pair"}${agent ? ` · agent: ${agent.title}` : ""}`} className={cn(chipClass, "hover:bg-hover hover:text-fg focus-visible:bg-hover", problem && "text-amber")}>
                       {pair ? <PairChipInner pair={pair} /> : chipInner}
                       <ChevronDown className="!size-2.5 shrink-0 opacity-60" />
                     </button>
@@ -756,6 +759,29 @@ export function Composer({ session, running, draft, setDraft, onStarted, onNewSe
                       />
                     )}
                   </RunTabs>
+                  {/* The agent sits under both tabs: it works with a harness and with a pair (a pair still decides the lead's engine). */}
+                  <div data-run-agent className="mt-1.5 flex items-center gap-2 border-t border-line px-2 pt-1.5">
+                    <span className="w-11 shrink-0 text-[11px] text-fg-muted">Agent</span>
+                    <Select
+                      size="sm"
+                      aria-label="Agent"
+                      value={agentName}
+                      onChange={chooseAgent}
+                      options={[{ value: "", label: "No agent", hint: "plain session" }, ...(agentsQuery.data ?? []).map((a) => ({ value: a.name, label: a.title, hint: a.engine ?? undefined }))]}
+                      placeholder="No agent"
+                      className="min-w-0 flex-1"
+                    />
+                    <IconButton
+                      label={(agentsQuery.data ?? []).length ? "Manage agents" : "Create an agent"}
+                      size="icon-sm"
+                      onClick={() => {
+                        setModelOpen(false);
+                        useUi.getState().openTab({ kind: "settings", page: "agents", title: "Agents" });
+                      }}
+                    >
+                      <Settings2 />
+                    </IconButton>
+                  </div>
                 </Popover>
               )}
             </div>

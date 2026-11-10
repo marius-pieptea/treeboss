@@ -1,9 +1,10 @@
-import { Bot, ChevronsUpDown, FolderOpen, Globe, GitBranch, Monitor, Moon, Palette, PanelBottom, PanelLeft, PanelRight, Search, Smartphone, Sun } from "lucide-react";
+import { Bot, Check, ChevronsUpDown, FolderOpen, Globe, GitBranch, Monitor, Moon, Palette, PanelBottom, PanelLeft, PanelRight, Search, Smartphone, Sun } from "lucide-react";
 import { useUi } from "@/lib/store";
 import { THEME_OPTIONS } from "@/lib/theme";
 import { glassSupported } from "@/lib/glass";
 import { useGitStatus, useWorkspaceActivity, useWorkspaces } from "@/lib/queries";
 import { useWorkspace } from "@/lib/workspace";
+import type { WorkspaceActivity } from "@/lib/types";
 import { navigate } from "@/lib/nav";
 import { bus } from "@/lib/bus";
 import { formatCombo } from "@/lib/hooks";
@@ -15,20 +16,36 @@ import { Logo } from "./Logo";
 import { openBrowserTab } from "@/features/browser/discover";
 import { openEmulator } from "@/features/emulator/open";
 
-/** Running / failed work in a workspace, shown next to its name in the switcher. */
-function ActivityChip({ a }: { a?: { running: number; failed: number } }) {
+/** Running, finished-but-unseen and failed work in a workspace, shown next to its name in the switcher. */
+function ActivityChip({ a }: { a?: WorkspaceActivity }) {
   if (!a) return null;
   return (
     <span className="flex items-center gap-1.5 font-mono text-[10.5px]">
       {a.running > 0 && (
-        <span className="flex items-center gap-1 text-accent">
+        <span className="flex items-center gap-1 text-accent" title={`${a.running} running`}>
           <span className="size-1.5 rounded-full bg-accent animate-pulse-dot" />
           {a.running}
+        </span>
+      )}
+      {a.done > 0 && (
+        <span className="flex items-center gap-0.5 text-[var(--color-success)]" title="Finished since you were last here">
+          <Check className="size-3" />
+          {a.done} done
         </span>
       )}
       {a.failed > 0 && <span className="text-red">{a.failed} failed</span>}
     </span>
   );
+}
+
+/** The dot on the switcher for work in the other workspaces: failed beats finished-but-unseen beats running. */
+function elsewhereDot(running: number, done: number, failed: number): { cls: string; label: string } | null {
+  if (!running && !done && !failed) return null;
+  const parts = [running && `${running} running`, done && `${done} done, not seen`, failed && `${failed} failed`].filter(Boolean).join(", ");
+  const label = `${parts} in other workspaces`;
+  if (failed) return { cls: "bg-red", label };
+  if (done) return { cls: "bg-[var(--color-success)]", label };
+  return { cls: "bg-accent animate-pulse-dot", label };
 }
 
 export function TitleBar({ runningHeads }: { runningHeads: number }) {
@@ -39,6 +56,8 @@ export function TitleBar({ runningHeads }: { runningHeads: number }) {
   const elsewhere = Object.entries(activity).filter(([id]) => id !== workspace.id);
   const elsewhereRunning = elsewhere.reduce((n, [, a]) => n + a.running, 0);
   const elsewhereFailed = elsewhere.reduce((n, [, a]) => n + a.failed, 0);
+  const elsewhereDone = elsewhere.reduce((n, [, a]) => n + a.done, 0);
+  const dot = elsewhereDot(elsewhereRunning, elsewhereDone, elsewhereFailed);
   const { theme, themePref, palette, glass, setGlass, setTheme, leftOpen, rightOpen, bottomOpen, toggleLeft, toggleRight, toggleBottom, setActivity } = useUi();
 
   return (
@@ -56,9 +75,7 @@ export function TitleBar({ runningHeads }: { runningHeads: number }) {
           <button className="flex h-7 max-w-[240px] items-center gap-1.5 rounded-md px-2 text-[13px] font-medium outline-none transition-colors hover:bg-hover">
             <span className="truncate">{workspace.name}</span>
             <ChevronsUpDown className="size-3 shrink-0 text-fg-faint" />
-            {(elsewhereRunning > 0 || elsewhereFailed > 0) && (
-              <span title={`${elsewhereRunning} running, ${elsewhereFailed} failed in other workspaces`} className={cn("size-1.5 shrink-0 rounded-full", elsewhereFailed > 0 ? "bg-red" : "bg-accent animate-pulse-dot")} />
-            )}
+            {dot && <span title={dot.label} aria-label={dot.label} className={cn("size-1.5 shrink-0 rounded-full", dot.cls)} />}
           </button>
         }
       />

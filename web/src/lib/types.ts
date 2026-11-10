@@ -142,6 +142,8 @@ export interface SessionDetail {
   session: SessionView;
   brief: string | null;
   children: SessionView[];
+  /** The workspace the session belongs to; null when none is registered for its folder. */
+  workspace_id?: string | null;
 }
 
 export interface TurnRow {
@@ -189,6 +191,13 @@ export interface Workspace {
   path: string;
   name: string;
   last_opened: string;
+}
+
+/** What is happening in a workspace, for the switcher. done: open leads whose last turn completed since the operator last had it on screen. */
+export interface WorkspaceActivity {
+  running: number;
+  failed: number;
+  done: number;
 }
 
 export interface RepoInfo {

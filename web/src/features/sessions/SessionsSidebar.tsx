@@ -4,7 +4,6 @@ import { ClipboardCopy, Download, History, MessageSquarePlus, Network, Pencil, P
 import { toast } from "sonner";
 import { api, post, url } from "@/lib/api";
 import { qk, useClosedCount, useClosedSessions, usePairs, usePinnedSessions, useSessions } from "@/lib/queries";
-import { navigate } from "@/lib/nav";
 import { useUi, useWs } from "@/lib/store";
 import type { PinnedSession, SessionView } from "@/lib/types";
 import { useWorkspace } from "@/lib/workspace";
@@ -14,7 +13,7 @@ import { ContextMenu, type MenuEntry } from "@/components/ui/overlay";
 import { Badge, Empty, Section, Skeleton, StatusDot } from "@/components/ui/misc";
 import { ask, confirm } from "@/components/ui/dialogs";
 import { bus } from "@/lib/bus";
-import { openSession, startNewSession } from "@/features/agent/agent-commands";
+import { openSessionIn, startNewSession } from "@/features/agent/agent-commands";
 import { ContextBar } from "@/features/agent/ContextMeter";
 import { WaitingChip } from "@/features/agent/WaitingChip";
 import { ensureTurnWatcher } from "@/features/agent/turn-watcher";
@@ -34,13 +33,6 @@ function exportSession(id: string): void {
   document.body.appendChild(a);
   a.click();
   a.remove();
-}
-
-/** A pinned lead from another workspace: say which session that workspace opens on, then go there. */
-function openElsewhere(wsId: string, id: string): void {
-  useUi.getState().setActiveSessionIn(wsId, id);
-  useUi.getState().setRightTab("agent");
-  navigate(`/w/${wsId}`);
 }
 
 function Row({ s, active, updated, heads, pairTitle, workspaceName, open, onAction }: { s: SessionView; active: boolean; updated?: string; heads?: { total: number; running: number }; pairTitle?: string; workspaceName?: string; open: () => void; onAction: (a: "interrupt" | "close" | "rename" | "delete" | "copy" | "pin") => void }) {
@@ -178,7 +170,7 @@ export function SessionsSidebar() {
         heads={heads[s.id]}
         pairTitle={pairTitle(s.pair)}
         workspaceName={elsewhere ? (elsewhere.workspace_name ?? undefined) : undefined}
-        open={() => (elsewhere?.workspace_id ? openElsewhere(elsewhere.workspace_id, s.id) : openSession(s.id))}
+        open={() => openSessionIn(elsewhere?.workspace_id, s.id)}
         onAction={(a) => void act(s, a)}
       />
     );

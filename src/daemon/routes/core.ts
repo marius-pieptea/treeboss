@@ -202,7 +202,8 @@ export function coreRoutes(opts: { onShutdown?: () => void }): RouteModule {
     }
     if ((mm = c.match(/^\/api\/sessions\/([^/]+)$/)) && c.method === "GET") {
       const s = needSession(mm[1]);
-      return json({ session: viewSession(s, { full: true }), brief: s.brief, children: descendantsOf(s.id).map((k) => viewSession(k, { withOutput: false })) });
+      // workspace_id: the workspace the session belongs to (null if none is registered), so a client can switch there before opening it.
+      return json({ session: viewSession(s, { full: true }), brief: s.brief, children: descendantsOf(s.id).map((k) => viewSession(k, { withOutput: false })), workspace_id: owningWorkspace(s.base_cwd) });
     }
     if ((mm = c.match(/^\/api\/sessions\/([^/]+)\/send$/)) && c.method === "POST") {
       // The log cursor BEFORE the turn starts (its first line is written synchronously), so a client
