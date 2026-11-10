@@ -13,7 +13,7 @@ const ATTRIBUTION = "Adapted from pstack by Lauren Tan (MIT).";
 
 /** pstack skills are hidden from the skill list, so an agent reads them by path from its engine's skills folder. */
 const READ_BY_PATH =
-  "pstack skills are hidden from the skill list, so read them by path from this workspace's skills folder: `.claude/skills/<name>/SKILL.md` for Claude, `.agents/skills/<name>/SKILL.md` for Codex and Antigravity, `.cursor/skills/<name>/SKILL.md` for Cursor, `.grok/skills/<name>/SKILL.md` for Grok.";
+  "pstack skills are hidden from the skill list, so read them by path from this workspace's skills folder: `.claude/skills/<name>/SKILL.md` for Claude, `.agents/skills/<name>/SKILL.md` for Codex and Antigravity, `.cursor/skills/<name>/SKILL.md` for Cursor, `.grok/skills/<name>/SKILL.md` for Grok. OpenCode has no skills folder: the \"Available skills\" index in your prompt gives each skill's SKILL.md path (`~/.treeboss/skills/<name>/SKILL.md` by default).";
 
 /** The principle skills, without their prefix. Each one is the folder `principle-<name>`. */
 const PRINCIPLES = [

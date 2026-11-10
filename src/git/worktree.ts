@@ -126,7 +126,7 @@ export class WorktreeManager {
    * nothing to sandbox (not a git repo, or git is unusable): the caller then runs
    * in a plain directory, because failing a run over a plain folder would be absurd.
    */
-  prepare(options: { sessionId: string; label: string; setupCmd?: string | null; onLog?: (msg: string) => void; /** Start a NEW branch at this commit (a checkpoint) instead of HEAD; the dirty checkout is then not replayed. */ startRef?: string | null }): WorktreeSession | null {
+  prepare(options: { sessionId: string; label: string; setupCmd?: string | null; /** How node_modules reaches the worktree (worktree_deps); default "clone". */ deps?: DepsMode | null; onLog?: (msg: string) => void; /** Start a NEW branch at this commit (a checkpoint) instead of HEAD; the dirty checkout is then not replayed. */ startRef?: string | null }): WorktreeSession | null {
     const gitRoot = this.gitRoot();
     if (!gitRoot) return null;
 
@@ -168,7 +168,7 @@ export class WorktreeManager {
       }
     }
 
-    notes.push(...this.materializeEnvironment(gitRoot, root, options.setupCmd, log));
+    notes.push(...this.materializeEnvironment(gitRoot, root, options.setupCmd, options.deps ?? "clone", log));
 
     const baseSha = git(["rev-parse", "HEAD"], root).stdout.trim();
     const cwd = relSubdir && !relSubdir.startsWith("..") ? path.join(root, relSubdir) : root;
@@ -355,12 +355,15 @@ export class WorktreeManager {
   /**
    * Make the worktree runnable. A pristine checkout has no `.env` and no dependencies, so the
    * agent cannot run the tests it just wrote and burns turns discovering that. Local env files
-   * are copied and `node_modules` is symlinked rather than reinstalled. The symlink is shared
-   * with the operator's checkout, so an agent that runs an installer writes through it: the
-   * accepted trade for not paying a full install per session. A repo that cannot tolerate it
-   * sets `worktree_setup_cmd`, which runs instead of the symlink.
+   * are copied, and `node_modules` arrives per `deps`:
+   * - "clone" (default): a copy-on-write clone (APFS clonefile, Linux reflink), so it costs almost no disk and an
+   *   installer run in the head changes only the head's copy. Skipped when the lockfile differs from the repo's
+   *   (the head's dependencies are not the repo's) or the filesystem cannot clone; the head then installs its own.
+   * - "link": a symlink to the repo's folder. Shared: `npm ci` in a head empties the operator's node_modules through it.
+   * - "off": nothing.
+   * `worktree_setup_cmd`, when set, runs instead of all of these.
    */
-  private materializeEnvironment(gitRoot: string, worktreePath: string, setupCmd: string | null | undefined, log: (msg: string) => void): string[] {
+  private materializeEnvironment(gitRoot: string, worktreePath: string, setupCmd: string | null | undefined, deps: DepsMode, log: (msg: string) => void): string[] {
     const notes: string[] = [];
     let copied = 0;
     try {
@@ -382,27 +385,37 @@ export class WorktreeManager {
       return notes;
     }
 
-    const deps = path.join(gitRoot, "node_modules");
-    const linked = path.join(worktreePath, "node_modules");
+    if (deps === "off") return notes;
+    const source = path.join(gitRoot, "node_modules");
+    const dest = path.join(worktreePath, "node_modules");
     // Same path, or a circular/broken source, would plant `node_modules -> node_modules` in the
     // operator's checkout. `existsSync` follows links and returns false on ELOOP, so it cannot decide this.
-    if (path.resolve(deps) === path.resolve(linked)) return notes;
+    if (path.resolve(source) === path.resolve(dest)) return notes;
     let sourceOk = false;
     try {
-      sourceOk = fs.statSync(deps).isDirectory();
+      sourceOk = fs.statSync(source).isDirectory();
     } catch {}
     let destExists = false;
     try {
-      fs.lstatSync(linked);
+      fs.lstatSync(dest);
       destExists = true;
     } catch {}
-    if (sourceOk && !destExists) {
+    if (!sourceOk || destExists) return notes;
+    if (deps === "link") {
       try {
-        fs.symlinkSync(deps, linked, "junction");
-        notes.push("linked node_modules from the repo.");
+        fs.symlinkSync(source, dest, "junction");
+        notes.push("linked node_modules from the repo (shared: an install run here changes the repo's copy).");
       } catch (err: any) {
         log(`[worktree] could not link node_modules: ${err.message}`);
       }
+      return notes;
+    }
+    if (!lockfilesMatch(gitRoot, worktreePath)) {
+      notes.push("node_modules not copied: the lockfile differs from the repo's. Install dependencies here.");
+    } else if (cloneTree(source, dest)) {
+      notes.push("cloned node_modules from the repo (copy-on-write: an install run here leaves the repo's copy alone).");
+    } else {
+      notes.push("node_modules not copied: this filesystem cannot clone copy-on-write. Install dependencies here, or set worktree_deps to link to share the repo's copy.");
     }
     return notes;
   }
@@ -468,6 +481,41 @@ export class WorktreeManager {
       return null;
     }
   }
+}
+
+export type DepsMode = "clone" | "link" | "off";
+
+const LOCKFILES = ["package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb"];
+
+/** Every lockfile is byte-identical in both directories (or absent from both): the repo's node_modules fits the worktree. */
+export function lockfilesMatch(a: string, b: string): boolean {
+  const read = (dir: string, name: string) => {
+    try {
+      return fs.readFileSync(path.join(dir, name));
+    } catch {
+      return null;
+    }
+  };
+  return LOCKFILES.every((name) => {
+    const x = read(a, name);
+    const y = read(b, name);
+    return x === null || y === null ? x === y : x.equals(y);
+  });
+}
+
+/**
+ * Copy a directory tree copy-on-write: clonefile on macOS (`cp -c`), reflink on Linux. False, with nothing left behind,
+ * where the filesystem cannot: a plain copy of node_modules would take minutes and gigabytes.
+ */
+export function cloneTree(from: string, to: string): boolean {
+  const args = process.platform === "darwin" ? ["-c", "-R", from, to] : process.platform === "linux" ? ["-R", "--reflink=always", from, to] : null;
+  if (!args) return false;
+  const res = spawnSync("cp", args, { windowsHide: true, timeout: SETUP_TIMEOUT_MS });
+  if (res.status === 0) return true;
+  try {
+    fs.rmSync(to, { recursive: true, force: true });
+  } catch {}
+  return false;
 }
 
 /**

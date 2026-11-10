@@ -39,7 +39,7 @@ A pstack pair is one made from the `pstack-claude` or `pstack-claude-codex` reci
 
 A generalPurpose subagent takes the role its job calls for: `role: builder` for code, `role: verifier` for a check or a review, `role: explorer` for a read-only probe.
 
-In any other roles pair, use the closest preset the pair has. `subagent_create` names the pair's roles when it refuses one:
+In any other roles pair, the lead brief lists each role with its label, its agent and what it is for: pick from that list. `subagent_create` also resolves a pstack or preset name to the pair's role when exactly one role matches it: `role: explorer` finds the role that runs `pstack-explorer`, and `role: worker` finds the role labelled Worker, whatever its id. Otherwise use the closest preset the pair has. `subagent_create` names the pair's roles when it refuses one:
 
 | pstack's subagent | Closest preset |
 | --- | --- |

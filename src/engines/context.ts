@@ -21,7 +21,12 @@ export interface ContextSample {
 }
 
 /** What the stream parser tells its owner as a turn runs. */
-export type UsageEvent = { kind: "context"; sample: ContextSample } | { kind: "limits"; info: unknown } | { kind: "compact"; from: number | null; to: number | null; trigger?: string | null };
+export type UsageEvent =
+  | { kind: "context"; sample: ContextSample }
+  | { kind: "limits"; info: unknown }
+  | { kind: "compact"; from: number | null; to: number | null; trigger?: string | null }
+  /** The turn's tokens so far, summed over its API messages: the live count before the turn settles. */
+  | { kind: "turn"; usage: { input: number; output: number; cacheRead: number; cacheCreation: number } };
 
 export const DEFAULT_WINDOW = 200_000;
 

@@ -23,12 +23,13 @@ export const SETTING_DEFS = {
   default_skills: { type: "string", def: "all", help: "Skills a session gets when it has none of its own (no agent or per-session list): `all` (every enabled skill), `builtin` (the ones that ship with trb), `none`, or comma-separated names (which may include builtin). A session or agent that lists skills gets exactly those. An engine with no skills folder only gets the built-ins from `all`: its skills are listed in the prompt. /name always adds one." },
   skills_link: { type: "string", def: "on", help: "on: skills are linked into the workspace (one entry each, fast, nothing copied). off: copied file by file. Falls back to a copy by itself if the filesystem refuses links." },
   mcp_isolation: { type: "string", def: "strict", help: "strict: claude sees only trb's MCP servers. merge: also its own user config." },
-  worktree_setup_cmd: { type: "string", def: "", help: "Shell command run in each new subagent worktree (e.g. `bun install`). Empty: symlink node_modules from the repo." },
+  worktree_setup_cmd: { type: "string", def: "", help: "Shell command run in each new subagent worktree (e.g. `bun install`), instead of worktree_deps. Empty: worktree_deps decides." },
+  worktree_deps: { type: "string", def: "clone", help: "How a subagent worktree gets the repo's node_modules. clone: a copy-on-write clone (macOS APFS, Linux reflink) when the lockfile matches, so an install in the head never touches the repo's copy. link: a shared symlink (an `npm ci` in a head empties the repo's node_modules through it). off: none, the head installs its own." },
   cargo_shared_target: { type: "string", def: "on", help: "on: every worktree of a repo builds Rust into one shared CARGO_TARGET_DIR under the trb home, instead of a full target/ per head (tens of GB each). Skipped when CARGO_TARGET_DIR is already set. off: each worktree keeps its own target/." },
   cargo_target_max_gb: { type: "number", def: 30, help: "A repo's shared Rust target dir is deleted at daemon start when it is bigger than this many GB and none of its sessions is live. 0: never." },
   idle_close_hours: { type: "number", def: 6, help: "Close idle subagents after this many hours without a turn." },
   leftover_reap_hours: { type: "number", def: 24, help: "Stop the background processes an agent left running (dev servers, watchers, browsers) once a session's last turn ended this many hours ago. The session stays open. 0: never." },
-  min_free_memory_mb: { type: "number", def: 1500, help: "A new turn is refused while less memory than this (MB) is available: a lead's turn, or a subagent's launch or follow-up. Available means MemAvailable on Linux, free memory elsewhere. 0: no guard." },
+  min_free_memory_mb: { type: "number", def: 1500, help: "A new turn is refused while less memory than this (MB) is available: a lead's turn, or a subagent's launch or follow-up. Available means MemAvailable on Linux, free + inactive + speculative + purgeable pages on macOS, free memory elsewhere. 0: no guard." },
   lead_idle_close_hours: { type: "number", def: 0, help: "Close a lead (with its subagents) after this many hours without a turn. Pinned leads are kept. 0: leads are never closed automatically." },
   next_steps: { type: "string", def: "on", help: "on: a lead's build turns end with up to three suggested follow-ups, shown as chips under the answer. off: agents are not asked." },
   treeboss_mode: { type: "string", def: "off", help: "on: new sessions start in treeboss mode (tier triage, design and docs gates, specs on the roadmap). Each session can still switch it." },
@@ -79,6 +80,7 @@ export function setSetting(key: string, value: string): void {
   if (def.type === "number" && !Number.isFinite(Number(value))) throw new UserError(`${key} must be a number.`);
   if (key === "default_skills") for (const t of value.split(",")) if (t.trim() && !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(t.trim())) throw new UserError(`default_skills: "${t.trim()}" is not a skill name. Use names, "builtin", "all" or "none", separated by commas.`);
   if (key === "skills_link" && value !== "on" && value !== "off") throw new UserError(`skills_link must be "on" or "off".`);
+  if (key === "worktree_deps" && value !== "clone" && value !== "link" && value !== "off") throw new UserError(`worktree_deps must be "clone", "link" or "off".`);
   if (key === "mcp_isolation" && value !== "strict" && value !== "merge") throw new UserError(`mcp_isolation must be "strict" or "merge".`);
   if (key === "codegraph" && value !== "auto" && value !== "off") throw new UserError(`codegraph must be "auto" or "off".`);
   if (key === "ask_model_override" && value !== "on" && value !== "off") throw new UserError(`ask_model_override must be "on" or "off".`);

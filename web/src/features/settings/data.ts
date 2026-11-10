@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { del, get, patch, post, put } from "@/lib/api";
 import type { Agent, McpServer, Pair, PairRecipe, RolePreset, Setting, Skill } from "@/lib/types";
 import type { SkillPack, SkillPackCounts } from "./skills-logic";
+import type { CliLinkStatus } from "./logic";
 
 export const keys = {
   roles: ["roles"] as const,
@@ -12,6 +13,7 @@ export const keys = {
   skills: ["skills"] as const,
   skillPacks: ["skills", "packs"] as const,
   config: ["config"] as const,
+  cliLink: ["cli-link"] as const,
   doctor: ["doctor"] as const,
   skillFile: (name: string) => ["skills", name, "file"] as const,
 };
@@ -75,6 +77,7 @@ export const useRecipes = () => useQuery({ queryKey: keys.recipes, queryFn: () =
 export const useMcp = () => useQuery({ queryKey: keys.mcp, queryFn: () => get<{ servers: McpServer[] }>("/api/mcp").then((r) => r.servers) });
 export const useSkills = () => useQuery({ queryKey: keys.skills, queryFn: () => get<{ skills: Skill[] }>("/api/skills").then((r) => r.skills) });
 export const useSkillPacks = () => useQuery({ queryKey: keys.skillPacks, queryFn: () => get<SkillPack[]>("/api/skills/packs"), staleTime: 60_000 });
+export const useCliLink = () => useQuery({ queryKey: keys.cliLink, queryFn: () => get<CliLinkStatus>("/api/cli-link"), staleTime: 60_000 });
 export const useConfig = () => useQuery({ queryKey: keys.config, queryFn: () => get<{ settings: Setting[] }>("/api/config").then((r) => r.settings) });
 export const useDoctor = () => useQuery({ queryKey: keys.doctor, queryFn: () => get<DoctorReport>("/api/doctor"), staleTime: 60_000 });
 export const useSkillFile = (name: string | null) => useQuery({ queryKey: keys.skillFile(name ?? ""), enabled: !!name, queryFn: () => get<SkillFile>(`/api/skills/${encodeURIComponent(name!)}/file`), staleTime: 0, refetchOnWindowFocus: false });
@@ -133,6 +136,9 @@ export const api = {
   config: {
     set: (key: string, value: string) => put(`/api/config/${key}`, { value }),
     reset: (key: string) => del(`/api/config/${key}`),
+  },
+  cliLink: {
+    install: (target: string | null) => post<{ linked: string; note: string | null }>("/api/cli-link", { target }),
   },
 };
 

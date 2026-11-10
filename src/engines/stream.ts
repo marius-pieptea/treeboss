@@ -281,6 +281,7 @@ export function createStreamAccumulator(
           }
         : next,
     );
+    extras?.onUsage?.({ kind: "turn", usage: summedPerTurn() });
   };
 
   const summedPerTurn = () => {
@@ -508,12 +509,16 @@ export function createStreamAccumulator(
         }
         if (su.step_type === "agent_response") {
           if (su.usage) {
-            noteMessageUsage(`agy-step-${su.step_index ?? perMessageUsage.size}`, {
+            const usage = {
               input_tokens: su.usage.input_tokens,
               output_tokens: su.usage.output_tokens,
               cache_read_input_tokens: su.usage.cache_read_tokens || su.usage.cache_read_input_tokens || 0,
               cache_creation_input_tokens: su.usage.cache_creation_tokens || 0,
-            });
+            };
+            noteMessageUsage(`agy-step-${su.step_index ?? perMessageUsage.size}`, usage);
+            // Each step's input is the whole prompt so far: the context meter's reading, live, as Claude's is.
+            const sample = sampleOf(usage);
+            if (sample) noteContext(sample);
           }
           if (typeof su.text_delta === "string") {
             agyStepText += su.text_delta;

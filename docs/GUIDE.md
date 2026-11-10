@@ -421,7 +421,7 @@ TreeBoss does not talk to any model provider itself. It launches the official CL
 
 **Settings > Workspace** sets where a project keeps what the app writes for it: the plans folder (`plans`), the docs folder (`docs`) and the roadmap file (`ROADMAP.md`). They are plain relative paths inside the workspace; changing one moves nothing, it only changes where the app looks and writes next, and a path that leaves the workspace is refused.
 
-`trb config list` shows the daemon's settings. The ones you will touch: `default_engine`, `max_depth` (2), `max_per_parent` (6), `max_concurrent` (6), `turn_idle_timeout_sec` (900: a lead blocked on its heads is *busy*, not idle), `turn_ceiling_sec` (3600: time spent waiting on working heads does not count), `turn_hard_ceiling_sec` (14400: the absolute limit, waits included), `worktree_setup_cmd` (e.g. `bun install`, run in each new worktree instead of symlinking `node_modules`), `claude_max_turns`.
+`trb config list` shows the daemon's settings. The ones you will touch: `default_engine`, `max_depth` (2), `max_per_parent` (6), `max_concurrent` (6), `turn_idle_timeout_sec` (900: a lead blocked on its heads is *busy*, not idle), `turn_ceiling_sec` (3600: time spent waiting on working heads does not count), `turn_hard_ceiling_sec` (14400: the absolute limit, waits included), `worktree_deps` (`clone`: each worktree gets a copy-on-write clone of the repo's `node_modules` when the lockfile matches, so an `npm ci` in a head never touches yours; `link` shares it by symlink; `off`), `worktree_setup_cmd` (e.g. `bun install`, run in each new worktree instead), `min_free_memory_mb` (1500; on macOS available memory counts inactive and purgeable pages, not just free ones), `claude_max_turns`.
 
 ## How it fits together
 

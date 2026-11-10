@@ -119,6 +119,15 @@ describe("roadmap_propose", () => {
     expect(state.lanes[0]!.items[0]).toMatchObject({ title: "Search", docs: "docs/search.md", done: false });
   });
 
+  test("an existing docs/ROADMAP.md is used, and no root ROADMAP.md is created", async () => {
+    const s = await session(true);
+    write(s.dir, "docs/ROADMAP.md", "# Roadmap\n\n## Next\n\n- [ ] Existing {#r1}\n");
+    const r = executeTreebossTool("roadmap_propose", { title: "Search" }, s.id);
+    expect(r.text).toMatch(/^Proposed in Next of docs\/ROADMAP\.md:/);
+    expect(fs.existsSync(path.join(s.dir, "ROADMAP.md"))).toBe(false);
+    expect(read(s.dir, "docs/ROADMAP.md")).toContain("- [ ] Search");
+  });
+
   test("a missing title is named, and nothing is written", async () => {
     const s = await session(true);
     expect(executeTreebossTool("roadmap_propose", { spec: "specs/001-x" }, s.id).text).toBe("Error: title is required.");
