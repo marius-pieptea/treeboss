@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Bot, Bug, ChevronRight, ClipboardCheck, Compass, Globe, Plus, Sparkles, Trash2 } from "lucide-react";
+import { Bot, Bug, Check, ChevronRight, ClipboardCheck, Compass, Globe, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { WhoPicker, useWho } from "@/components/agent-who";
 import { Button } from "@/components/ui/button";
 import { confirm } from "@/components/ui/dialogs";
@@ -12,7 +12,8 @@ import { cn } from "@/lib/utils";
 import { type PlanSummary, type PlanView, type QaActions, type RunSummary, type StepHistory, usePlan, usePlans, useQaActions, useRun } from "./api";
 import { Banner } from "./Banner";
 import { FeaturesView } from "./FeaturesView";
-import { bugOf, countsLine, lastRunLine, outcomeDetail, runNumber, runsNewestFirst, sessionLabel, sortPlans, summaryProgress } from "./logic";
+import { bugOf, countsLine, lastRunLine, outcomeDetail, rowsOf, runNumber, runsNewestFirst, sessionLabel, sortPlans, summaryProgress } from "./logic";
+import { ProposalRow } from "./ProposalRow";
 import { NewPlanDialog } from "./NewPlanDialog";
 import { ProgressBar } from "./RunHeader";
 import { OutcomeIcon } from "./StepRow";
@@ -242,6 +243,7 @@ function PlanDetail({ root, summary, view, busy, actions, onOpenBug, onRunInBrow
   // The run an agent is recording now: its results are read again as they come in.
   const liveRun = working && session?.kind === "run" ? session.runId : null;
   const starting = actions.startAgent.isPending || actions.explore.isPending;
+  const decide = (pid: string | "all", decision: "accept" | "reject") => actions.decide.mutate({ slug: plan.slug, pid, decision });
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-3 p-4">
       <header className="flex flex-col gap-2">
@@ -283,7 +285,20 @@ function PlanDetail({ root, summary, view, busy, actions, onOpenBug, onRunInBrow
         {plan.problem && <Banner tone="danger">{plan.problem}</Banner>}
         {plan.proposalsProblem && <Banner>{plan.proposalsProblem}</Banner>}
         {session?.problem && !session.running && <Banner>{session.problem}</Banner>}
-        {plan.proposals.length > 0 && <Banner>{plan.proposals.length === 1 ? "1 suggested step is" : `${plan.proposals.length} suggested steps are`} waiting for a decision in the browser's QA panel.</Banner>}
+        {plan.proposals.length > 0 && (
+          <div role="status" className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-line-strong px-3 py-2">
+            <Sparkles className="size-3.5 text-violet" />
+            <span className="min-w-0 flex-1 text-xs text-fg">
+              {plan.proposals.length === 1 ? "1 suggested step" : `${plan.proposals.length} suggested steps`} below, marked +. Keep the ones worth running.
+            </span>
+            <Button size="xs" variant="primary" disabled={working || actions.decide.isPending} onClick={() => decide("all", "accept")}>
+              <Check /> Accept all
+            </Button>
+            <Button size="xs" variant="ghost" disabled={working || actions.decide.isPending} onClick={() => decide("all", "reject")}>
+              <X /> Reject all
+            </Button>
+          </div>
+        )}
       </header>
       <SegTabs
         value={tab}
@@ -293,22 +308,30 @@ function PlanDetail({ root, summary, view, busy, actions, onOpenBug, onRunInBrow
           { value: "runs", label: "Runs", badge: runs.length > 0 ? <span className="font-mono text-[10px] text-fg-faint">{runs.length}</span> : undefined },
         ]}
       />
-      {tab === "steps" ? <StepsList view={view} runs={runs} /> : <RunsList root={root} runs={runs} liveRun={liveRun} onOpenBug={onOpenBug} />}
+      {tab === "steps" ? <StepsList view={view} runs={runs} busy={working || actions.decide.isPending} onDecide={decide} /> : <RunsList root={root} runs={runs} liveRun={liveRun} onOpenBug={onOpenBug} />}
     </div>
   );
 }
 
-function StepsList({ view, runs }: { view: PlanView; runs: RunSummary[] }) {
+/** The plan's steps with the suggested ones in place (marked +), each with Accept and Reject. */
+function StepsList({ view, runs, busy, onDecide }: { view: PlanView; runs: RunSummary[]; busy: boolean; onDecide: (pid: string, d: "accept" | "reject") => void }) {
   const { plan, lastOutcomes } = view;
-  if (plan.steps.length === 0) return <Empty title="No steps yet" hint="Add steps in the browser's QA panel, or suggest some." />;
+  if (plan.steps.length === 0 && plan.proposals.length === 0) return <Empty title="No steps yet" hint="Draft some with Suggest missing steps or Explore, or add them in the browser's QA panel." />;
   return (
     <ol className="flex flex-col divide-y divide-line rounded-xl border border-line bg-panel">
-      {plan.steps.map((s, i) => {
+      {rowsOf(plan.steps, plan.proposals).map((r) => {
+        if (r.kind === "proposal")
+          return (
+            <li key={r.proposal.id} data-proposal={r.proposal.id} className="p-1.5">
+              <ProposalRow proposal={r.proposal} busy={busy} onDecide={(d) => onDecide(r.proposal.id, d)} />
+            </li>
+          );
+        const s = r.step;
         const last: StepHistory | undefined = lastOutcomes[s.id];
         const detail = last ? outcomeDetail(last.outcome) : "";
         return (
           <li key={s.id} data-step={s.id} className="flex items-start gap-2 px-3 py-2">
-            <span className="w-5 shrink-0 pt-px text-right font-mono text-[11px] leading-[18px] text-fg-muted">{i + 1}</span>
+            <span className="w-5 shrink-0 pt-px text-right font-mono text-[11px] leading-[18px] text-fg-muted">{r.number}</span>
             <div className="min-w-0 flex-1">
               <div className="text-[13px] leading-snug">{s.action}</div>
               {s.expected && <div className="mt-1 text-xs leading-snug text-fg-muted">{s.expected}</div>}
