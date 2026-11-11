@@ -357,6 +357,22 @@ export function hasWorkingChildren(sessionId: string): boolean {
   return kids.some((k) => liveTurns.has(k.id));
 }
 
+/** No live turn and not finalizing, for the session and every session under it. Status is not consulted: a crashed head counts idle. */
+export function treeIdle(sessionId: string): boolean {
+  const own = getSession(sessionId);
+  if (!own) return true;
+  return [own, ...descendantsOf(sessionId)].every((s) => !liveTurns.has(s.id) && !finalizingOf(s.id));
+}
+
+/** The lead's worktree heads that are idle and hold commits not merged into the project: the branch tip is not the last merged tip (else the base). */
+export function unmergedHeads(leadId: string): SessionRecord[] {
+  const heads = db().prepare("SELECT * FROM sessions WHERE parent_id = ? AND isolation = 'worktree' AND status = 'idle' ORDER BY created_at, rowid").all(leadId) as SessionRecord[];
+  return heads.filter((h) => {
+    const tip = branchTip(h);
+    return tip !== null && tip !== (h.merged_sha ?? h.base_sha);
+  });
+}
+
 export function owns(caller: Caller, s: SessionRecord): boolean {
   if (caller.operator) return true;
   return Boolean(caller.sessionId) && s.parent_id === caller.sessionId;

@@ -1,13 +1,13 @@
 /**
  * QA runs: one row per run in `qa_runs` (db.ts). A run freezes the plan's steps when it starts, so editing the plan
  * later changes the next run and leaves this one's text alone. Progress, finished and the current step are computed
- * from the steps, never stored.
+ * from the steps, never stored. `plan` holds a feature id (or a plan slug); `session_id` is the session that walks it.
  */
 import { db } from "../db";
 import { newId, UserError } from "../util";
 import { readFinding } from "../lab/findings";
 import { realOf } from "../lab/tables";
-import type { Outcome, OutcomeState, Plan, PlanSlug, Run, RunCounts, RunId, RunStep, RunSummary, StepId } from "./types";
+import type { Outcome, OutcomeState, Plan, Run, RunId, RunSummary, StepId } from "./types";
 
 const STATES: readonly OutcomeState[] = ["pending", "pass", "fail", "skip", "blocked"];
 
@@ -17,9 +17,10 @@ interface Row {
   plan: string;
   started_at: number;
   steps: string;
+  session_id: string | null;
 }
 
-const toRun = (r: Row): Run => ({ id: r.id as RunId, plan: r.plan as PlanSlug, root: r.root_dir, startedAt: r.started_at, steps: JSON.parse(r.steps) as RunStep[] });
+const toRun = (r: Row): Run => ({ id: r.id, feature: r.plan, startedAt: r.started_at, sessionId: r.session_id, steps: JSON.parse(r.steps) as Run["steps"] });
 
 export function runId(raw: unknown): RunId {
   if (typeof raw !== "string" || !/^qa_[a-z0-9]+$/.test(raw)) throw new UserError(`"${String(raw)}" is not a run id.`);
@@ -52,13 +53,17 @@ function checkOutcome(o: Outcome): void {
   if (o.state === "blocked" && !o.note.trim()) throw new UserError("A blocked step needs a note: say what blocks it.");
 }
 
-/** Starts a run from the plan's current steps. */
-export function startRun(root: string, plan: Plan): Run {
+/** Starts a run from the plan's current steps. `sessionId` is null when the session is not created yet (setRunSession fills it). */
+export function startRun(root: string, plan: Plan, sessionId: string | null): Run {
   if (plan.problem) throw new UserError(`The plan file cannot be read (${plan.problem}).`);
   if (!plan.steps.length) throw new UserError("The plan has no steps to run.");
-  const run: Run = { id: newId("qa") as RunId, plan: plan.slug, root: realOf(root), startedAt: Date.now(), steps: plan.steps.map((s) => ({ ...s, outcome: { state: "pending" } })) };
-  db().prepare("INSERT INTO qa_runs (id, root_dir, plan, started_at, steps) VALUES (?, ?, ?, ?, ?)").run(run.id, run.root, run.plan, run.startedAt, JSON.stringify(run.steps));
+  const run: Run = { id: newId("qa"), feature: plan.feature, startedAt: Date.now(), sessionId, steps: plan.steps.map((s) => ({ ...s, outcome: { state: "pending" } })) };
+  db().prepare("INSERT INTO qa_runs (id, root_dir, plan, started_at, steps, session_id) VALUES (?, ?, ?, ?, ?, ?)").run(run.id, realOf(root), run.feature, run.startedAt, JSON.stringify(run.steps), sessionId);
   return run;
+}
+
+export function setRunSession(id: RunId, sessionId: string): void {
+  db().prepare("UPDATE qa_runs SET session_id = ? WHERE id = ?").run(sessionId, id);
 }
 
 export function getRun(id: RunId): Run | null {
@@ -66,68 +71,62 @@ export function getRun(id: RunId): Run | null {
   return r ? toRun(r) : null;
 }
 
+/** The project a run belongs to, or null when there is no such run. */
+export function runRoot(id: RunId): string | null {
+  return (db().prepare("SELECT root_dir FROM qa_runs WHERE id = ?").get(id) as { root_dir: string } | null)?.root_dir ?? null;
+}
+
+/** The runs a session walks, oldest first. */
+export function runsOfSession(sessionId: string): Run[] {
+  return (db().prepare("SELECT * FROM qa_runs WHERE session_id = ? ORDER BY started_at, rowid").all(sessionId) as Row[]).map(toRun);
+}
+
 export function setOutcome(id: RunId, step: StepId, o: Outcome): Run {
   checkOutcome(o);
   const run = getRun(id);
-  if (!run) throw new UserError(`No run "${id}".`);
+  const root = runRoot(id);
+  if (!run || root === null) throw new UserError(`No run "${id}".`);
   const target = run.steps.find((s) => s.id === step);
   if (!target) throw new UserError(`Step ${step} is not in run ${id}.`);
-  if (o.state === "fail" && o.bug !== null) readFinding(run.root, o.bug);
+  if (o.state === "fail" && o.bug !== null) readFinding(root, o.bug);
   target.outcome = o;
   db().prepare("UPDATE qa_runs SET steps = ? WHERE id = ?").run(JSON.stringify(run.steps), id);
   return run;
 }
 
-export function countsOf(steps: Array<{ outcome: Outcome }>): RunCounts {
-  const c: RunCounts = { pending: 0, pass: 0, fail: 0, skip: 0, blocked: 0 };
+export function countsOf(steps: Array<{ outcome: Outcome }>): RunSummary["counts"] {
+  const c: RunSummary["counts"] = { pending: 0, pass: 0, fail: 0, skip: 0, blocked: 0 };
   for (const s of steps) c[s.outcome.state]++;
   return c;
 }
 
 export function summarize(run: Run): RunSummary {
   const counts = countsOf(run.steps);
-  return { id: run.id, plan: run.plan, startedAt: run.startedAt, counts, finished: counts.pending === 0, states: Object.fromEntries(run.steps.map((s) => [s.id, s.outcome.state])) };
+  return { id: run.id, feature: run.feature, startedAt: run.startedAt, counts, finished: counts.pending === 0, sessionId: run.sessionId };
 }
 
-/** The first step still waiting for an outcome: where the panel resumes. */
-export const currentStep = (run: Run): RunStep | null => run.steps.find((s) => s.outcome.state === "pending") ?? null;
+/** The first step still waiting for an outcome. */
+export const currentStep = (run: Run): Run["steps"][number] | null => run.steps.find((s) => s.outcome.state === "pending") ?? null;
 
-/** A plan's runs, newest first. A run an agent walked names its session. */
-export function listRuns(root: string, slug: PlanSlug, limit = 50): RunSummary[] {
-  const rows = db().prepare("SELECT * FROM qa_runs WHERE root_dir = ? AND plan = ? ORDER BY started_at DESC, rowid DESC LIMIT ?").all(realOf(root), slug, limit) as Row[];
-  const agents = new Map((db().prepare("SELECT run_id, session_id FROM qa_sessions WHERE root_dir = ? AND plan = ? AND run_id IS NOT NULL").all(realOf(root), slug) as Array<{ run_id: string; session_id: string }>).map((a) => [a.run_id, a.session_id]));
-  return rows.map((r) => ({ ...summarize(toRun(r)), agentSession: agents.get(r.id) ?? null }));
+/** A feature's runs, newest first. */
+export function listRuns(root: string, feature: string, limit = 20): RunSummary[] {
+  const rows = db().prepare("SELECT * FROM qa_runs WHERE root_dir = ? AND plan = ? ORDER BY started_at DESC, rowid DESC LIMIT ?").all(realOf(root), feature, limit) as Row[];
+  return rows.map((r) => summarize(toRun(r)));
 }
 
-/** Drops one run: an agent run whose session could not start. */
+/** Drops one run: a test job that could not start. */
 export function removeRun(id: RunId): void {
   db().prepare("DELETE FROM qa_runs WHERE id = ?").run(id);
 }
 
-export function lastRunSummary(root: string, slug: PlanSlug): RunSummary | null {
-  return listRuns(root, slug, 1)[0] ?? null;
-}
-
-export interface StepHistory {
-  run: RunId;
-  at: number;
-  outcome: Exclude<Outcome, { state: "pending" }>;
-}
-
-/** For each step id, its newest outcome across the plan's runs (a pending one does not count). */
-export function lastOutcomes(root: string, slug: PlanSlug, limit = 50): Record<string, StepHistory> {
-  const rows = db().prepare("SELECT * FROM qa_runs WHERE root_dir = ? AND plan = ? ORDER BY started_at DESC, rowid DESC LIMIT ?").all(realOf(root), slug, limit) as Row[];
-  const out: Record<string, StepHistory> = {};
-  for (const r of rows) {
-    const run = toRun(r);
-    for (const s of run.steps) {
-      if (s.outcome.state === "pending" || out[s.id]) continue;
-      out[s.id] = { run: run.id, at: s.outcome.at, outcome: s.outcome };
-    }
-  }
+/** For each step id, its newest outcome state across the feature's runs (a pending one does not count). */
+export function lastOutcomes(root: string, feature: string, limit = 50): Record<string, OutcomeState> {
+  const rows = db().prepare("SELECT * FROM qa_runs WHERE root_dir = ? AND plan = ? ORDER BY started_at DESC, rowid DESC LIMIT ?").all(realOf(root), feature, limit) as Row[];
+  const out: Record<string, OutcomeState> = {};
+  for (const r of rows) for (const s of toRun(r).steps) if (s.outcome.state !== "pending" && !out[s.id]) out[s.id] = s.outcome.state;
   return out;
 }
 
-export function removeRuns(root: string, slug: PlanSlug): void {
+export function removeRuns(root: string, slug: string): void {
   db().prepare("DELETE FROM qa_runs WHERE root_dir = ? AND plan = ?").run(realOf(root), slug);
 }

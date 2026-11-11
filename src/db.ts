@@ -323,27 +323,29 @@ export function migrate(conn: Database): void {
     started_at TEXT DEFAULT CURRENT_TIMESTAMP
   )`);
   conn.exec("CREATE INDEX IF NOT EXISTS idx_turn_groups_session ON turn_groups(session_id)");
-  // QA runs (qa/runs.ts): one row per run, the steps it froze with their outcomes as JSON. qa_sessions (qa/sessions.ts):
-  // the agent session working on a plan, so a turn end can find the plan and a second one is refused.
+  // QA runs (qa/runs.ts): one row per run, the steps it froze with their outcomes as JSON; plan is the feature id (or a plan
+  // slug) and session_id the session that walks it. A pipeline (qa/jobs.ts) is one qa_pipelines row, every session it
+  // launches one qa_jobs row. The old qa_sessions and qa_batches are gone.
   conn.exec(`CREATE TABLE IF NOT EXISTS qa_runs (
     id TEXT PRIMARY KEY, root_dir TEXT NOT NULL, plan TEXT NOT NULL, started_at INTEGER NOT NULL, steps TEXT NOT NULL
   )`);
   conn.exec("CREATE INDEX IF NOT EXISTS idx_qa_runs_plan ON qa_runs(root_dir, plan, started_at)");
-  conn.exec(`CREATE TABLE IF NOT EXISTS qa_sessions (
-    session_id TEXT PRIMARY KEY, root_dir TEXT NOT NULL, plan TEXT NOT NULL, kind TEXT NOT NULL, problem TEXT,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  conn.exec(`CREATE TABLE IF NOT EXISTS qa_pipelines (
+    id TEXT PRIMARY KEY, root_dir TEXT NOT NULL, config TEXT NOT NULL, control TEXT NOT NULL, units TEXT, created_at INTEGER NOT NULL
   )`);
-  addColumn(conn, "qa_sessions", "proposals_sig", "TEXT");
-  // An agent run (kind 'run') walks one run of the plan: run_id. A run started by an end-to-end batch names it: batch_id.
-  addColumn(conn, "qa_sessions", "run_id", "TEXT");
-  addColumn(conn, "qa_sessions", "batch_id", "TEXT");
-  // End-to-end batches (qa/batches.ts): plans run by an agent one after another. `next` is the index of the plan to start
-  // when the current run's turn ends; `opts` is the engine choice as JSON.
-  conn.exec(`CREATE TABLE IF NOT EXISTS qa_batches (
-    id TEXT PRIMARY KEY, root_dir TEXT NOT NULL, plans TEXT NOT NULL, next INTEGER NOT NULL DEFAULT 0, current TEXT,
-    base_url TEXT, opts TEXT NOT NULL DEFAULT '{}', cancelled INTEGER NOT NULL DEFAULT 0, errors TEXT NOT NULL DEFAULT '[]',
-    created_at INTEGER NOT NULL
+  conn.exec("CREATE INDEX IF NOT EXISTS idx_qa_pipelines_root ON qa_pipelines(root_dir, created_at)");
+  conn.exec(`CREATE TABLE IF NOT EXISTS qa_jobs (
+    id TEXT PRIMARY KEY, pipeline_id TEXT NOT NULL, root_dir TEXT NOT NULL, stage TEXT NOT NULL, units TEXT NOT NULL,
+    session_id TEXT UNIQUE, error TEXT, sigs TEXT NOT NULL DEFAULT '{}', nudged_turns INTEGER, problem TEXT,
+    started_at INTEGER NOT NULL, settled_at INTEGER
   )`);
+  conn.exec("CREATE INDEX IF NOT EXISTS idx_qa_jobs_pipeline ON qa_jobs(pipeline_id)");
+  addColumn(conn, "qa_runs", "session_id", "TEXT");
+  if ((conn.prepare("PRAGMA table_info(qa_sessions)").all() as Array<{ name: string }>).some((c) => c.name === "run_id")) {
+    conn.exec("UPDATE qa_runs SET session_id = (SELECT session_id FROM qa_sessions WHERE qa_sessions.run_id = qa_runs.id) WHERE session_id IS NULL");
+  }
+  conn.exec("DROP TABLE IF EXISTS qa_sessions");
+  conn.exec("DROP TABLE IF EXISTS qa_batches");
 }
 
 /**
