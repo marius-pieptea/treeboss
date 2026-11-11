@@ -425,10 +425,14 @@ export function startQaDriver(): void {
   unsubscribe = Hub.subscribe((e) => {
     if (e.type !== "turn_end" && !(e.type === "state" && e.status !== "running")) return;
     const job = jobOfSession(e.rootId);
-    if (!job) return;
     try {
-      settleJob(e.rootId);
-      tickProject(job.root);
+      if (job) {
+        settleJob(e.rootId);
+        tickProject(job.root);
+      } else if (e.type === "turn_end") {
+        // A Lab fix ending frees the fix lock a fix stage may be waiting on.
+        for (const r of db().prepare("SELECT root_dir FROM qa_pipelines WHERE json_extract(control, '$.kind') = 'running' AND json_extract(control, '$.stage') = 'fix'").all() as Array<{ root_dir: string }>) tickProject(r.root_dir);
+      }
     } catch (err) {
       console.warn(`[trb] QA driver failed: ${(err as Error).message}`);
     }
