@@ -1,10 +1,11 @@
-import { Bot, Check, ChevronsUpDown, FolderOpen, Globe, GitBranch, Monitor, Moon, Palette, PanelBottom, PanelLeft, PanelRight, Search, Smartphone, Sun } from "lucide-react";
+import { Bot, Check, ChevronsUpDown, Pencil, FolderOpen, Globe, GitBranch, Monitor, Moon, Palette, PanelBottom, PanelLeft, PanelRight, Search, Smartphone, Sun } from "lucide-react";
 import { useUi } from "@/lib/store";
 import { THEME_OPTIONS } from "@/lib/theme";
 import { glassSupported } from "@/lib/glass";
 import { useGitStatus, useWorkspaceActivity, useWorkspaces } from "@/lib/queries";
 import { useWorkspace } from "@/lib/workspace";
 import type { WorkspaceActivity } from "@/lib/types";
+import { useDraftCounts } from "@/lib/use-drafts";
 import { navigate } from "@/lib/nav";
 import { bus } from "@/lib/bus";
 import { formatCombo } from "@/lib/hooks";
@@ -16,24 +17,30 @@ import { Logo } from "./Logo";
 import { openBrowserTab } from "@/features/browser/discover";
 import { openEmulator } from "@/features/emulator/open";
 
-/** Running, finished-but-unseen and failed work in a workspace, shown next to its name in the switcher. */
-function ActivityChip({ a }: { a?: WorkspaceActivity }) {
-  if (!a) return null;
+/** Running, finished-but-unseen and failed work in a workspace, and its unsent messages, shown next to its name in the switcher. */
+function ActivityChip({ a, drafted = 0 }: { a?: WorkspaceActivity; drafted?: number }) {
+  if (!a && !drafted) return null;
   return (
     <span className="flex items-center gap-1.5 font-mono text-[10.5px]">
-      {a.running > 0 && (
+      {drafted > 0 && (
+        <span className="flex items-center gap-0.5 text-fg-muted" title={`${drafted} unsent message${drafted === 1 ? "" : "s"}`}>
+          <Pencil className="size-3" />
+          {drafted} drafted
+        </span>
+      )}
+      {a && a.running > 0 && (
         <span className="flex items-center gap-1 text-accent" title={`${a.running} running`}>
           <span className="size-1.5 rounded-full bg-accent animate-pulse-dot" />
           {a.running}
         </span>
       )}
-      {a.done > 0 && (
+      {a && a.done > 0 && (
         <span className="flex items-center gap-0.5 text-[var(--color-success)]" title="Finished since you were last here">
           <Check className="size-3" />
           {a.done} done
         </span>
       )}
-      {a.failed > 0 && <span className="text-red">{a.failed} failed</span>}
+      {a && a.failed > 0 && <span className="text-red">{a.failed} failed</span>}
     </span>
   );
 }
@@ -53,6 +60,7 @@ export function TitleBar({ runningHeads }: { runningHeads: number }) {
   const workspaces = useWorkspaces();
   const git = useGitStatus(root);
   const activity = useWorkspaceActivity().data ?? {};
+  const drafted = useDraftCounts();
   const elsewhere = Object.entries(activity).filter(([id]) => id !== workspace.id);
   const elsewhereRunning = elsewhere.reduce((n, [, a]) => n + a.running, 0);
   const elsewhereFailed = elsewhere.reduce((n, [, a]) => n + a.failed, 0);
@@ -68,7 +76,7 @@ export function TitleBar({ runningHeads }: { runningHeads: number }) {
 
       <DropdownMenu
         entries={[
-          ...(workspaces.data ?? []).map((w) => ({ label: w.name, checked: w.id === workspace.id, onSelect: () => navigate(`/w/${w.id}`), badge: <ActivityChip a={activity[w.id]} /> })),
+          ...(workspaces.data ?? []).map((w) => ({ label: w.name, checked: w.id === workspace.id, onSelect: () => navigate(`/w/${w.id}`), badge: <ActivityChip a={activity[w.id]} drafted={drafted[w.id]} /> })),
         ]}
         footer={[{ label: "Open another folder…", icon: <FolderOpen />, onSelect: () => navigate("/") }]}
         trigger={

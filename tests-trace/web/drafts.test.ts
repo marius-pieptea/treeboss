@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { MAX_DRAFTS, commitDraftKey, createDraftStore, draftKey, parseDrafts, withDraft, withoutSession } from "../../web/src/lib/drafts";
+import { MAX_DRAFTS, commitDraftKey, createDraftStore, draftCounts, draftKey, draftedSessions, parseDrafts, withDraft, withoutSession } from "../../web/src/lib/drafts";
 
 const mem = () => {
   const m = new Map<string, string>();
@@ -78,5 +78,47 @@ describe("createDraftStore", () => {
     a.set("k", "x");
     expect(a.get("k")).toBe("x");
     expect(a.get("other")).toBe("");
+  });
+});
+
+describe("where the drafts are", () => {
+  const d = (text = "x") => ({ text, at: 1 });
+  const all = {
+    [draftKey("w_a", "s_1")]: d(),
+    [draftKey("w_a", "s_2")]: d(),
+    [draftKey("w_a", null)]: d(),
+    [draftKey("w_b", "s_3")]: d(),
+    [commitDraftKey("w_a")]: d(),
+    [commitDraftKey("s_4")]: d(),
+    [draftKey(null, "s_5")]: d(),
+  };
+  test("each workspace counts its sessions' drafts and its new one, never commit messages", () => {
+    expect(draftCounts(all)).toEqual({ w_a: 3, w_b: 1 });
+  });
+  test("drafted sessions are the session ids with an agent draft, in any workspace", () => {
+    expect(draftedSessions(all)).toEqual(["s_1", "s_2", "s_3", "s_5"]);
+  });
+});
+
+describe("subscribing to the store", () => {
+  test("a change notifies, a no-op does not, and the snapshot changes only when a draft does", () => {
+    const a = createDraftStore(null);
+    let calls = 0;
+    const off = a.subscribe(() => calls++);
+    const before = a.all();
+    a.set("w_a:s_1", "hi");
+    expect(calls).toBe(1);
+    const after = a.all();
+    expect(after).not.toBe(before);
+    a.set("w_a:s_1", "hi");
+    a.set("w_a:s_9", "");
+    expect(calls).toBe(1);
+    expect(a.all()).toBe(after);
+    a.dropSession("s_1");
+    expect(calls).toBe(2);
+    expect(draftedSessions(a.all())).toEqual([]);
+    off();
+    a.set("w_a:s_1", "again");
+    expect(calls).toBe(2);
   });
 });

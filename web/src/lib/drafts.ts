@@ -38,6 +38,33 @@ export function withoutSession(drafts: Drafts, sid: string): Drafts {
   return Object.fromEntries(Object.entries(drafts).filter(([k]) => !k.endsWith(`:${sid}`)));
 }
 
+const isCommitKey = (key: string): boolean => key.startsWith("commit:");
+
+/**
+ * Per workspace id, how many unsent agent messages it holds: one per session with a draft, plus its "new" one.
+ * Commit messages are not counted (they live with the git panel, not with a session).
+ */
+export function draftCounts(drafts: Drafts): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const key of Object.keys(drafts)) {
+    if (isCommitKey(key)) continue;
+    const ws = key.slice(0, key.indexOf(":"));
+    if (ws.startsWith("w_")) out[ws] = (out[ws] ?? 0) + 1;
+  }
+  return out;
+}
+
+/** The session ids with an unsent agent message, in any workspace (a session id is unique on its own). The "new" drafts are not sessions. */
+export function draftedSessions(drafts: Drafts): string[] {
+  const out: string[] = [];
+  for (const key of Object.keys(drafts)) {
+    if (isCommitKey(key)) continue;
+    const sid = key.slice(key.indexOf(":") + 1);
+    if (sid && sid !== "new") out.push(sid);
+  }
+  return out.sort();
+}
+
 /** Whatever was stored, reduced to well-formed entries: a corrupt or foreign value reads as no drafts. */
 export function parseDrafts(raw: string | null | undefined): Drafts {
   if (!raw) return {};
@@ -69,11 +96,20 @@ export interface DraftStore {
   /** Forget a session's drafts everywhere (it was deleted). */
   dropSession(sid: string): void;
   flush(): void;
+  /** Every draft as it is now. The same object until a draft changes, so it can be a React snapshot. */
+  all(): Drafts;
+  /** Called after any draft changes (each keystroke too: derive something small from `all()` before re-rendering on it). */
+  subscribe(fn: () => void): () => void;
 }
 
 export function createDraftStore(store: Store | null = defaultStore(), now: () => number = Date.now): DraftStore {
   let drafts: Drafts | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  const listeners = new Set<() => void>();
+  const changed = () => {
+    schedule();
+    for (const fn of listeners) fn();
+  };
   const load = (): Drafts => (drafts ??= parseDrafts(safeRead(store)));
   const flush = () => {
     if (timer) clearTimeout(timer);
@@ -97,13 +133,18 @@ export function createDraftStore(store: Store | null = defaultStore(), now: () =
       if (!text.trim() && !cur[key]) return;
       if ((cur[key]?.text ?? "") === text) return;
       drafts = withDraft(cur, key, text, now());
-      schedule();
+      changed();
     },
     dropSession: (sid) => {
       drafts = withoutSession(load(), sid);
-      schedule();
+      changed();
     },
     flush,
+    all: load,
+    subscribe: (fn) => {
+      listeners.add(fn);
+      return () => void listeners.delete(fn);
+    },
   };
 }
 

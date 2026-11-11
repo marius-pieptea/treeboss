@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { api, post, url } from "@/lib/api";
 import { qk, useClosedCount, useClosedSessions, usePairs, usePinnedSessions, useSessions } from "@/lib/queries";
 import { useUi, useWs } from "@/lib/store";
+import { useDraftedSessions, useNewSessionDraft } from "@/lib/use-drafts";
 import type { PinnedSession, SessionView } from "@/lib/types";
 import { useWorkspace } from "@/lib/workspace";
 import { ago, cn, money } from "@/lib/utils";
@@ -35,7 +36,7 @@ function exportSession(id: string): void {
   a.remove();
 }
 
-function Row({ s, active, updated, heads, pairTitle, workspaceName, open, onAction }: { s: SessionView; active: boolean; updated?: string; heads?: { total: number; running: number }; pairTitle?: string; workspaceName?: string; open: () => void; onAction: (a: "interrupt" | "close" | "rename" | "delete" | "copy" | "pin") => void }) {
+function Row({ s, active, drafted, updated, heads, pairTitle, workspaceName, open, onAction }: { s: SessionView; active: boolean; drafted?: boolean; updated?: string; heads?: { total: number; running: number }; pairTitle?: string; workspaceName?: string; open: () => void; onAction: (a: "interrupt" | "close" | "rename" | "delete" | "copy" | "pin") => void }) {
   const entries: MenuEntry[] = [
     { label: "Open", onSelect: open },
     { label: s.pinned ? "Unpin" : "Pin to top", icon: s.pinned ? <PinOff /> : <Pin />, onSelect: () => onAction("pin") },
@@ -60,6 +61,7 @@ function Row({ s, active, updated, heads, pairTitle, workspaceName, open, onActi
         <div className="flex items-center gap-2">
           <StatusDot status={s.status} />
           <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">{s.title}</span>
+          {drafted && <DraftBadge />}
           <span className="shrink-0 font-mono text-[10px] text-fg-faint">{s.status === "running" ? "now" : ago(updated)}</span>
         </div>
         <div className="flex items-center gap-1.5 pl-[15px]">
@@ -109,6 +111,32 @@ function Row({ s, active, updated, heads, pairTitle, workspaceName, open, onActi
   );
 }
 
+/** The session has a message typed but not sent. */
+function DraftBadge() {
+  return (
+    <Badge tone="neutral" title="Unsent message in the composer">
+      <Pencil className="size-2.5" />
+      draft
+    </Badge>
+  );
+}
+
+/** The workspace's not-yet-started session has a message typed: a row for it, so it is not forgotten. */
+function NewSessionDraftRow({ active }: { active: boolean }) {
+  return (
+    <button
+      onClick={startNewSession}
+      aria-current={active}
+      className={cn("relative mb-1 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left outline-none transition-colors", active ? "bg-active" : "hover:bg-hover focus-visible:bg-hover")}
+    >
+      {active && <span className="absolute inset-y-2 left-0 w-[2px] rounded-r bg-accent" />}
+      <MessageSquarePlus className="size-3.5 shrink-0 text-fg-faint" />
+      <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-fg-muted">New session</span>
+      <DraftBadge />
+    </button>
+  );
+}
+
 const NO_PINS: PinnedSession[] = [];
 
 export function SessionsSidebar() {
@@ -121,6 +149,8 @@ export function SessionsSidebar() {
   const pinnedList = pinned.data ?? NO_PINS;
   const pinnedById = useMemo(() => new Map(pinnedList.map((p) => [p.id, p])), [pinnedList]);
   const pairs = usePairs();
+  const drafted = useDraftedSessions();
+  const newDraft = useNewSessionDraft(workspace.id);
   const [query, setQuery] = useState("");
   const [closedOpen, setClosedOpen] = useState(false);
   const [needle, setNeedle] = useState("");
@@ -166,6 +196,7 @@ export function SessionsSidebar() {
         key={s.id}
         s={s}
         active={ws.activeSession === s.id}
+        drafted={drafted.has(s.id)}
         updated={s.updated_at}
         heads={heads[s.id]}
         pairTitle={pairTitle(s.pair)}
@@ -266,6 +297,7 @@ export function SessionsSidebar() {
           )
         ) : (
           <>
+            {newDraft && !query && <NewSessionDraftRow active={ws.activeSession === null} />}
             {groups.map((g) => (
               <Section key={g.key} title={g.label} count={g.items.length}>
                 <div className="flex flex-col gap-0.5">{g.items.map(rowFor)}</div>
