@@ -33,6 +33,8 @@ export interface BusEvents {
   "findings-open": void;
   "bugs-open": void;
   "checklists-open": void;
+  /** The QA view picks up the intent features/qa/open.ts left for it. */
+  "qa-open": void;
   /** A tab with unsaved edits was closed on purpose: the editor should drop its buffer. */
   "tab-discard": { id: string };
   /** A queued message left the queue and is on its way (features/agent/queue-store.ts): the thread shows it at once. */

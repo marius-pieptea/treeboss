@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowLeft, ArrowRight, Bug, ClipboardCheck, Copy, ExternalLink, Globe, Laptop, Maximize2, Monitor, MousePointerClick, Play, RotateCw, RotateCcw, Smartphone, Tablet, TerminalSquare, ZoomIn, ZoomOut, Zap } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, Bug, Copy, ExternalLink, Globe, Laptop, Maximize2, Monitor, MousePointerClick, Play, RotateCw, RotateCcw, Smartphone, Tablet, TerminalSquare, ZoomIn, ZoomOut, Zap } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useUi, useWs, type Tab } from "@/lib/store";
@@ -9,10 +9,9 @@ import { cn } from "@/lib/utils";
 import { Button, IconButton } from "@/components/ui/button";
 import { Input } from "@/components/ui/form";
 import { DropdownMenu } from "@/components/ui/overlay";
-import { PaneSplitter, usePaneWidth } from "@/components/ui/splitter";
 import { Empty } from "@/components/ui/misc";
 import { freshPorts, usePorts, previewUrl } from "../terminal/usePorts";
-import { DEVICES, clampZoom, computeFrame, defaultResponsiveWidth, followFrame, isLocationMessage, isStepMessage, normalizeUrl, pushStep, qaDock, resolvePath, stepLines, stepsSince, type BugPrefill, type TimedStep, reachability, titleFor, userFacingUrl, MIN_RESPONSIVE_W } from "./logic";
+import { DEVICES, clampZoom, computeFrame, defaultResponsiveWidth, followFrame, isLocationMessage, isStepMessage, normalizeUrl, pushStep, stepLines, type BugPrefill, type TimedStep, reachability, titleFor, userFacingUrl, MIN_RESPONSIVE_W } from "./logic";
 import { useBrowserPrefs } from "./prefs";
 import { AgentBrowser } from "./AgentBrowser";
 import { ModeSwitch } from "./ModeSwitch";
@@ -20,7 +19,6 @@ import { takeShot, type Shot } from "./capture";
 import { LogBugDialog } from "./LogBugDialog";
 import { isAgentUrl } from "./agent-logic";
 import { RunPanel } from "../run/RunPanel";
-import { QaPanel } from "../qa/QaPanel";
 import { clearIssues, insertIntoComposer, openProxy, sendPick, useIssues, useRunInfo } from "../run/data";
 import { errorCount, formatIssuesForComposer, isPickMessage, loopbackPort, previewTarget, proxiedUrl, runRoot } from "../run/logic";
 // Registers the palette commands and the "an agent is using the browser" nudge as soon as the app loads.
@@ -51,7 +49,6 @@ function PreviewBrowser({ tab }: { tab: Extract<Tab, { kind: "browser" }> }) {
   const qc = useQueryClient();
 
   const [paneRef, pane] = useElementSize<HTMLDivElement>();
-  const [wrapRef, wrap] = useElementSize<HTMLDivElement>();
   const [hist, setHist] = useState<{ stack: string[]; i: number }>(() => {
     const first = tab.url ? normalizeUrl(tab.url, ui) : null;
     return first?.ok ? { stack: [first.url], i: 0 } : { stack: [], i: -1 };
@@ -88,9 +85,7 @@ function PreviewBrowser({ tab }: { tab: Extract<Tab, { kind: "browser" }> }) {
   );
 
   // Run panel and Inspect mode (the proxy that adds element picking and console capture).
-  const { inspect, runOpen, qaOpen } = useBrowserPrefs();
-  const qaWidth = usePaneWidth("browser.qa", 320);
-  const dock = qaDock(wrap.width);
+  const { inspect, runOpen } = useBrowserPrefs();
   const ws = useWs();
   const runRef = runRoot(ws.activeSession, workspace.id);
   const runInfo = useRunInfo(runRef);
@@ -241,10 +236,6 @@ function PreviewBrowser({ tab }: { tab: Extract<Tab, { kind: "browser" }> }) {
       if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.code === "KeyB") {
         e.preventDefault();
         void logBugRef.current();
-      } else if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.code === "KeyQ") {
-        e.preventDefault();
-        const p = useBrowserPrefs.getState();
-        p.set({ qaOpen: !p.qaOpen });
       }
     };
     window.addEventListener("keydown", on);
@@ -331,9 +322,6 @@ function PreviewBrowser({ tab }: { tab: Extract<Tab, { kind: "browser" }> }) {
         <IconButton label="Log bug: save this page, its console and the server log as a finding" shortcut="Alt+B" size="icon-sm" disabled={!canLogBug} onClick={() => void logBug()}>
           <Bug />
         </IconButton>
-        <IconButton label="QA panel: run a test plan against this page" shortcut="Alt+Q" size="icon-sm" onClick={() => setPrefs({ qaOpen: !qaOpen })} className={cn(qaOpen && "bg-active text-fg")}>
-          <ClipboardCheck />
-        </IconButton>
         {inspecting && (
           <>
             <Button variant={picking ? "primary" : "outline"} size="sm" className="h-7 gap-1 px-2 text-xs" disabled={!frameSrc || phase !== "loaded"} onClick={togglePick}>
@@ -411,7 +399,6 @@ function PreviewBrowser({ tab }: { tab: Extract<Tab, { kind: "browser" }> }) {
         </div>
       )}
 
-      <div ref={wrapRef} className={cn("flex min-h-0 flex-1", dock === "strip" ? "flex-col" : "flex-row")}>
       <div ref={paneRef} className="relative min-h-0 min-w-0 flex-1 overflow-auto bg-[radial-gradient(circle,var(--line)_1px,transparent_1px)] [background-size:16px_16px]">
         {!current && phase === "idle" && (
           <Empty
@@ -498,26 +485,6 @@ function PreviewBrowser({ tab }: { tab: Extract<Tab, { kind: "browser" }> }) {
             </div>
           </div>
         )}
-      </div>
-      {qaOpen && (
-        <>
-          {dock === "side" && <PaneSplitter paneKey="browser.qa" fallback={320} min={280} max={440} invert />}
-          <div className={cn("shrink-0 overflow-hidden bg-panel", dock === "strip" && "h-[280px] border-t border-line")} style={dock === "side" ? { width: qaWidth } : undefined}>
-            <QaPanel
-              root={root}
-              currentUrl={current}
-              onNavigate={(path) => {
-                const url = resolvePath(path, current ?? devTarget?.url ?? null);
-                if (url) navigate(url);
-                else toast.error("Open the page first, then follow the path.");
-              }}
-              onFail={(draft, done) => void logBug({ title: draft.title, kind: draft.kind, steps: draft.steps, expected: draft.expected, actual: draft.actual }, done)}
-              recordedSince={(t) => stepsSince(stepsRef.current, t)}
-              compact={dock === "strip"}
-            />
-          </div>
-        </>
-      )}
       </div>
       <LogBugDialog open={!!bug} onOpenChange={(o) => !o && setBug(null)} root={root} url={bug?.url ?? current ?? ""} port={bug?.port ?? null} shot={bug?.shot ?? null} steps={bug?.steps ?? []} prefill={bug?.prefill} onLogged={(id) => bug?.done?.(id)} />
       {runOpen && (

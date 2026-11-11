@@ -1,16 +1,20 @@
-import { QaView } from "./QaView";
-import { selectPlanOnOpen } from "./intent";
-import { openBugs } from "@/features/lab/open";
-import { openBrowserTab } from "@/features/browser/discover";
-import { useBrowserPrefs } from "@/features/browser/prefs";
+import { useCallback, useEffect, useState } from "react";
+import { bus } from "@/lib/bus";
 import { useWorkspace } from "@/lib/workspace";
+import { QaBoardView } from "./QaBoardView";
+import { takeQaIntent, type QaIntent } from "./open";
 
 export function QaTab() {
   const { root } = useWorkspace();
-  const runInBrowser = (slug: string) => {
-    selectPlanOnOpen(slug);
-    useBrowserPrefs.getState().set({ qaOpen: true });
-    openBrowserTab();
-  };
-  return <QaView root={root} onOpenBug={(finding) => openBugs({ finding })} onRunInBrowser={runInBrowser} />;
+  const [intent, setIntent] = useState<QaIntent | null>(null);
+  useEffect(() => {
+    const take = () => {
+      const i = takeQaIntent();
+      if (i) setIntent(i);
+    };
+    take();
+    return bus.on("qa-open", take);
+  }, []);
+  const done = useCallback(() => setIntent(null), []);
+  return <QaBoardView root={root} intent={intent} onIntentDone={done} />;
 }
