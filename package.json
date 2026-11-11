@@ -1,6 +1,6 @@
 {
   "name": "treeboss",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "An agent harness and software factory: drive claude, codex, cursor and friends from one daemon, with Hydra pairs, live subagents, MCPs and skills, autopilot builds, PRs, deploys, Expo releases and signals back into the roadmap.",
   "license": "PolyForm-Shield-1.0.0",
   "type": "module",

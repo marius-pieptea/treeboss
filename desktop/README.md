@@ -14,7 +14,7 @@ bun install                 # once
 
 bun run dist:mac            # dist/TreeBoss-<ver>-mac-arm64.dmg and -mac-x64.dmg
 bun run dist:win            # dist/TreeBoss-Setup-<ver>.exe
-bun run dist                # both
+bun run dist                # all platforms
 
 bun run stage               # only compile the daemon + web UI for this machine (into stage/)
 bun start                   # run the shell against stage/ without packaging
@@ -40,3 +40,15 @@ cross-compiles, so one Mac produces every target.
 - The Windows installer's integration page (folder and file "Open with TreeBoss", editor registration, PATH) lives in `build/installer.nsh`. It is wired through `nsis.include`. A build fails on NSIS warnings, so an unused variable breaks it.
 - Icons: `build/icon.icns` (macOS) and `build/icon.ico` (Windows, 16–256 px, PNG entries) are picked up by electron-builder.
 - Output (`stage/`, `dist/`) is gitignored.
+
+## Updates
+
+Packaged builds check GitHub Releases (`updater.cjs`, `electron-updater`) 15 s after launch and every 6 h. Windows
+and the Linux AppImage download and install the update (restart prompt). macOS and the Linux tar.gz only show a
+"new version available" prompt linking to the release page, because macOS self-update needs a signed app; set
+`MAC_SIGNED` in `updater.cjs` once signed. Set `TRB_NO_UPDATE=1` to turn it off.
+
+To release: bump `version` in `package.json` and `desktop/package.json`, tag `vX.Y.Z` and push the tag. The
+`release.yml` workflow builds all three platforms and attaches installers plus `latest*.yml` to the GitHub release
+(the feed files must be there, or installed apps find no update). The first build with the updater has to be installed
+by hand; later ones arrive on their own.

@@ -4,6 +4,7 @@ const { execFileSync, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { startUpdater } = require("./updater.cjs");
 
 const win32 = process.platform === "win32";
 const target = `${win32 ? "windows" : process.platform}-${process.arch}`;
@@ -191,6 +192,7 @@ app.whenReady().then(async () => {
   );
   try {
     await openWindow({ fresh: true, dir: folderFrom(pathArgs(process.argv), process.cwd()) });
+    startUpdater(() => win);
   } catch (err) {
     dialog.showErrorBox("TreeBoss could not start", String(err && err.message ? err.message : err));
     app.quit();

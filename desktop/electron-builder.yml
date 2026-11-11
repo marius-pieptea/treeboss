@@ -1,10 +1,16 @@
 appId: com.devotomy.treeboss
 productName: TreeBoss
+# Updates come from GitHub Releases; electron-builder writes latest*.yml beside the installers.
+publish:
+  provider: github
+  owner: marius-pieptea
+  repo: treeboss
 directories:
   output: dist
 files:
   - main.cjs
   - preload.cjs
+  - updater.cjs
   - package.json
 # Per-platform payload: the compiled daemon for that OS/arch, plus the built web UI.
 extraResources:
@@ -12,8 +18,11 @@ extraResources:
     to: web
 mac:
   category: public.app-category.developer-tools
-  target: dmg
-  identity: null          # unsigned for now
+  # The zip is what the mac updater downloads (the dmg is for first installs).
+  target:
+    - dmg
+    - zip
+  identity: null          # unsigned for now; set MAC_SIGNED in updater.cjs once signed
   extraResources:
     - from: stage/bin/darwin-${arch}
       to: bin
