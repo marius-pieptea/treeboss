@@ -3,7 +3,8 @@ import { execFileSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import { findChrome } from "../src/browser/chrome";
-import { db } from "../src/db";
+import { Database } from "bun:sqlite";
+import { db, migrate } from "../src/db";
 import type { RunTurnOptions, TurnResult } from "../src/engines/runner";
 import { HydraPairs } from "../src/hydra/pairs";
 import { createBugFinding, patchFinding, readFinding } from "../src/lab/findings";
@@ -618,5 +619,24 @@ describe("the board", () => {
     await until(ended);
     const jobs: Job[] = [];
     expect(jobs).toEqual([]);
+  });
+});
+
+describe("the database migration", () => {
+  test("an old database gains the pipeline tables and the run's session, and loses qa_sessions and qa_batches, idempotently", () => {
+    const conn = new Database(":memory:");
+    conn.exec(`CREATE TABLE qa_runs (id TEXT PRIMARY KEY, root_dir TEXT NOT NULL, plan TEXT NOT NULL, started_at INTEGER NOT NULL, steps TEXT NOT NULL)`);
+    conn.exec(`CREATE TABLE qa_sessions (session_id TEXT PRIMARY KEY, root_dir TEXT NOT NULL, plan TEXT NOT NULL, kind TEXT NOT NULL, problem TEXT, run_id TEXT, batch_id TEXT)`);
+    conn.exec(`CREATE TABLE qa_batches (id TEXT PRIMARY KEY, root_dir TEXT NOT NULL)`);
+    conn.exec("INSERT INTO qa_runs VALUES ('qa_1', '/r', 'cart', 1, '[]'), ('qa_2', '/r', 'cart', 2, '[]')");
+    conn.exec("INSERT INTO qa_sessions VALUES ('s_walker', '/r', 'cart', 'run', NULL, 'qa_1', NULL), ('s_map', '/r', '@features', 'map', NULL, NULL, NULL)");
+    migrate(conn);
+    migrate(conn);
+    const tables = (conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map((t) => t.name);
+    expect(tables).toEqual(expect.arrayContaining(["qa_runs", "qa_pipelines", "qa_jobs"]));
+    expect(tables).not.toContain("qa_sessions");
+    expect(tables).not.toContain("qa_batches");
+    expect(conn.prepare("SELECT id, session_id FROM qa_runs ORDER BY id").all()).toEqual([{ id: "qa_1", session_id: "s_walker" }, { id: "qa_2", session_id: null }]);
+    conn.close();
   });
 });
