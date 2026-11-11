@@ -16,7 +16,7 @@ import { startServer, VERSION } from "./server";
 import { setDaemonContext } from "../sessions/context";
 import { interruptAll, recoverOnStartup, startReaper, stopReaper } from "../sessions/manager";
 import { startSweepDriver, stopSweepDriver } from "../lab/sweeps";
-import { startQaDriver, stopQaDriver } from "../qa/sessions";
+import { startQaDriver, stopQaDriver } from "../qa/jobs";
 import { startAutopilot, stopAutopilot } from "../autopilot/runner";
 import { startScheduler, stopScheduler } from "../autopilot/schedule";
 import { startMobilePoller } from "../mobile/store";
