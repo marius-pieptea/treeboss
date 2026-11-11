@@ -2,7 +2,6 @@ import type { BoardBug } from "./api";
 import { BugCard } from "./BugCard";
 import { LABEL } from "./Status";
 
-/** Bugs no feature claims, by hand or by URL. A feature can be picked for each. */
 export function UnsortedBugs({
   root,
   bugs,

@@ -4,12 +4,10 @@ import type { Cell, Tone } from "./logic";
 
 const COLOR: Record<Tone, string> = { run: "var(--accent)", ok: "var(--green)", warn: "var(--amber)", bad: "var(--red)", idle: "var(--fg-faint)" };
 
-/** A 7px status light; a running one pulses. It names its state in its label and title, and sits next to a word. */
 export function Dot({ tone, label, className }: { tone: Tone; label: string; className?: string }) {
   return <span role="img" aria-label={label} title={label} style={{ background: COLOR[tone], ["--pulse" as string]: COLOR[tone] }} className={cn("inline-block size-[7px] shrink-0 rounded-full", tone === "run" && "animate-pulse-dot", className)} />;
 }
 
-/** A dot, its word, a mono count, and a violet mark when a Hydra pair is on it. */
 export function CellView({ cell, className }: { cell: Cell; className?: string }) {
   return (
     <span title={cell.title} className={cn("inline-flex min-w-0 items-center gap-2 text-xs", className)}>
@@ -21,5 +19,4 @@ export function CellView({ cell, className }: { cell: Cell; className?: string }
   );
 }
 
-/** The small uppercase label above or beside a control. */
 export const LABEL = "text-label font-medium uppercase tracking-label text-fg-muted";

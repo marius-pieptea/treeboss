@@ -32,7 +32,6 @@ interface Row {
   created_at: string;
 }
 
-/** A sweep queues module scopes for a lens. */
 export type SweepKind = "run";
 
 export interface SweepView {

@@ -194,7 +194,7 @@ export interface ErrorBody {
   error: string;
 }
 
-// PATCH /api/lab/:root/findings/:id   body (all optional; confirmed is gone and now a 400 "Unknown field confirmed.")
+// PATCH /api/lab/:root/findings/:id body, all fields optional.
 export interface FindingPatchBody {
   status?: "new" | "accepted" | "dismissed" | "shipped";
   impact?: "high" | "medium" | "low";
@@ -202,7 +202,6 @@ export interface FindingPatchBody {
   feature?: string | null;
 }
 
-// ---- end of the wire copy ----
 
 const base = (root: string) => `/api/qa/${root}`;
 

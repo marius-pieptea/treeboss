@@ -303,7 +303,7 @@ export const useUi = create<UiState>()(
       version: 4,
       // v2: the Checklists factory page moved to the Lab. A saved factory tab on it lands on Portfolio instead of a page that is gone.
       // v3: the Lab tab was split into Findings, Bugs and Checklists. A saved Lab tab opens as Findings.
-      // v4: the Bugs view became part of QA. A saved Bugs tab opens as the QA tab.
+      // v4: a saved Bugs tab opens as the QA tab.
       migrate: (persisted) => {
         const s = persisted as { byWs?: Record<string, Partial<WsState>> } | null;
         if (!s?.byWs) return persisted as UiState;

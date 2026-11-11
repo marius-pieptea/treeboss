@@ -1,7 +1,5 @@
 /**
- * What each QA job is told. Pure: text in, text out. The blocks that every stage shares are written once here, and the
- * five skeletons (map, plan, test, fix, and the lead's part of a Hydra pair) are built from them
- * (docs/design/qa-pipeline.md §8).
+ * What each QA job is told. Pure: text in, text out (docs/design/qa-pipeline.md §8).
  */
 import type { Batching, BugId, Driver, Feature, FeatureId, Launch, Plan, Run, Stage } from "./types";
 
@@ -9,7 +7,6 @@ export interface PromptInputs {
   launch: Launch;
   batching: Batching;
   driver: Driver;
-  /** Set only when the job is a pair lead. */
   pairCap: number | null;
   note: string;
   baseUrl: string | null;
@@ -24,10 +21,6 @@ export const qaLabel = (stage: Stage): string => `QA · ${stage}`;
 
 const FEATURES_FILE = "lab/features.md";
 const planFile = (id: string): string => `lab/qa/${id}.md`;
-
-/* -------------------------------------------------------------------------- */
-/* Blocks                                                                     */
-/* -------------------------------------------------------------------------- */
 
 const APP = (baseUrl: string | null): string =>
   baseUrl
@@ -61,10 +54,6 @@ Rules: keep the [s-…] id of every step you keep, unchanged. Write new steps WI
 \`path:\` starts with / and is left out when no page applies. \`expect:\` is concrete (a text, a number, a state), never
 "works". No other text after ## Steps.`;
 
-/* -------------------------------------------------------------------------- */
-/* Shapes                                                                     */
-/* -------------------------------------------------------------------------- */
-
 const titleOf = (i: PromptInputs, id: string): string => i.features.find((f) => f.id === id)?.title ?? id;
 
 function featureBlock(i: PromptInputs, id: FeatureId): string {
@@ -86,10 +75,6 @@ function stepList(run: Run): string {
 const HOW_TO_RECORD = `How to record: pass (say what you saw in note); fail (bug_log first, or take the id of an open bug that is the same problem, then qa_record with state fail, actual and bug); blocked (note says what blocks it); skip (note says why).`;
 
 const pairText = (cap: number, body: string): string => `\nYou lead a Hydra pair. ${body.replaceAll("{cap}", String(cap))}\n`;
-
-/* -------------------------------------------------------------------------- */
-/* Skeletons                                                                  */
-/* -------------------------------------------------------------------------- */
 
 function mapPrompt(i: PromptInputs): string {
   const agent = `Map the user-facing features of this product into \`${FEATURES_FILE}\`, so a test flow can be written and run per feature.
@@ -211,10 +196,6 @@ your turn while a head is open or unmerged. Do not commit.`,
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Entry                                                                      */
-/* -------------------------------------------------------------------------- */
-
 const VISIBLE: Record<Stage, string> = {
   map: "Map the product's features.",
   plan: "Write the test flows.",
@@ -222,7 +203,6 @@ const VISIBLE: Record<Stage, string> = {
   fix: "Fix the bugs.",
 };
 
-/** The text of one job: what the thread shows, its title, and the instructions the agent follows. */
 export function jobPrompt(i: PromptInputs): { visible: string; title: string; instructions: string } {
   const l = i.launch;
   let instructions: string;

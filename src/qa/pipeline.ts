@@ -1,7 +1,6 @@
 /**
  * The QA pipeline's pure core: every scheduling rule lives here and nothing here touches the database, the disk or the
- * session manager. jobs.ts builds a Snapshot, asks `reconcile` what to do, and does it. A decision is derived from the
- * snapshot alone, so running it twice (a racing turn end, a restart) converges to the same end state.
+ * session manager. A decision is derived from the snapshot alone, so running it twice converges to the same end state.
  */
 import { UserError } from "../util";
 import {
@@ -36,10 +35,6 @@ export const PAIR_HEAD_CAP = 6;
 const MAX_NOTE = 4000;
 
 const WAIT: Decision = { kind: "wait" };
-
-/* -------------------------------------------------------------------------- */
-/* featureForUrl                                                              */
-/* -------------------------------------------------------------------------- */
 
 const trimSlash = (p: string): string => (p.length > 1 ? p.replace(/\/+$/, "") || "/" : p);
 
@@ -76,10 +71,6 @@ export function bugFeature(stored: string | null | undefined, url: string, featu
   const byUrl = featureForUrl(features, url);
   return byUrl ? { feature: byUrl, source: "url" } : { feature: null, source: null };
 }
-
-/* -------------------------------------------------------------------------- */
-/* Units                                                                      */
-/* -------------------------------------------------------------------------- */
 
 const present = (c: PipelineConfig): Stage[] => STAGES.filter((s) => c.stages[s] !== undefined);
 
@@ -130,13 +121,9 @@ export function unitsFor(stage: Stage, c: PipelineConfig, s: Snapshot): Unit[] {
   }
 }
 
-/* -------------------------------------------------------------------------- */
-/* reconcile                                                                  */
-/* -------------------------------------------------------------------------- */
-
 const launchOf = (stage: Stage, units: Unit[]): Launch => ({ stage, units }) as unknown as Launch;
 
-/** What to do now. The first rule that applies wins (docs/design/qa-pipeline.md §5). */
+/** The first rule that applies wins (docs/design/qa-pipeline.md §5). */
 export function reconcile(p: Pipeline, s: Snapshot, now: number): Decision {
   const c = p.control;
   switch (c.kind) {
@@ -173,10 +160,6 @@ function running(p: Pipeline, st: Stage, s: Snapshot, now: number): Decision {
   const launches = left.slice(0, room).map((u) => launchOf(st, [u]));
   return { kind: "launch", launches: launches as unknown as NonEmpty<Launch> };
 }
-
-/* -------------------------------------------------------------------------- */
-/* Views                                                                      */
-/* -------------------------------------------------------------------------- */
 
 const settled = (j: Job): boolean => j.settledAt !== null;
 
@@ -227,7 +210,6 @@ export function jobViewOf(j: Job, pair = false): PipelineView["jobs"][number] {
 
 const isActive = (j: Job): boolean => j.settledAt === null && j.session !== null;
 
-/** What one unit ("map", a feature or a bug) is doing in one stage. */
 export function activityOf(stage: Stage, unit: Unit, p: Pipeline | null, jobs: readonly Job[], leadIsPair: (session: string) => boolean): Activity {
   const covering = jobs.filter((j) => j.stage === stage && (j.units as readonly Unit[]).includes(unit));
   const live = covering.find(isActive);
@@ -246,10 +228,6 @@ export function mergeActivity(parts: readonly Activity[]): Activity {
   }
   return { kind: "idle" };
 }
-
-/* -------------------------------------------------------------------------- */
-/* parseConfig: the boundary                                                  */
-/* -------------------------------------------------------------------------- */
 
 const obj = (v: unknown): Record<string, unknown> => (v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 const text = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);

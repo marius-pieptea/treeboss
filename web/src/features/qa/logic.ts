@@ -1,7 +1,3 @@
-/**
- * Pure logic of the QA board: which feature a URL belongs to, the request each button sends, and what each cell,
- * chip and line says. No React and no fetching, so it is all unit-tested.
- */
 import { STAGES } from "./api";
 import type { Activity, BoardBug, BoardFeature, Batching, BugState, Driver, JobView, Outcome, OutcomeState, Pace, PipelineRequest, PipelineView, QaBoard, Scope, Stage, StageSettings } from "./api";
 
@@ -75,19 +71,16 @@ function settings(stages: readonly Stage[], batching: (s: "plan" | "test" | "fix
   return out;
 }
 
-/** What every request carries besides its stages, scope, pace and driver. */
 function extras(form: RunForm): Pick<PipelineRequest, "note" | "baseUrl"> {
   const note = form.note.trim().slice(0, NOTE_MAX);
   const baseUrl = form.baseUrl.trim();
   return { ...(note ? { note } : {}), ...(baseUrl ? { baseUrl } : {}) };
 }
 
-/** The Run button: the stages the form chose, over `scope`. */
 export function pipelineRequest(form: RunForm, scope: Scope, driver: Driver): PipelineRequest {
   return { stages: settings(form.stages, (s) => form.batching[s], form.replan), scope, pace: form.pace, driver: driverBody(driver), ...extras(form) };
 }
 
-/** A button on one feature's row or pane: one stage for that feature, or the form's stages for it. */
 export function rowRequest(action: "plan" | "test" | "fix" | "stages", featureId: string, form: RunForm, driver: Driver): PipelineRequest {
   const scope: Scope = { kind: "features", ids: [featureId] };
   if (action === "stages") return pipelineRequest(form, scope, driver);
@@ -96,7 +89,6 @@ export function rowRequest(action: "plan" | "test" | "fix" | "stages", featureId
   return { stages, scope, pace: "auto", driver: driverBody(driver), ...extras(form) };
 }
 
-/** Fix on one bug's card. */
 export const bugFixRequest = (bugId: string, driver: Driver): PipelineRequest => ({ stages: { fix: { batching: "each" } }, scope: { kind: "bugs", ids: [bugId] }, pace: "auto", driver: driverBody(driver) });
 
 /** All of the features, or the picked ones in the order the map lists them. */
@@ -107,7 +99,6 @@ export const scopeOf = (picked: readonly string[], features: readonly { id: stri
 
 export const scopeLabel = (scope: Scope, total: number): string => (total === 0 ? "No features yet" : scope.kind === "all" ? `All ${total} ${total === 1 ? "feature" : "features"}` : `${scope.ids.length} of ${total} picked`);
 
-/** Why Run cannot start now, in words; null when it can. */
 export function runBlock(i: { stages: readonly Stage[]; browser: boolean; featureCount: number; driverMissing: boolean }): string | null {
   if (i.stages.length === 0) return "Pick at least one stage.";
   if (!i.browser && i.stages.some((s) => s !== "fix")) return "The agent browser is off. Run `trb config set agent_browser on`.";
@@ -134,13 +125,11 @@ export type RunPhase = "idle" | "running" | "stopping" | "held" | "ended";
 
 export const phaseOf = (p: PipelineView | null): RunPhase => (p ? p.control.kind : "idle");
 
-/** A pipeline in flight blocks a new one; the form is editable otherwise. */
 export const isBusy = (phase: RunPhase): boolean => phase === "running" || phase === "stopping" || phase === "held";
 
 /** What the one primary button is: Run when idle, Continue when held, none while running. */
 export const primaryOf = (phase: RunPhase): "run" | "continue" | null => (phase === "held" ? "continue" : phase === "running" || phase === "stopping" ? null : "run");
 
-/** The pipeline in one line for the run bar. */
 export function statusLine(p: PipelineView): string {
   const c = p.control;
   switch (c.kind) {
@@ -160,7 +149,6 @@ export function statusLine(p: PipelineView): string {
 
 export type Tone = "run" | "ok" | "warn" | "bad" | "idle";
 
-/** A dot, a word and an optional mono count: what a cell of the grid says. */
 export interface Cell {
   tone: Tone;
   word: string;
@@ -259,7 +247,6 @@ export function since(at: number, now: number): string {
   return `${Math.floor(s / 86_400)}d ago`;
 }
 
-/** The picked ids that are still in the map. */
 export const prunePicked = (picked: readonly string[], features: readonly { id: string }[]): string[] => picked.filter((id) => features.some((f) => f.id === id));
 
 /** The bug a notification points at, wherever the board shows it: its feature, or null for the unsorted list. */

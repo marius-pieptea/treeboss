@@ -12,7 +12,6 @@ import type { RowAction } from "./FeatureRow";
 import { countsLine, isOpenBug, outcomeText, planCell, since, stepCell, testCell } from "./logic";
 import { CellView, LABEL } from "./Status";
 
-/** One feature: what it covers, its plan, its test runs and its bugs, with the buttons that run each stage for it alone. */
 export function FeatureDetailPane({
   root,
   feature,

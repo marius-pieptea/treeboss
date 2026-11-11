@@ -91,7 +91,6 @@ t("bug_log in a test job files the bug under the job's feature with the page's s
   expect(forced.text).toMatch(/^Logged /);
   expect(listFindings(dir).filter((x) => x.lens === "bug")).toHaveLength(2);
 
-  // A session that works for no job cannot log.
   expect((await executeQaTool("bug_log", { title: "x", steps: [], actual: "y" }, "s_nobody")).text).toContain("is for QA map, plan and test jobs");
 }, 60_000);
 

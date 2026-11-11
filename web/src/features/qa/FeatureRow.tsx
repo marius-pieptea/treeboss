@@ -9,10 +9,8 @@ import { CellView } from "./Status";
 
 export type RowAction = "plan" | "test" | "fix" | "stages";
 
-/** The columns the header and every row share, so the cells line up. */
 export const COLS = { plan: "w-28 shrink-0", test: "w-32 shrink-0", bugs: "w-24 shrink-0" } as const;
 
-/** One feature: 28px, a checkbox to pick it for a run, its plan, its last test and its bugs. Its actions are in the menu and in its pane. */
 export function FeatureRow({ f, selected, picked, busy, onOpen, onPick, onAction }: { f: BoardFeature; selected: boolean; picked: boolean; busy: boolean; onOpen: () => void; onPick: (on: boolean) => void; onAction: (a: RowAction) => void }) {
   const openBugs = f.bugs.filter(isOpenBug).length;
   const why = busy ? "A pipeline is running" : undefined;

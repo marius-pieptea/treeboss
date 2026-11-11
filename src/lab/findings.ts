@@ -62,7 +62,6 @@ export interface BugInfo {
   capture: string | null;
   shot: ShotKind;
   kind: BugKind;
-  /** Set on a bug a QA agent logged (`found_by: agent`). */
   by?: "agent";
   /** The feature id (lab/features.md) the bug is filed under, when one was set. The QA view falls back to the page's URL. */
   feature: string | null;
@@ -359,7 +358,7 @@ export function patchFinding(rootDir: string, id: string, patch: FindingPatch): 
   if (patch.status !== undefined && !(STATUSES as readonly string[]).includes(patch.status)) throw new UserError(`Status must be one of ${STATUSES.join(", ")}.`);
   if (patch.impact !== undefined && !(IMPACTS as readonly string[]).includes(patch.impact)) throw new UserError(`Impact must be one of ${IMPACTS.join(", ")}.`);
   if (patch.effort !== undefined && !(EFFORTS as readonly string[]).includes(patch.effort)) throw new UserError(`Effort must be one of ${EFFORTS.join(", ")}.`);
-  // A `confirmed:` line from before bugs needed no confirmation is dropped by the first write.
+  // Drops the `confirmed:` line older versions wrote.
   let text = setKey(fs.readFileSync(abs, "utf8"), "confirmed", undefined);
   for (const [k, v] of Object.entries(patch)) if (v !== undefined) text = setKey(text, k, v === null ? undefined : v);
   writeText(abs, text);

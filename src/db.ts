@@ -325,7 +325,7 @@ export function migrate(conn: Database): void {
   conn.exec("CREATE INDEX IF NOT EXISTS idx_turn_groups_session ON turn_groups(session_id)");
   // QA runs (qa/runs.ts): one row per run, the steps it froze with their outcomes as JSON; plan is the feature id (or a plan
   // slug) and session_id the session that walks it. A pipeline (qa/jobs.ts) is one qa_pipelines row, every session it
-  // launches one qa_jobs row. The old qa_sessions and qa_batches are gone.
+  // launches one qa_jobs row.
   conn.exec(`CREATE TABLE IF NOT EXISTS qa_runs (
     id TEXT PRIMARY KEY, root_dir TEXT NOT NULL, plan TEXT NOT NULL, started_at INTEGER NOT NULL, steps TEXT NOT NULL
   )`);

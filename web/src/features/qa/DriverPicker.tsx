@@ -12,7 +12,6 @@ import type { Driver } from "./api";
 
 type AgentDriver = Extract<Driver, { kind: "agent" }>;
 
-/** Who runs the jobs: one agent (engine and model) or a Hydra pair. The same two tabs the composer offers. */
 export function DriverPicker({ driver, onChange, disabled }: { driver: Driver; onChange: (d: Driver) => void; disabled?: boolean }) {
   const pairsQ = usePairs();
   const agents = useAgents();

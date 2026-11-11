@@ -13,7 +13,6 @@ import { CellView } from "./Status";
 
 const IMPACT_TONE = { high: "red", medium: "amber", low: "neutral" } as const;
 
-/** A bug logged from the browser, by a person or a QA agent: the page it was seen on, a thumbnail of what was captured, and what can be done with it. */
 export function BugCard({
   root,
   bug,

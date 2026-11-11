@@ -13,7 +13,6 @@ const PACE: Array<{ value: Pace; label: string }> = [
   { value: "step", label: "Step" },
 ];
 
-/** One row: what a run covers, how it paces, who runs it, and the one primary action (Run when idle, Continue when held, none while running). */
 export function RunBar(p: {
   phase: RunPhase;
   pipeline: PipelineView | null;

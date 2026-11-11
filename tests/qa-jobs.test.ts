@@ -51,7 +51,6 @@ const putPlan = (id: string, text = planText(id)) => {
 const bug = (title: string, o: { url?: string; feature?: string | null } = {}) =>
   createBugFinding(dir, { title, body: "Steps to reproduce\n1. Do it", bug: { url: o.url ?? "http://localhost:3000/a", capture: null, shot: "none", kind: "functional", feature: o.feature ?? null }, impact: "medium", effort: "s" });
 
-/** What a well-behaved agent does in each kind of job. */
 function goodWork(t: Turn): void {
   const j = jobOfSession(t.session);
   if (!j) return;

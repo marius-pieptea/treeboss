@@ -210,7 +210,6 @@ export function readPlan(root: string, id: FeatureId): Plan {
   return load(root, id);
 }
 
-/** The plan file's text as it is now, or null when there is none or it is too big. */
 export function planText(root: string, id: FeatureId): string | null {
   try {
     return readText(planFile(root, id));

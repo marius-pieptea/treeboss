@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import type { QaBoard } from "./api";
 import { Dot, LABEL } from "./Status";
 
-/** Plan files whose name is not a feature of the map. They are not run; they can be deleted. */
 export function OrphanPlans({ plans, pending, onDelete }: { plans: QaBoard["plansWithoutFeature"]; pending: boolean; onDelete: (slug: string) => void }) {
   const [ask, setAsk] = useState<string | null>(null);
   if (plans.length === 0) return null;

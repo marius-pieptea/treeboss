@@ -168,7 +168,6 @@ describe("the wire copy", () => {
     expect([...STAGES]).toEqual(["map", "plan", "test", "fix"]);
   });
   const server = ["types", "pipeline"].map((n) => `${import.meta.dir}/../../src/qa/${n}.ts`).filter((p) => existsSync(p) && /export const STAGES\b/.test(readFileSync(p, "utf8")));
-  // The server's STAGES arrives with slice S2: until its file exports one there is nothing to compare, and the literal above holds the contract.
   test.skipIf(server.length === 0)("the web STAGES equals the server STAGES", async () => {
     const mod = await import(server[0]!);
     expect([...STAGES]).toEqual([...mod.STAGES]);

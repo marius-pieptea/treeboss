@@ -71,7 +71,6 @@ export interface LabRun {
 
 export interface SweepView {
   id: string;
-  /** Sweeps queue modules for a lens. */
   kind: "run";
   lens: string;
   total: number;

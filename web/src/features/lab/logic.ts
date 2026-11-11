@@ -8,7 +8,6 @@ export const EFFORT_LABEL = { s: "small", m: "medium", l: "large" } as const;
 
 export const inFilter = (status: Status, f: StatusFilter): boolean => (f === "all" ? true : f === "open" ? status === "new" || status === "accepted" : status === f);
 
-/** Bugs are logged from the browser and live in the QA view: the findings list leaves them out. */
 export const isBug = (f: Pick<Finding, "lens">): boolean => f.lens === "bug";
 
 /** The finding whose fix is running. Every fix edits the project folder, so while one runs no other may start. */

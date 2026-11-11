@@ -48,7 +48,6 @@ export interface QaContext {
   head: boolean;
 }
 
-/** The job a session works for: the one whose lead is the session's root. */
 export function qaContext(sessionId: string): QaContext | null {
   const r = db().prepare("SELECT j.* FROM qa_jobs j WHERE j.session_id = (SELECT root_id FROM sessions WHERE id = ?)").get(sessionId) as JobRow | null;
   return r ? { job: toJob(r), head: r.session_id !== sessionId } : null;

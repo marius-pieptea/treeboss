@@ -3,7 +3,6 @@ import type { BoardFeature } from "./api";
 import { COLS, FeatureRow, type RowAction } from "./FeatureRow";
 import { LABEL } from "./Status";
 
-/** The map as a table: one row per feature, in the order features.md lists them, children under their parent. */
 export function FeatureGrid({
   features,
   open,

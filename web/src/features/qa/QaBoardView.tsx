@@ -17,7 +17,6 @@ import { CellView } from "./Status";
 import { UnsortedBugs } from "./UnsortedBugs";
 import type { QaIntent } from "./open";
 
-/** The whole QA view: the run bar and the stages on top, the features and their bugs below, one feature's pane beside them. */
 export function QaBoardView({ root, intent, onIntentDone }: { root: string; intent: QaIntent | null; onIntentDone: () => void }) {
   const q = useQaBoard(root);
   const actions = useQaActions(root);

@@ -5,7 +5,6 @@
 
 export const STAGES = ["map", "plan", "test", "fix"] as const;
 
-// ---- wire ----
 
 export type Stage = "map" | "plan" | "test" | "fix";
 export type Batching = "each" | "together";
@@ -55,7 +54,6 @@ export interface PipelineConfig {
   baseUrl: string | null;
 }
 
-/** The only stored progress of a pipeline. */
 export type Control =
   | { kind: "running"; stage: Stage }
   | { kind: "held"; after: Stage; next: Stage }
@@ -177,7 +175,6 @@ export interface RunReply { run: Run; summary: RunSummary }
 
 export interface ErrorBody { error: string }
 
-// ---- server only ----
 
 export type FeatureId = string & { readonly __brand: "FeatureId" };
 export type BugId = string & { readonly __brand: "BugId" };
@@ -208,7 +205,6 @@ export interface Job {
   problem: string | null; startedAt: number; settledAt: number | null;
 }
 
-/** What reconcile reads. Built by jobs.ts in one synchronous pass. */
 export interface Snapshot {
   features: readonly Feature[];
   mapExists: boolean;

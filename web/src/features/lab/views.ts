@@ -1,7 +1,6 @@
 import type { NewTab } from "@/lib/store";
 import type { Lens } from "./data";
 
-/** The Lab's views, each its own tab: the findings and the launch checklists of the project. */
 export type LabViewKind = "findings" | "checklists";
 
 const TITLES: Record<LabViewKind, string> = { findings: "Findings", checklists: "Checklists" };

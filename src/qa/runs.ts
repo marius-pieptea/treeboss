@@ -71,12 +71,10 @@ export function getRun(id: RunId): Run | null {
   return r ? toRun(r) : null;
 }
 
-/** The project a run belongs to, or null when there is no such run. */
 export function runRoot(id: RunId): string | null {
   return (db().prepare("SELECT root_dir FROM qa_runs WHERE id = ?").get(id) as { root_dir: string } | null)?.root_dir ?? null;
 }
 
-/** The runs a session walks, oldest first. */
 export function runsOfSession(sessionId: string): Run[] {
   return (db().prepare("SELECT * FROM qa_runs WHERE session_id = ? ORDER BY started_at, rowid").all(sessionId) as Row[]).map(toRun);
 }
@@ -105,10 +103,8 @@ export function summarize(run: Run): RunSummary {
   return { id: run.id, feature: run.feature, startedAt: run.startedAt, counts, finished: counts.pending === 0, sessionId: run.sessionId };
 }
 
-/** The first step still waiting for an outcome. */
 export const currentStep = (run: Run): Run["steps"][number] | null => run.steps.find((s) => s.outcome.state === "pending") ?? null;
 
-/** A feature's runs, newest first. */
 export function listRuns(root: string, feature: string, limit = 20): RunSummary[] {
   const rows = db().prepare("SELECT * FROM qa_runs WHERE root_dir = ? AND plan = ? ORDER BY started_at DESC, rowid DESC LIMIT ?").all(realOf(root), feature, limit) as Row[];
   return rows.map((r) => summarize(toRun(r)));

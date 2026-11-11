@@ -16,7 +16,6 @@ const BATCHING: Array<{ value: Batching; label: string }> = [
   { value: "together", label: "Together" },
 ];
 
-/** The four stages in run order. Idle, each is a switch (with its batching for plan, test and fix); while a pipeline is in flight it shows the live progress. */
 export function PipelineStrip({ pipeline, editable, form, setForm }: { pipeline: PipelineView | null; editable: boolean; form: RunForm; setForm: (f: RunForm) => void }) {
   const jobs = pipeline ? notableJobs(pipeline.jobs) : [];
   return (

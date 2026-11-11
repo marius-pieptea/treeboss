@@ -1,8 +1,6 @@
 /**
- * The shell around the pure pipeline (pipeline.ts): it stores pipelines and jobs, builds the snapshot `reconcile` reads,
- * launches the sessions it asks for, settles a job when its whole session tree is idle, and builds the board. Every
- * decision comes from pipeline.ts. `tickProject` is the only place a session is launched; it is synchronous, and a job
- * row is written before the session's first turn, so two ticks racing (a turn end and a restart) cannot launch a unit twice.
+ * `tickProject` is the only place a session is launched. It is synchronous, and a job row is written before the
+ * session's first turn, so two ticks racing (a turn end and a restart) cannot launch a unit twice.
  */
 import { db } from "../db";
 import { browserEnabled } from "../browser/chrome";
@@ -54,10 +52,6 @@ const SWEEP_MS = 5000;
 const NUDGE = (ids: string[]): string =>
   `Your heads ${ids.join(", ")} finished with commits that are not merged. Merge each one with subagent_merge, one at a time, check the result, finish the job you were given, then end your turn.`;
 
-/* -------------------------------------------------------------------------- */
-/* Pipelines                                                                  */
-/* -------------------------------------------------------------------------- */
-
 interface PipelineRow {
   id: string;
   root_dir: string;
@@ -81,7 +75,6 @@ const newest = (root: string): Pipeline | null => {
   return r ? toPipeline(r) : null;
 };
 
-/** The pipeline that is not ended. There is at most one per project, and it is the newest. */
 const openPipeline = (root: string): Pipeline | null => {
   const p = newest(root);
   return p && p.control.kind !== "ended" ? p : null;
@@ -104,10 +97,6 @@ function viewOf(p: Pipeline): PipelineView {
   return { ...pipelineView(p, jobs), jobs: jobs.map((j) => jobViewOf(j, isPair(j.session))) };
 }
 
-/* -------------------------------------------------------------------------- */
-/* The snapshot                                                               */
-/* -------------------------------------------------------------------------- */
-
 const isBug = (f: Finding): f is Finding & { bug: NonNullable<Finding["bug"]> } => f.lens === "bug" && f.bug !== null;
 const isOpen = (f: Finding): boolean => f.status === "new" || f.status === "accepted";
 
@@ -123,10 +112,6 @@ function snapshotOf(root: string, p: Pipeline | null): Snapshot {
   const ours = new Set(jobs.map((j) => j.session));
   return { features: map.features, mapExists: map.exists, plans, openBugs, jobs, fixBusyElsewhere: !!fix && !ours.has(fix.sessionId) };
 }
-
-/* -------------------------------------------------------------------------- */
-/* Launching                                                                  */
-/* -------------------------------------------------------------------------- */
 
 function needBrowser(): void {
   if (!browserEnabled()) throw new UserError("The agent browser is off, and this QA run drives the app through it. Turn it on in Settings (or trb config set agent_browser on) and make sure Chrome is installed.");
@@ -221,22 +206,18 @@ function launchJob(p: Pipeline, l: Launch, now: number): void {
       try {
         patchFinding(root, bug, { status: "accepted", fix_session: session.id });
       } catch {
-        // the finding file vanished: the job's check reports it
+        // A vanished finding file is reported by the job's check.
       }
     }
   }
 }
 
-/* -------------------------------------------------------------------------- */
-/* tickProject                                                                */
-/* -------------------------------------------------------------------------- */
-
 const ticking = new Set<string>();
 const rerun = new Set<string>();
 
 /**
- * Snapshot, reconcile, apply, until there is nothing left to do. Synchronous and idempotent: a call made while one is
- * running (an event a launch published) only asks the running one for another round.
+ * Snapshot, reconcile, apply, until there is nothing left to do. A call made while one is running only asks the
+ * running one for another round.
  */
 export function tickProject(root: string): void {
   const key = realOf(root);
@@ -264,10 +245,6 @@ export function tickProject(root: string): void {
     rerun.delete(key);
   }
 }
-
-/* -------------------------------------------------------------------------- */
-/* Start, continue, stop                                                      */
-/* -------------------------------------------------------------------------- */
 
 export function startPipeline(root: string, body: unknown): PipelineView {
   const key = realOf(root);
@@ -304,13 +281,8 @@ export function stopPipeline(root: string, id: string): PipelineView {
   return viewOf(pipelineOf(key, id));
 }
 
-/* -------------------------------------------------------------------------- */
-/* Settling                                                                   */
-/* -------------------------------------------------------------------------- */
-
 const join = (problems: string[]): string | null => (problems.length ? problems.join("; ") : null);
 
-/** What is wrong with the job's work, or null. Runs against the project folder. */
 function checkJob(job: Job): string | null {
   const root = job.root;
   const problems: string[] = [];
@@ -374,7 +346,7 @@ const settle = (id: JobId, problem: string | null): void => {
 
 /**
  * Settles the job when its lead's whole tree is idle: first one nudge turn when a head finished with commits nobody
- * merged, then the artifact check. A crashed head counts idle (treeIdle ignores status), so it cannot stall this.
+ * merged, then the artifact check. A crashed head counts idle (treeIdle ignores status).
  */
 export function settleJob(session: string): void {
   const job = jobOfSession(session);
@@ -400,10 +372,6 @@ export function settleJob(session: string): void {
 function settleProject(root: string): void {
   for (const r of db().prepare("SELECT * FROM qa_jobs WHERE root_dir = ? AND settled_at IS NULL AND session_id IS NOT NULL").all(root) as JobRow[]) settleJob(r.session_id!);
 }
-
-/* -------------------------------------------------------------------------- */
-/* Driver                                                                     */
-/* -------------------------------------------------------------------------- */
 
 let unsubscribe: (() => void) | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -449,10 +417,6 @@ export function stopQaDriver(): void {
   timer = null;
 }
 
-/* -------------------------------------------------------------------------- */
-/* The board                                                                  */
-/* -------------------------------------------------------------------------- */
-
 function boardBugs(root: string, features: readonly Feature[]): BoardBug[] {
   return listFindings(root)
     .filter(isBug)
@@ -484,7 +448,6 @@ function boardBugs(root: string, features: readonly Feature[]): BoardBug[] {
 const closed = (b: BoardBug): number => (b.state === "fixed" || b.state === "dismissed" ? 1 : 0);
 const bugOrder = (a: BoardBug, b: BoardBug): number => closed(a) - closed(b) || b.updatedAt - a.updatedAt || a.id.localeCompare(b.id);
 
-/** Everything the board shows, read once: features.md, the plans, the runs, the bugs and the pipeline. */
 function boardData(root: string) {
   const key = realOf(root);
   const map = readFeatures(key);

@@ -6,10 +6,10 @@
 /** Factory pages that were removed, and the page a saved tab on one lands on. Checklists moved into the Lab. */
 const MOVED_FACTORY_PAGES = new Map<string, string>([["checklists", "portfolio"]]);
 
-/** The one Lab tab was split into Findings and Checklists (and Bugs, since folded into QA): a saved Lab tab opens as Findings, as the Lab did. */
+/** A saved Lab tab opens as Findings. */
 const FINDINGS = { id: "findings", kind: "findings", title: "Findings" };
 
-/** The Bugs view became part of QA: a saved Bugs tab opens as the QA tab. */
+/** A saved Bugs tab opens as the QA tab. */
 const QA = { id: "qa", kind: "qa", title: "QA" };
 
 type SavedTab = { id?: unknown; kind?: unknown; page?: unknown };
