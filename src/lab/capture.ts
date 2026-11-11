@@ -9,7 +9,7 @@ import { addEvidence, type EvidenceItem } from "../evidence/store";
 import { readIssues } from "../preview/issues";
 import { shootViewport } from "../preview/shot";
 import { redact, stripQueryValues } from "../search/redact";
-import { BUG_KINDS, createBugFinding, type BugKind, type Finding, type ShotKind } from "./findings";
+import { BUG_KINDS, createBugFinding, FEATURE_ID, type BugKind, type Finding, type ShotKind } from "./findings";
 
 /** `agent`: a PNG the agent's own browser took of the page it was on. */
 export type ShotIn = { kind: "desktop"; png: Buffer } | { kind: "agent"; png: Buffer } | { kind: "rerender"; viewport: { width: number; height: number } } | { kind: "none" };
@@ -28,8 +28,10 @@ export interface BugReport {
   attach: { console: boolean; logs: boolean };
   /** Console lines the caller already has (the agent browser's), used instead of the preview's. */
   consoleLines?: string[];
-  /** Logged by a QA agent: the finding is marked found_by: agent and starts unconfirmed. */
+  /** Logged by a QA agent: the finding is marked found_by: agent. */
   byAgent?: boolean;
+  /** The feature id the bug is filed under; absent or null leaves it to the page's URL. */
+  feature?: string | null;
 }
 
 export interface LoggedBug {
@@ -117,7 +119,8 @@ export function parseBugReport(body: unknown): BugReport {
     port = body.port;
   } else if (u.port) port = Number(u.port);
   const attach = isObj(body.attach) ? body.attach : {};
-  return { title, kind, steps, expected, actual, url: u.toString(), port, shot: shotOf(body.shot), attach: { console: attach.console !== false, logs: attach.logs !== false } };
+  const feature = body.feature === undefined || body.feature === null ? null : typeof body.feature === "string" && FEATURE_ID.test(body.feature) ? body.feature : bad("feature must be a feature id.");
+  return { title, kind, steps, expected, actual, url: u.toString(), port, shot: shotOf(body.shot), attach: { console: attach.console !== false, logs: attach.logs !== false }, feature };
 }
 
 /** The end of a line that alone exceeds the cap, from a UTF-8 boundary: the error text is usually last. */
@@ -195,6 +198,6 @@ export async function logBug(rootDir: string, r: BugReport, deps: CaptureDeps = 
   const expected = section("Expected", r.expected);
   const actual = section("Actual", r.actual);
   const body = [steps || expected || actual ? "" : r.title, steps, expected, actual, con.count ? `## Console (last ${con.count})\n\n\`\`\`\n${con.text}\n\`\`\`` : "", log.count ? `## Server log (last ${log.count})\n\n\`\`\`\n${log.text}\n\`\`\`` : ""].filter(Boolean).join("\n\n");
-  const finding = deps.write(rootDir, { title: r.title, body, bug: { url, capture: capture?.id ?? null, shot: shot.kind, kind: r.kind, ...(r.byAgent ? { by: "agent" as const, confirmed: false } : {}) }, impact: "medium", effort: "s" });
+  const finding = deps.write(rootDir, { title: r.title, body, bug: { url, capture: capture?.id ?? null, shot: shot.kind, kind: r.kind, ...(r.byAgent ? { by: "agent" as const } : {}), feature: r.feature ?? null }, impact: "medium", effort: "s" });
   return { finding, capture, shotNote: shot.note };
 }

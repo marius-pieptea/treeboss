@@ -299,27 +299,6 @@ export const MAX_TITLE = 200;
 export const MAX_BUG_STEPS = 50;
 export const MAX_BUG_STEP = 300;
 
-export const QA_COMPACT_BELOW = 720;
-
-/** Where the QA panel docks: beside the frame, or as a strip under it when the browser is narrow. */
-export const qaDock = (width: number): "side" | "strip" => (width < QA_COMPACT_BELOW ? "strip" : "side");
-
-/** The lines for the steps recorded at or after `since`, newest `DIALOG_STEPS` of them. */
-export function stepsSince(ring: TimedStep[], since: number): string[] {
-  return stepLines(ring.filter((t) => t.at >= since));
-}
-
-/** `path` on the origin of `base`, for a QA step that points at a page. Null when there is no page to take the origin from. */
-export function resolvePath(path: string, base: string | null): string | null {
-  if (!base) return null;
-  try {
-    const u = new URL(base);
-    return new URL(path, u.origin).toString();
-  } catch {
-    return null;
-  }
-}
-
 /** What a caller (the QA panel) fills the bug dialog with. */
 export interface BugPrefill {
   title: string;

@@ -1,257 +1,282 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type { Who } from "@/components/agent-who";
-import { del, get, patch, post, put } from "@/lib/api";
-import { agentRequest, newPlanBody, type AgentStart } from "./logic";
+import { del, get, patch, post } from "@/lib/api";
 
-/** Web copy of the QA types the daemon serves under /api/qa. */
-export type StepPath = string;
+export const STAGES = ["map", "plan", "test", "fix"] as const;
+export const FEATURE_ID = /^[a-z0-9][a-z0-9-]{0,59}$/;
+export const BUG_ID = /^bug-[a-z0-9][a-z0-9-]*$/;
 
-export interface PlanStep {
+// ---- wire: a byte-for-byte copy of docs/design/qa-pipeline.md section 3, without the brands ----
+
+export type Stage = "map" | "plan" | "test" | "fix";
+export type Batching = "each" | "together";
+export type Pace = "auto" | "step";
+export type OutcomeState = "pending" | "pass" | "fail" | "skip" | "blocked";
+
+/** Who runs the jobs. A pair's lead picks engine/model/effort; with a pair the agent fields do not exist. */
+export type Driver =
+  | { kind: "agent"; engine?: string | null; model?: string | null; effort?: string | null; agent?: string | null }
+  | { kind: "pair"; pairId: string };
+
+export type Scope =
+  | { kind: "all" }
+  | { kind: "features"; ids: string[] } // ≥1, each matches FEATURE_ID and exists in features.md (400 otherwise; ids missing at a later stage are dropped)
+  | { kind: "bugs"; ids: string[] }; // ≥1 bug ids; only with stages = { fix } (400 otherwise)
+
+/** Absent key = stage skipped. At least one key (400 otherwise). Order is always STAGES order. */
+export interface StageSettings {
+  map?: Record<string, never>;
+  plan?: { batching: Batching; replan?: boolean }; // replan omitted → scope "all": false; scope "features": true
+  test?: { batching: Batching };
+  fix?: { batching: Batching };
+}
+
+/** POST /api/qa/:root/pipelines body. */
+export interface PipelineRequest {
+  stages: StageSettings;
+  scope: Scope;
+  pace: Pace;
+  driver: Driver;
+  note?: string; // ≤ 4000 chars after trim
+  baseUrl?: string | null; // http(s) only; trailing "/" removed
+}
+
+/** The config as the server stored it: defaults resolved (replan is always a boolean). */
+export interface PipelineConfig {
+  stages: {
+    map?: Record<string, never>;
+    plan?: { batching: Batching; replan: boolean };
+    test?: { batching: Batching };
+    fix?: { batching: Batching };
+  };
+  scope: Scope;
+  pace: Pace;
+  driver: Driver;
+  note: string;
+  baseUrl: string | null;
+}
+
+/** The only stored progress of a pipeline. */
+export type Control =
+  | { kind: "running"; stage: Stage }
+  | { kind: "held"; after: Stage; next: Stage } // only under pace "step"
+  | { kind: "stopping"; stage: Stage } // stop asked; running jobs finish, nothing new starts
+  | { kind: "ended"; reason: "done" | "stopped" | "superseded"; at: number };
+
+export interface JobView {
+  id: string; // qaj_…
+  stage: Stage;
+  units: string[]; // ["map"] | feature ids | bug ids
+  sessionId: string | null; // null: the launch failed (see error)
+  pair: boolean; // the session is a Hydra lead
+  state: "running" | "merging" | "settled"; // merging: the lead was nudged to merge its heads
+  problem: string | null; // settled without its work, per the artifact check
+  error: string | null; // the launch threw; never retried
+  startedAt: number;
+  settledAt: number | null;
+}
+
+export type StageState = "done" | "current" | "held" | "next" | "skipped";
+
+export interface PipelineView {
+  id: string; // qap_…
+  config: PipelineConfig;
+  control: Control;
+  /** One entry per STAGES item. total/done count units of that stage (0/0 when it has not opened yet or is skipped). */
+  stages: Array<{ stage: Stage; state: StageState; done: number; total: number; problems: number }>;
+  jobs: JobView[]; // every job of this pipeline, oldest first
+  createdAt: number;
+}
+
+export type Activity =
+  | { kind: "idle" }
+  | { kind: "queued" } // in the current stage's units, not yet covered by a job
+  | { kind: "working"; sessionId: string; pair: boolean } // covered by an unsettled job
+  | { kind: "problem"; text: string; sessionId: string | null }; // latest settled job covering it has a problem or error
+
+export type PlanCell = { kind: "missing" } | { kind: "ready"; steps: number; updatedAt: number } | { kind: "broken"; problem: string };
+
+export interface RunSummary {
+  id: string; // qa_…
+  feature: string;
+  startedAt: number;
+  counts: Record<OutcomeState, number>;
+  finished: boolean; // counts.pending === 0
+  sessionId: string | null;
+}
+
+export type TestCell = { kind: "never" } | { kind: "ran"; run: RunSummary };
+
+export type BugState = "open" | "fixing" | "needs-check" | "fixed" | "dismissed";
+
+export interface BoardBug {
+  id: string;
+  title: string;
+  kind: "functional" | "visual" | "logic" | "content" | "performance";
+  impact: "high" | "medium" | "low";
+  status: "new" | "accepted" | "dismissed" | "shipped";
+  /** Derived on the server only: shipped→fixed, dismissed→dismissed, accepted→(fix session running ? fixing : needs-check), new→open. */
+  state: BugState;
+  url: string;
+  capture: string | null; // evidence id; screenshot at GET /api/evidence/:root/:capture/file/screenshot.png when shot !== "none"
+  shot: "desktop" | "rerender" | "agent" | "none";
+  byAgent: boolean; // found_by: agent
+  feature: string | null; // the feature it is shown under: stored, else featureForUrl, else null
+  featureSource: "stored" | "url" | null;
+  summary: string;
+  problem: string | null; // the finding file is malformed
+  fixSession: string | null;
+  updatedAt: number;
+}
+
+export interface BoardFeature {
+  id: string;
+  title: string;
+  where: string[];
+  parent: string | null; // a feature id, one level only
+  depth: 0 | 1;
+  summary: string;
+  plan: PlanCell;
+  test: TestCell;
+  bugs: BoardBug[]; // every bug shown under this feature, open first, then by updatedAt desc
+  activity: { plan: Activity; test: Activity; fix: Activity };
+}
+
+export interface QaBoard {
+  browser: boolean; // the agent browser is on (map, plan and test need it)
+  map: { exists: boolean; problem: string | null; updatedAt: number | null; activity: Activity };
+  /** features.md order, each child right after its parent; a child whose parent is unknown is shown at depth 0. */
+  features: BoardFeature[];
+  bugsWithoutFeature: BoardBug[];
+  plansWithoutFeature: Array<{ slug: string; title: string; steps: number; problem: string | null; path: string }>;
+  /** The pipeline that is not ended, else the newest ended one, else null. */
+  pipeline: PipelineView | null;
+}
+
+export interface PlanStepView {
   id: string;
   action: string;
   expected: string;
-  path: StepPath | null;
+  path: string | null;
+  last: OutcomeState | null;
 }
 
-export type PlanSource = { kind: "spec"; dir: string } | { kind: "diff"; base: string; head: string } | { kind: "page"; path: StepPath } | { kind: "text" } | { kind: "manual" };
-
-export interface Proposal {
-  id: string;
-  step: Omit<PlanStep, "id">;
-  /** The step id it goes after, or "start". */
-  after: string | "start";
-  why: string;
-  /** The step it was anchored to is gone: it sits at the end of the plan. */
-  orphan: boolean;
-}
-
-export interface Plan {
-  slug: string;
-  title: string;
-  source: PlanSource;
-  intro: string;
-  steps: PlanStep[];
-  proposals: Proposal[];
-  problem: string | null;
-  proposalsProblem: string | null;
-}
-
-export type StepFields = { action: string; expected?: string; path?: StepPath | null };
-export type PlanEdit = { op: "add"; step: StepFields; after: string | "start" } | { op: "update"; id: string; fields: Partial<StepFields> } | { op: "move"; id: string; after: string | "start" } | { op: "remove"; id: string };
-
-export type OutcomeState = "pending" | "pass" | "fail" | "skip" | "blocked";
 export type Outcome =
   | { state: "pending" }
   | { state: "pass" | "skip"; at: number; note: string }
   | { state: "blocked"; at: number; note: string }
   | { state: "fail"; at: number; actual: string; bug: string | null };
 
-type DistributiveOmit<T, K extends string> = T extends unknown ? Omit<T, K> : never;
-/** What the panel sends: the daemon stamps `at`. `{ state: "pending" }` undoes a mark. */
-export type OutcomeInput = DistributiveOmit<Outcome, "at">;
-
-export interface RunStep extends PlanStep {
-  outcome: Outcome;
-}
-
 export interface Run {
   id: string;
-  plan: string;
-  root: string;
+  feature: string;
   startedAt: number;
-  steps: RunStep[];
+  sessionId: string | null;
+  steps: Array<{ id: string; action: string; expected: string; path: string | null; outcome: Outcome }>;
 }
 
-export type RunCounts = Record<OutcomeState, number>;
-
-export interface RunSummary {
-  id: string;
-  plan: string;
-  startedAt: number;
-  counts: RunCounts;
-  finished: boolean;
-  states: Record<string, OutcomeState>;
-  /** The session of the agent that walked this run; null for a run a person did. */
-  agentSession?: string | null;
+/** GET /api/qa/:root/features/:id */
+export interface FeatureDetail {
+  feature: BoardFeature;
+  /** last = the step's newest non-pending outcome across this feature's runs (by step id). */
+  plan: { title: string; intro: string; path: string; steps: PlanStepView[]; problem: string | null } | null;
+  runs: RunSummary[]; // newest first, at most 20
+  lastRun: Run | null;
 }
 
-/** A step's newest marked outcome across the plan's runs. */
-export interface StepHistory {
-  run: string;
-  at: number;
-  outcome: Exclude<Outcome, { state: "pending" }>;
-}
-
-export type Focus = "errors" | "edge-cases" | "mobile" | "accessibility" | "empty-states" | "permissions";
-export const FOCUSES: Array<{ id: Focus; label: string }> = [
-  { id: "errors", label: "Errors" },
-  { id: "edge-cases", label: "Edge cases" },
-  { id: "mobile", label: "Mobile" },
-  { id: "accessibility", label: "Accessibility" },
-  { id: "empty-states", label: "Empty states" },
-  { id: "permissions", label: "Permissions" },
-];
-
-export interface PlanSummary {
-  slug: string;
-  title: string;
-  steps: number;
-  proposals: number;
-  problem: string | null;
-  updatedAt: number;
-  lastRun: RunSummary | null;
-}
-
-/** draft and suggest write proposals; explore drives the app and logs bugs; run walks a run's steps; map writes the feature map. */
-export interface QaSession {
-  sessionId: string;
-  kind: "draft" | "suggest" | "explore" | "run" | "map";
-  running: boolean;
-  /** The turn ended without its work: no usable proposals, steps left unrecorded, no feature map. */
-  problem: string | null;
-  /** The run an agent run walks. */
-  runId: string | null;
-  batchId: string | null;
-}
-
-export type Coverage = "no-plan" | "not-run" | "failing" | "partial" | "passing";
-
-export interface FeaturePlan {
-  slug: string;
-  title: string | null;
-  exists: boolean;
-  steps: number;
-  lastRun: RunSummary | null;
-}
-
-/** A feature from lab/features.md, with how well its plans test it. */
-export interface Feature {
-  id: string;
-  title: string;
-  where: string[];
-  plans: string[];
-  summary: string;
-  planInfo: FeaturePlan[];
-  coverage: Coverage;
-}
-
-/** An end-to-end run: plans run by an agent one after another. */
-export interface BatchView {
-  id: string;
-  plans: string[];
-  next: number;
-  current: string | null;
-  running: boolean;
-  cancelled: boolean;
-  errors: Array<{ plan: string; error: string }>;
-  createdAt: number;
-}
-
-export interface FeaturesView {
-  features: Feature[];
-  problem: string | null;
-  exists: boolean;
-  session: QaSession | null;
-  batch: BatchView | null;
-}
-
-/** Runs are newest first. */
-export interface PlanView {
-  plan: Plan;
-  runs: RunSummary[];
-  lastOutcomes: Record<string, StepHistory>;
-  session: QaSession | null;
-}
-
+/** GET /api/qa/:root/runs/:id */
 export interface RunReply {
   run: Run;
   summary: RunSummary;
 }
 
-export interface NewPlanInput {
-  title: string;
-  from?: PlanSource;
-  note?: string;
-  /** An agent explores the app instead of drafting from the source. */
-  explore?: boolean;
-  /** Where the app runs, for an exploring agent. Without it the agent finds the app itself. */
-  baseUrl?: string;
+export interface ErrorBody {
+  error: string;
 }
 
-/** The POST each agent action makes: the route's own fields, plus the chosen engine and model. */
-const agentPost = <R>(root: string, a: AgentStart & Who) => {
-  const r = agentRequest(root, a);
-  return post<R>(r.path, r.body);
-};
-
-export interface BugDraft {
-  title: string;
-  kind: "functional";
-  steps: string[];
-  expected: string;
-  actual: string;
-  path: StepPath | null;
+// PATCH /api/lab/:root/findings/:id   body (all optional; confirmed is gone and now a 400 "Unknown field confirmed.")
+export interface FindingPatchBody {
+  status?: "new" | "accepted" | "dismissed" | "shipped";
+  impact?: "high" | "medium" | "low";
+  effort?: "s" | "m" | "l";
+  feature?: string | null;
 }
+
+// ---- end of the wire copy ----
 
 const base = (root: string) => `/api/qa/${root}`;
 
-export const qaKey = {
-  plans: (root: string) => ["qa", root, "plans"] as const,
-  plan: (root: string, slug: string) => ["qa", root, "plan", slug] as const,
-  run: (root: string, id: string) => ["qa", root, "run", id] as const,
-  features: (root: string) => ["qa", root, "features"] as const,
+/** How often the board is read again: fast while a pipeline works, slow otherwise (react-query pauses it in a hidden tab). */
+export const refetchMs = (board: Pick<QaBoard, "pipeline"> | undefined): number => {
+  const k = board?.pipeline?.control.kind;
+  return k === "running" || k === "stopping" ? 3000 : 15_000;
 };
 
-export const usePlans = (root: string) =>
-  useQuery({ queryKey: qaKey.plans(root), queryFn: () => get<{ plans: PlanSummary[] }>(`${base(root)}/plans`).then((r) => r.plans), staleTime: 2000 });
+/** The Lab PATCH body for a bug: only the fields that were given. A feature of null clears it. */
+export function bugPatchBody(p: { status?: FindingPatchBody["status"]; feature?: string | null }): FindingPatchBody {
+  const body: FindingPatchBody = {};
+  if (p.status !== undefined) body.status = p.status;
+  if (p.feature !== undefined) body.feature = p.feature;
+  return body;
+}
 
-/** The drafting agent writes the plan while its session runs: look again every 2s until it stops. */
-export const usePlan = (root: string, slug: string | null) =>
-  useQuery({
-    queryKey: qaKey.plan(root, slug ?? ""),
-    enabled: !!slug,
-    queryFn: () => get<PlanView>(`${base(root)}/plans/${encodeURIComponent(slug!)}`),
-    refetchInterval: (q) => (q.state.data?.session?.running ? 2000 : false),
+export const qaKey = {
+  board: (root: string) => ["qa", root, "board"] as const,
+  feature: (root: string, id: string) => ["qa", root, "feature", id] as const,
+  run: (root: string, id: string) => ["qa", root, "run", id] as const,
+};
+
+export function useQaBoard(root: string | null) {
+  return useQuery({
+    queryKey: qaKey.board(root ?? ""),
+    enabled: !!root,
+    queryFn: () => get<QaBoard>(base(root!)),
+    refetchInterval: (q) => refetchMs(q.state.data),
     staleTime: 1000,
   });
+}
 
-/** `live`: an agent is recording this run's steps now, so it is read again every 2s. */
-export const useRun = (root: string, id: string | null, live = false) =>
-  useQuery({ queryKey: qaKey.run(root, id ?? ""), enabled: !!id, queryFn: () => get<RunReply>(`${base(root)}/runs/${encodeURIComponent(id!)}`).then((r) => r.run), staleTime: 1000, refetchInterval: live ? 2000 : false });
-
-/** The feature map, its mapping session and the newest end-to-end run: read again every 3s while either works. */
-export const useFeatures = (root: string) =>
-  useQuery({
-    queryKey: qaKey.features(root),
-    queryFn: () => get<FeaturesView>(`${base(root)}/features`),
-    refetchInterval: (q) => (q.state.data?.session?.running || q.state.data?.batch?.running ? 3000 : false),
+export function useFeatureDetail(root: string, id: string | null) {
+  const qc = useQueryClient();
+  return useQuery({
+    queryKey: qaKey.feature(root, id ?? ""),
+    enabled: !!id,
+    queryFn: () => get<FeatureDetail>(`${base(root)}/features/${encodeURIComponent(id!)}`),
+    refetchInterval: () => refetchMs(qc.getQueryData<QaBoard>(qaKey.board(root))),
     staleTime: 1000,
   });
+}
+
+export function useRun(root: string, id: string | null) {
+  return useQuery({
+    queryKey: qaKey.run(root, id ?? ""),
+    enabled: !!id,
+    queryFn: () => get<RunReply>(`${base(root)}/runs/${encodeURIComponent(id!)}`),
+    staleTime: 5000,
+  });
+}
 
 export function useQaActions(root: string) {
   const qc = useQueryClient();
-  const refresh = () => void qc.invalidateQueries({ queryKey: ["qa", root] });
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ["qa", root] });
+    void qc.invalidateQueries({ queryKey: ["lab", root] });
+  };
   const onError = (e: unknown) => toast.error(e instanceof Error ? e.message : "That did not work.");
-  const mut = <V, R>(fn: (v: V) => Promise<R>, ok: (r: R, v: V) => void = refresh) => useMutation({ mutationFn: fn, onSuccess: ok, onError });
-  const plan = (slug: string) => `${base(root)}/plans/${encodeURIComponent(slug)}`;
+  const adopt = (r: { pipeline: PipelineView }) => {
+    qc.setQueryData<QaBoard>(qaKey.board(root), (b) => (b ? { ...b, pipeline: r.pipeline } : b));
+    refresh();
+  };
+  const pipeline = (id: string) => `${base(root)}/pipelines/${encodeURIComponent(id)}`;
   return {
-    create: mut((v: NewPlanInput & Who) => post<{ plan: Plan; session: QaSession | null }>(`${base(root)}/plans`, newPlanBody(v))),
-    edit: mut((v: { slug: string; edit: PlanEdit }) => patch<{ plan: Plan }>(plan(v.slug), { edit: v.edit })),
-    remove: mut((slug: string) => del<{ ok: true }>(plan(slug))),
-    decide: mut((v: { slug: string; pid: string | "all"; decision: "accept" | "reject" }) => post<{ plan: Plan }>(`${plan(v.slug)}/proposals/${encodeURIComponent(v.pid)}`, { decision: v.decision })),
-    suggest: mut((v: { slug: string; focus: Focus[]; note: string } & Who) => agentPost<{ session: QaSession }>(root, { kind: "suggest", ...v })),
-    start: mut((slug: string) => post<RunReply>(`${plan(slug)}/runs`, {})),
-    /** A run walked by an agent in its own browser: it records each step and logs the bugs it finds. */
-    startAgent: mut((v: { slug: string; baseUrl?: string; note?: string } & Who) => agentPost<RunReply & { session: QaSession | null }>(root, { kind: "run", ...v })),
-    explore: mut((v: { slug: string; baseUrl?: string; note?: string } & Who) => agentPost<{ session: QaSession }>(root, { kind: "explore", ...v })),
-    mapFeatures: mut((v: { baseUrl?: string; note?: string } & Who) => agentPost<{ session: QaSession }>(root, { kind: "map", ...v })),
-    planFeature: mut((v: { id: string } & Who) => agentPost<{ plan: Plan; session: QaSession }>(root, { kind: "feature-plan", ...v })),
-    e2e: mut((v: { features?: string[]; plans?: string[]; baseUrl?: string } & Who) => agentPost<{ batch: BatchView }>(root, { kind: "e2e", ...v })),
-    cancelBatch: mut((id: string) => post<{ batch: BatchView }>(`${base(root)}/batches/${encodeURIComponent(id)}/cancel`, {})),
-    mark: mut((v: { runId: string; stepId: string; outcome: OutcomeInput }) => put<RunReply>(`${base(root)}/runs/${encodeURIComponent(v.runId)}/steps/${encodeURIComponent(v.stepId)}`, { outcome: v.outcome }), (r, v) => {
-      qc.setQueryData(qaKey.run(root, v.runId), r.run);
-      refresh();
+    start: useMutation({ mutationFn: (req: PipelineRequest) => post<{ pipeline: PipelineView }>(`${base(root)}/pipelines`, req), onSuccess: adopt, onError }),
+    cont: useMutation({ mutationFn: (id: string) => post<{ pipeline: PipelineView }>(`${pipeline(id)}/continue`), onSuccess: adopt, onError }),
+    stop: useMutation({ mutationFn: (id: string) => post<{ pipeline: PipelineView }>(`${pipeline(id)}/stop`), onSuccess: adopt, onError }),
+    deletePlan: useMutation({ mutationFn: (slug: string) => del<{ ok: true }>(`${base(root)}/plans/${encodeURIComponent(slug)}`), onSuccess: refresh, onError }),
+    setBug: useMutation({
+      mutationFn: (v: { id: string; status?: FindingPatchBody["status"]; feature?: string | null }) => patch<{ finding: unknown }>(`/api/lab/${root}/findings/${encodeURIComponent(v.id)}`, bugPatchBody(v)),
+      onSuccess: refresh,
+      onError,
     }),
   };
 }

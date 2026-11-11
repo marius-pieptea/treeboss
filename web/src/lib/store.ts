@@ -30,7 +30,6 @@ export type Tab =
   | { id: string; kind: "roadmap"; title: string }
   | { id: string; kind: "design"; title: string }
   | { id: string; kind: "findings"; title: string }
-  | { id: string; kind: "bugs"; title: string }
   | { id: string; kind: "checklists"; title: string }
   | { id: string; kind: "qa"; title: string }
   | { id: string; kind: "emulator"; title: string }
@@ -67,7 +66,6 @@ export function tabId(t: NewTab): string {
     case "design":
       return "design";
     case "findings":
-    case "bugs":
     case "checklists":
     case "qa":
     case "emulator":
@@ -302,9 +300,10 @@ export const useUi = create<UiState>()(
     {
       name: "trb.ui.v1",
       storage: createJSONStorage(() => lazyStorage),
-      version: 3,
+      version: 4,
       // v2: the Checklists factory page moved to the Lab. A saved factory tab on it lands on Portfolio instead of a page that is gone.
       // v3: the Lab tab was split into Findings, Bugs and Checklists. A saved Lab tab opens as Findings.
+      // v4: the Bugs view became part of QA. A saved Bugs tab opens as the QA tab.
       migrate: (persisted) => {
         const s = persisted as { byWs?: Record<string, Partial<WsState>> } | null;
         if (!s?.byWs) return persisted as UiState;

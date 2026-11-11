@@ -13,7 +13,7 @@ export function SweepRow({ sweep: s, onCancel }: { sweep: SweepView; onCancel: (
       <Spinner className="size-4 shrink-0" />
       <div className="min-w-0 flex-1">
         <div className="text-[12.5px] font-semibold">
-          {s.kind === "fix" ? `Fixing bugs: ${Math.min(s.done + s.failed + s.running, s.total)} of ${s.total}` : `Sweeping ${s.total} modules · ${s.lens}`}
+          Sweeping {s.total} modules · {s.lens}
         </div>
         <div className="text-[11.5px] text-fg-muted">
           {s.done} done, {s.running} running, {s.queued} waiting{s.failed > 0 && `, ${s.failed} could not start`}
@@ -28,8 +28,8 @@ export function SweepRow({ sweep: s, onCancel }: { sweep: SweepView; onCancel: (
         </div>
       </div>
       {s.queued > 0 && (
-        <Button size="xs" variant="ghost" onClick={onCancel} title={s.kind === "fix" ? "The fix running now finishes; the waiting bugs are not started" : "The running modules finish; the waiting ones are not started"}>
-          <X /> {s.kind === "fix" ? "Cancel" : "Stop"}
+        <Button size="xs" variant="ghost" onClick={onCancel} title="The running modules finish; the waiting ones are not started">
+          <X /> Stop
         </Button>
       )}
     </div>
@@ -42,7 +42,7 @@ export function useLabView() {
   const q = useLab(root);
   const actions = useLabActions(root);
   const findings = q.data?.findings ?? [];
-  const busy = actions.toRoadmap.isPending || actions.toSpec.isPending || actions.fix.isPending || actions.design.isPending || actions.setStatus.isPending || actions.fixAllBugs.isPending;
+  const busy = actions.toRoadmap.isPending || actions.toSpec.isPending || actions.fix.isPending || actions.design.isPending || actions.setStatus.isPending;
   return { root, q, state: q.data, actions, busy, fixBlockOf: (id: string) => fixBlock(findings, id) };
 }
 

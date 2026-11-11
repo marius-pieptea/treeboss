@@ -1,215 +1,272 @@
 /**
- * Pure logic of the QA panel: progress, which step is current, the bug draft a failed step becomes, the keyboard
- * map, how a plan's steps and proposals line up as rows, and the requests that carry the chosen engine and model.
- * No React and no fetching, so it is all unit-tested.
+ * Pure logic of the QA board: which feature a URL belongs to, the request each button sends, and what each cell,
+ * chip and line says. No React and no fetching, so it is all unit-tested.
  */
-import type { Who } from "@/components/agent-who";
-import type { BatchView, BugDraft, Coverage, Focus, NewPlanInput, Outcome, OutcomeState, Plan, PlanSource, PlanStep, PlanSummary, Proposal, QaSession, Run, RunCounts, RunStep, RunSummary, StepHistory, StepPath } from "./api";
+import { STAGES } from "./api";
+import type { Activity, BoardBug, BoardFeature, Batching, BugState, Driver, JobView, Outcome, OutcomeState, Pace, PipelineRequest, PipelineView, QaBoard, Scope, Stage, StageSettings } from "./api";
 
-export const STATES: OutcomeState[] = ["pass", "fail", "skip", "blocked", "pending"];
+const trimSlash = (p: string): string => p.replace(/\/+$/, "") || "/";
 
-export interface Progress {
-  counts: Record<OutcomeState, number>;
-  done: number;
-  total: number;
-}
-
-export function progress(run: Pick<Run, "steps">): Progress {
-  const counts: Record<OutcomeState, number> = { pending: 0, pass: 0, fail: 0, skip: 0, blocked: 0 };
-  for (const s of run.steps) counts[s.outcome.state]++;
-  return { counts, done: run.steps.length - counts.pending, total: run.steps.length };
-}
-
-export const currentStep = (run: Pick<Run, "steps">): RunStep | null => run.steps.find((s) => s.outcome.state === "pending") ?? null;
-
-/** Whether choosing `id` moves off the open step. Choosing the open one must not restart its recording window or clear what was typed. */
-export const switchesStep = (cursor: string | null, id: string | null): boolean => cursor !== id;
-
-const neighbour = (run: Pick<Run, "steps">, id: string, by: 1 | -1): RunStep | null => {
-  const i = run.steps.findIndex((s) => s.id === id);
-  return i < 0 ? null : (run.steps[i + by] ?? null);
-};
-export const nextStep = (run: Pick<Run, "steps">, id: string) => neighbour(run, id, 1);
-export const prevStep = (run: Pick<Run, "steps">, id: string) => neighbour(run, id, -1);
-
-/** The bug a failed step becomes: every action up to and including it, then what the preview recorded since. */
-export function bugDraftOf(run: Pick<Run, "steps">, stepId: string, recorded: string[]): BugDraft | null {
-  const i = run.steps.findIndex((s) => s.id === stepId);
-  if (i < 0) return null;
-  const step = run.steps[i]!;
-  return {
-    title: step.action,
-    kind: "functional",
-    steps: [...run.steps.slice(0, i + 1).map((s) => s.action), ...recorded.map((l) => `${l} (recorded)`)],
-    expected: step.expected,
-    actual: step.outcome.state === "fail" ? step.outcome.actual : "",
-    path: step.path,
-  };
-}
-
-export type KeyAction = "pass" | "fail" | "skip" | "blocked" | "prev" | "next" | "go";
-
-const KEYS: Record<string, KeyAction> = { p: "pass", f: "fail", s: "skip", b: "blocked", arrowup: "prev", arrowdown: "next", enter: "go" };
-
-/** `editable` is true when the key went to a text field: typing "p" there is not a pass. */
-export function keyFor(e: { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; editable?: boolean }): KeyAction | null {
-  if (e.editable || e.ctrlKey || e.metaKey || e.altKey) return null;
-  return KEYS[e.key.toLowerCase()] ?? null;
-}
-
-/** The faint last-run marker of each step. The daemon's history is the newest mark across all runs, so what the run on screen marked itself is left out. */
-export function markersOf(history: Record<string, StepHistory>, runId: string): Record<string, OutcomeState> {
-  const out: Record<string, OutcomeState> = {};
-  for (const [id, h] of Object.entries(history)) if (h.run !== runId) out[id] = h.outcome.state;
-  return out;
-}
-
-export const summaryProgress = (counts: RunCounts): Progress => {
-  const total = STATES.reduce((n, s) => n + counts[s], 0);
-  return { counts, done: total - counts.pending, total };
-};
-
-const same = (a: PlanStep, b: PlanStep) => a.id === b.id && a.action === b.action && a.expected === b.expected && a.path === b.path;
-
-/** True when the plan's steps are no longer the ones this run started with. */
-export function planChanged(run: Pick<Run, "steps">, plan: Pick<Plan, "steps">): boolean {
-  return run.steps.length !== plan.steps.length || run.steps.some((s, i) => !same(s, plan.steps[i]!));
-}
-
-export type Row = { kind: "step"; step: PlanStep; number: number } | { kind: "proposal"; proposal: Proposal };
-
-/** Steps in order, each proposal right after the step it names. One naming a step that is gone goes last. */
-export function rowsOf(steps: PlanStep[], proposals: Proposal[]): Row[] {
-  const ids = new Set(steps.map((s) => s.id));
-  const after = (key: string) => proposals.filter((p) => (p.after === "start" ? "start" : ids.has(p.after) ? p.after : "") === key).map((proposal): Row => ({ kind: "proposal", proposal }));
-  return [...after("start"), ...steps.flatMap((step, i): Row[] => [{ kind: "step", step, number: i + 1 }, ...after(step.id)]), ...after("")];
-}
-
-const PROBLEMS: OutcomeState[] = ["fail", "blocked"];
-
-/** "5/12 · 1 fail": only the states that need a look are named. */
-export function countsLine(p: Progress): string {
-  const bad = PROBLEMS.filter((s) => p.counts[s] > 0).map((s) => `${p.counts[s]} ${s}`);
-  return [`${p.done}/${p.total}`, ...bad].join(" · ");
-}
-
-/** "Run 3 · 5/12 · 1 fail". */
-export const runLine = (n: number, p: Progress): string => `Run ${n} · ${countsLine(p)}`;
-
-export const lastRunLine = (run: RunSummary | null): string => (run ? countsLine(summaryProgress(run.counts)) : "Not run yet");
-
-/** A plan's last touch is its newest edit or run, so a plan you just ran rises. */
-const activityOf = (p: PlanSummary) => Math.max(p.updatedAt, p.lastRun?.startedAt ?? 0);
-
-export const sortPlans = (plans: PlanSummary[]): PlanSummary[] => [...plans].sort((a, b) => activityOf(b) - activityOf(a) || a.title.localeCompare(b.title));
-
-export const runsNewestFirst = (runs: RunSummary[]): RunSummary[] => [...runs].sort((a, b) => b.startedAt - a.startedAt);
-
-/** The number of a run in a newest-first list: its place counted from the oldest, 0 when it is not there. */
-export function runNumber(newestFirst: RunSummary[], id: string): number {
-  const i = newestFirst.findIndex((r) => r.id === id);
-  return i < 0 ? 0 : newestFirst.length - i;
-}
-
-/** What a step's outcome says in words: what actually happened for a failure, the note otherwise. */
-export const outcomeDetail = (o: Outcome): string => (o.state === "fail" ? o.actual : o.state === "pending" ? "" : o.note);
-
-export const bugOf = (o: Outcome): string | null => (o.state === "fail" ? o.bug : null);
-
-/** The path of a preview URL, or null when it is not a page URL (about:blank, a typo). */
-export function pathOf(url: string): StepPath | null {
+/** The feature a page belongs to: the one whose `where` path is the longest prefix of the URL's path. Null on no match, a tie, or a URL that does not parse. */
+export function featureForUrl(features: readonly { id: string; where: string[] }[], url: string): string | null {
+  let path: string;
   try {
-    const u = new URL(url);
-    return u.protocol === "http:" || u.protocol === "https:" ? u.pathname : null;
+    path = trimSlash(new URL(url).pathname);
   } catch {
     return null;
   }
+  let best = -1;
+  let bestId: string | null = null;
+  let tie = false;
+  for (const f of features) {
+    let score = -1;
+    for (const raw of f.where) {
+      if (!raw.trim()) continue;
+      const w = trimSlash(raw.trim());
+      if (path === w || path.startsWith(w === "/" ? "/" : `${w}/`)) score = Math.max(score, w.length);
+    }
+    if (score < 0) continue;
+    if (score > best) {
+      best = score;
+      bestId = f.id;
+      tie = false;
+    } else if (score === best) tie = true;
+  }
+  return tie ? null : bestId;
 }
 
-export type FromKind = PlanSource["kind"];
+export const STAGE_LABEL: Record<Stage, string> = { map: "Map", plan: "Plan", test: "Test", fix: "Fix" };
 
-/** What "Draft from" chose, as the plan source the daemon takes. Null when the choice still lacks its input, and for Blank, which drafts nothing. */
-export function sourceOf(c: { kind: FromKind; page: StepPath | null; dir: string; base: string }): PlanSource | null {
+export interface RunForm {
+  stages: Stage[];
+  batching: Record<"plan" | "test" | "fix", Batching>;
+  /** Null: leave it to the server (scope "all" keeps plans, picked features redo them). */
+  replan: boolean | null;
+  pace: Pace;
+  baseUrl: string;
+  note: string;
+}
+
+export const NOTE_MAX = 4000;
+
+export const defaultStages = (mapExists: boolean): Stage[] => (mapExists ? ["plan", "test", "fix"] : [...STAGES]);
+
+export const defaultForm = (mapExists: boolean): RunForm => ({ stages: defaultStages(mapExists), batching: { plan: "each", test: "each", fix: "each" }, replan: null, pace: "auto", baseUrl: "", note: "" });
+
+/** `stages` with `stage` switched on or off, always in run order. */
+export const toggleStage = (stages: readonly Stage[], stage: Stage): Stage[] => STAGES.filter((s) => (s === stage ? !stages.includes(s) : stages.includes(s)));
+
+/** The wire driver, with nothing a pair does not have and nothing an agent left empty. */
+export function driverBody(d: Driver): Driver {
+  if (d.kind === "pair") return { kind: "pair", pairId: d.pairId };
+  const out: Extract<Driver, { kind: "agent" }> = { kind: "agent" };
+  for (const k of ["engine", "model", "effort", "agent"] as const) if (d[k]) out[k] = d[k];
+  return out;
+}
+
+function settings(stages: readonly Stage[], batching: (s: "plan" | "test" | "fix") => Batching, replan: boolean | null): StageSettings {
+  const out: StageSettings = {};
+  for (const s of STAGES) {
+    if (!stages.includes(s)) continue;
+    if (s === "map") out.map = {};
+    else if (s === "plan") out.plan = { batching: batching("plan"), ...(replan !== null ? { replan } : {}) };
+    else out[s] = { batching: batching(s) };
+  }
+  return out;
+}
+
+/** What every request carries besides its stages, scope, pace and driver. */
+function extras(form: RunForm): Pick<PipelineRequest, "note" | "baseUrl"> {
+  const note = form.note.trim().slice(0, NOTE_MAX);
+  const baseUrl = form.baseUrl.trim();
+  return { ...(note ? { note } : {}), ...(baseUrl ? { baseUrl } : {}) };
+}
+
+/** The Run button: the stages the form chose, over `scope`. */
+export function pipelineRequest(form: RunForm, scope: Scope, driver: Driver): PipelineRequest {
+  return { stages: settings(form.stages, (s) => form.batching[s], form.replan), scope, pace: form.pace, driver: driverBody(driver), ...extras(form) };
+}
+
+/** A button on one feature's row or pane: one stage for that feature, or the form's stages for it. */
+export function rowRequest(action: "plan" | "test" | "fix" | "stages", featureId: string, form: RunForm, driver: Driver): PipelineRequest {
+  const scope: Scope = { kind: "features", ids: [featureId] };
+  if (action === "stages") return pipelineRequest(form, scope, driver);
+  if (action === "plan") return { stages: { plan: { batching: "each", replan: true } }, scope, pace: "auto", driver: driverBody(driver), ...extras(form) };
+  const stages: StageSettings = action === "test" ? { test: { batching: "each" } } : { fix: { batching: form.batching.fix } };
+  return { stages, scope, pace: "auto", driver: driverBody(driver), ...extras(form) };
+}
+
+/** Fix on one bug's card. */
+export const bugFixRequest = (bugId: string, driver: Driver): PipelineRequest => ({ stages: { fix: { batching: "each" } }, scope: { kind: "bugs", ids: [bugId] }, pace: "auto", driver: driverBody(driver) });
+
+/** All of the features, or the picked ones in the order the map lists them. */
+export const scopeOf = (picked: readonly string[], features: readonly { id: string }[]): Scope => {
+  const ids = features.map((f) => f.id).filter((id) => picked.includes(id));
+  return ids.length ? { kind: "features", ids } : { kind: "all" };
+};
+
+export const scopeLabel = (scope: Scope, total: number): string => (total === 0 ? "No features yet" : scope.kind === "all" ? `All ${total} ${total === 1 ? "feature" : "features"}` : `${scope.ids.length} of ${total} picked`);
+
+/** Why Run cannot start now, in words; null when it can. */
+export function runBlock(i: { stages: readonly Stage[]; browser: boolean; featureCount: number; driverMissing: boolean }): string | null {
+  if (i.stages.length === 0) return "Pick at least one stage.";
+  if (!i.browser && i.stages.some((s) => s !== "fix")) return "The agent browser is off. Run `trb config set agent_browser on`.";
+  if (i.driverMissing) return "That Hydra pair no longer exists. Pick another.";
+  if (i.featureCount === 0 && !i.stages.includes("map") && i.stages.some((s) => s === "plan" || s === "test")) return "There is no feature map yet. Switch Map on.";
+  return null;
+}
+
+export function stageLine(s: PipelineView["stages"][number]): string {
+  const name = STAGE_LABEL[s.stage];
+  if (s.state === "skipped") return `${name} skipped`;
+  return [`${name} ${s.done}/${s.total}`, ...(s.problems > 0 ? [`${s.problems} ${s.problems === 1 ? "problem" : "problems"}`] : [])].join(" · ");
+}
+
+const BAD: OutcomeState[] = ["fail", "blocked"];
+
+/** "5/12 · 1 fail": only the states that need a look are named. */
+export function countsLine(counts: Record<OutcomeState, number>): string {
+  const total = counts.pending + counts.pass + counts.fail + counts.skip + counts.blocked;
+  return [`${total - counts.pending}/${total}`, ...BAD.filter((s) => counts[s] > 0).map((s) => `${counts[s]} ${s}`)].join(" · ");
+}
+
+export type RunPhase = "idle" | "running" | "stopping" | "held" | "ended";
+
+export const phaseOf = (p: PipelineView | null): RunPhase => (p ? p.control.kind : "idle");
+
+/** A pipeline in flight blocks a new one; the form is editable otherwise. */
+export const isBusy = (phase: RunPhase): boolean => phase === "running" || phase === "stopping" || phase === "held";
+
+/** What the one primary button is: Run when idle, Continue when held, none while running. */
+export const primaryOf = (phase: RunPhase): "run" | "continue" | null => (phase === "held" ? "continue" : phase === "running" || phase === "stopping" ? null : "run");
+
+/** The pipeline in one line for the run bar. */
+export function statusLine(p: PipelineView): string {
+  const c = p.control;
   switch (c.kind) {
-    case "page":
-      return c.page ? { kind: "page", path: c.page } : null;
-    case "spec":
-      return c.dir ? { kind: "spec", dir: c.dir } : null;
-    case "diff":
-      return c.base ? { kind: "diff", base: c.base, head: "HEAD" } : null;
-    case "text":
-      return { kind: "text" };
-    case "manual":
+    case "running":
+      return `Running · ${stageLine(p.stages.find((s) => s.stage === c.stage)!)}`;
+    case "stopping":
+      return "Stopping · running sessions finish";
+    case "held":
+      return `${STAGE_LABEL[c.after]} done · ${STAGE_LABEL[c.next]} next`;
+    case "ended": {
+      const problems = p.stages.reduce((n, s) => n + s.problems, 0);
+      const word = c.reason === "done" ? "Done" : c.reason === "stopped" ? "Stopped" : "Replaced";
+      return problems > 0 ? `${word} · ${problems} ${problems === 1 ? "problem" : "problems"}` : word;
+    }
+  }
+}
+
+export type Tone = "run" | "ok" | "warn" | "bad" | "idle";
+
+/** A dot, a word and an optional mono count: what a cell of the grid says. */
+export interface Cell {
+  tone: Tone;
+  word: string;
+  count?: string;
+  pair?: boolean;
+  title?: string;
+}
+
+function activityCell(a: Activity, verb: string): Cell | null {
+  switch (a.kind) {
+    case "working":
+      return { tone: "run", word: verb, pair: a.pair };
+    case "queued":
+      return { tone: "idle", word: "queued" };
+    case "problem":
+      return { tone: "bad", word: "problem", title: a.text };
+    case "idle":
       return null;
   }
 }
 
-/** Which agent start a QA view asks for, with what the route reads besides the engine and model. */
-export type AgentStart =
-  | { kind: "map"; note?: string; baseUrl?: string }
-  | { kind: "e2e"; features?: string[]; plans?: string[]; baseUrl?: string }
-  | { kind: "feature-plan"; id: string }
-  | { kind: "run"; slug: string; note?: string; baseUrl?: string }
-  | { kind: "explore"; slug: string; note?: string; baseUrl?: string }
-  | { kind: "suggest"; slug: string; focus: Focus[]; note: string };
-
-/** The POST that starts a QA agent session: the route's own fields, plus the chosen engine and model. */
-export function agentRequest(root: string, a: AgentStart & Who): { path: string; body: Record<string, unknown> } {
-  const base = `/api/qa/${root}`;
-  const plan = (slug: string) => `${base}/plans/${encodeURIComponent(slug)}`;
-  const who: Who = { engine: a.engine, model: a.model };
-  switch (a.kind) {
-    case "map":
-      return { path: `${base}/features/map`, body: { ...who, note: a.note, baseUrl: a.baseUrl } };
-    case "e2e":
-      return { path: `${base}/e2e`, body: { ...who, features: a.features, plans: a.plans, baseUrl: a.baseUrl } };
-    case "feature-plan":
-      return { path: `${base}/features/${encodeURIComponent(a.id)}/plan`, body: who };
-    case "run":
-      return { path: `${plan(a.slug)}/runs`, body: { ...who, agent: true, note: a.note, baseUrl: a.baseUrl } };
-    case "explore":
-      return { path: `${plan(a.slug)}/explore`, body: { ...who, note: a.note, baseUrl: a.baseUrl } };
-    case "suggest":
-      return { path: `${plan(a.slug)}/suggest`, body: { ...who, focus: a.focus, note: a.note } };
+export function planCell(f: Pick<BoardFeature, "plan" | "activity">): Cell {
+  const a = activityCell(f.activity.plan, "planning");
+  if (a) return a;
+  switch (f.plan.kind) {
+    case "ready":
+      return { tone: "ok", word: "ready", count: `${f.plan.steps} ${f.plan.steps === 1 ? "step" : "steps"}` };
+    case "broken":
+      return { tone: "bad", word: "broken", title: f.plan.problem };
+    case "missing":
+      return { tone: "idle", word: "no plan" };
   }
 }
 
-/** A new plan's body: the engine and model ride along only when the server starts an agent on it. */
-export function newPlanBody(v: NewPlanInput & Who): NewPlanInput & Who {
-  const { engine, model, ...input } = v;
-  const agent = v.explore === true || (v.from !== undefined && v.from.kind !== "manual");
-  return agent ? { ...input, engine, model } : input;
+export function testCell(f: Pick<BoardFeature, "test" | "activity">): Cell {
+  const a = activityCell(f.activity.test, "testing");
+  if (a) return a;
+  if (f.test.kind === "never") return { tone: "idle", word: "not run" };
+  const c = f.test.run.counts;
+  const total = c.pending + c.pass + c.fail + c.skip + c.blocked;
+  const count = `${total - c.pending}/${total}`;
+  if (c.fail > 0) return { tone: "bad", word: "fail", count };
+  if (c.blocked > 0) return { tone: "warn", word: "blocked", count };
+  if (c.pending > 0) return { tone: "warn", word: "partial", count };
+  return { tone: "ok", word: "pass", count };
 }
 
-/** What a running QA session is doing, for the "…" marker next to a plan. */
-export const SESSION_LABEL: Record<QaSession["kind"], string> = { draft: "Drafting…", suggest: "Suggesting…", explore: "Exploring…", run: "Agent running…", map: "Mapping features…" };
+export const isOpenBug = (b: Pick<BoardBug, "state">): boolean => b.state !== "fixed" && b.state !== "dismissed";
 
-export const sessionLabel = (s: Pick<QaSession, "kind" | "running"> | null): string | null => (s?.running ? SESSION_LABEL[s.kind] : null);
-
-/** A feature's coverage as a word and a badge tone: a status color always comes with the word. */
-export const COVERAGE: Record<Coverage, { label: string; tone: "neutral" | "red" | "amber" | "green" }> = {
-  "no-plan": { label: "no plan", tone: "neutral" },
-  "not-run": { label: "not run", tone: "neutral" },
-  failing: { label: "failing", tone: "red" },
-  partial: { label: "partly tested", tone: "amber" },
-  passing: { label: "passing", tone: "green" },
-};
-
-/** Worst first, so what needs attention is at the top; the map's own order breaks ties. */
-const COVERAGE_ORDER: Coverage[] = ["failing", "partial", "not-run", "no-plan", "passing"];
-export const sortFeatures = <T extends { coverage: Coverage }>(list: T[]): T[] => list.map((f, i) => ({ f, i })).sort((a, b) => COVERAGE_ORDER.indexOf(a.f.coverage) - COVERAGE_ORDER.indexOf(b.f.coverage) || a.i - b.i).map((x) => x.f);
-
-/** The plans an end-to-end run of these features covers: each linked plan that exists and has steps, once. */
-export function e2ePlansOf(features: Array<{ planInfo: Array<{ slug: string; exists: boolean; steps: number }> }>): string[] {
-  const out: string[] = [];
-  for (const f of features) for (const p of f.planInfo) if (p.exists && p.steps > 0 && !out.includes(p.slug)) out.push(p.slug);
-  return out;
+export function bugsCell(f: Pick<BoardFeature, "bugs" | "activity">): Cell {
+  const open = f.bugs.filter(isOpenBug);
+  const a = activityCell(f.activity.fix, "fixing");
+  if (a) return { ...a, ...(open.length ? { count: String(open.length) } : {}) };
+  if (open.length === 0) return f.bugs.length ? { tone: "ok", word: "fixed", count: String(f.bugs.length) } : { tone: "idle", word: "none" };
+  if (open.some((b) => b.state === "open")) return { tone: "bad", word: "open", count: String(open.length) };
+  if (open.some((b) => b.state === "fixing")) return { tone: "run", word: "fixing", count: String(open.length) };
+  return { tone: "warn", word: "check", count: String(open.length) };
 }
 
-/** "2 of 5 plans · now: checkout-flow" for a batch going; a finished one says how it ended. */
-export function batchLine(b: Pick<BatchView, "plans" | "next" | "current" | "running" | "cancelled" | "errors">): string {
-  const skipped = b.errors.length ? ` · ${b.errors.length} could not start` : "";
-  if (b.running && b.current) return `${b.next} of ${b.plans.length} plans · now: ${b.current}${skipped}`;
-  if (b.cancelled) return `Cancelled after ${b.next} of ${b.plans.length} plans${skipped}`;
-  return `Ran ${b.plans.length - b.errors.length} of ${b.plans.length} plans${skipped}`;
+export function mapCell(map: QaBoard["map"], features: number): Cell {
+  const a = activityCell(map.activity, "mapping");
+  if (a && a.tone !== "idle") return a;
+  if (map.problem) return { tone: "bad", word: "problem", title: map.problem };
+  if (!map.exists) return { tone: "idle", word: "not mapped" };
+  return { tone: "ok", word: "mapped", count: `${features} ${features === 1 ? "feature" : "features"}` };
 }
+
+export const BUG_TONE: Record<BugState, Tone> = { open: "bad", fixing: "run", "needs-check": "warn", fixed: "ok", dismissed: "idle" };
+export const BUG_WORD: Record<BugState, string> = { open: "open", fixing: "fixing", "needs-check": "needs check", fixed: "fixed", dismissed: "dismissed" };
+
+/** What a bug's card offers: Fix while it is open or waiting for a check, Reopen once it is closed. */
+export function bugOffers(state: BugState): { fix: boolean; close: boolean; reopen: boolean } {
+  return { fix: state === "open" || state === "needs-check", close: state === "open" || state === "needs-check", reopen: state === "fixed" || state === "dismissed" };
+}
+
+const STEP_TONE: Record<OutcomeState, Tone> = { pass: "ok", fail: "bad", blocked: "warn", skip: "idle", pending: "idle" };
+
+export const stepCell = (last: OutcomeState | null): Cell => (last && last !== "pending" ? { tone: STEP_TONE[last], word: last } : { tone: "idle", word: "not run" });
+
+/** The jobs worth a line in the strip: the ones going and the ones that came back without their work. */
+export const notableJobs = (jobs: readonly JobView[]): JobView[] => jobs.filter((j) => j.state !== "settled" || j.problem !== null || j.error !== null);
+
+/** "plan · checkout", "fix · 3 bugs", "map". */
+export function jobUnits(j: Pick<JobView, "stage" | "units">): string {
+  if (j.stage === "map") return "map";
+  if (j.units.length === 1) return `${j.stage} · ${j.units[0]}`;
+  return `${j.stage} · ${j.units.length} ${j.stage === "fix" ? "bugs" : "features"}`;
+}
+
+/** "just now", "5m ago", "2h ago", "3d ago". */
+export function since(at: number, now: number): string {
+  const s = Math.max(0, Math.round((now - at) / 1000));
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86_400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86_400)}d ago`;
+}
+
+/** The picked ids that are still in the map. */
+export const prunePicked = (picked: readonly string[], features: readonly { id: string }[]): string[] => picked.filter((id) => features.some((f) => f.id === id));
+
+/** The bug a notification points at, wherever the board shows it: its feature, or null for the unsorted list. */
+export function findBug(board: Pick<QaBoard, "features" | "bugsWithoutFeature">, id: string): { feature: string | null } | null {
+  for (const f of board.features) if (f.bugs.some((b) => b.id === id)) return { feature: f.id };
+  return board.bugsWithoutFeature.some((b) => b.id === id) ? { feature: null } : null;
+}
+
+/** What a step's outcome says in words: what actually happened for a failure, the note otherwise. */
+export const outcomeText = (o: Outcome): string => (o.state === "fail" ? o.actual : o.state === "pending" ? "" : o.note);

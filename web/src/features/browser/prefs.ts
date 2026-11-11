@@ -10,7 +10,6 @@ interface BrowserPrefs {
   /** Serve the preview through the inspecting proxy (element picking, console capture). */
   inspect: boolean;
   runOpen: boolean;
-  qaOpen: boolean;
   set(p: Partial<Omit<BrowserPrefs, "set">>): void;
 }
 
@@ -23,7 +22,6 @@ export const useBrowserPrefs = create<BrowserPrefs>()(
       fit: true,
       inspect: false,
       runOpen: false,
-      qaOpen: false,
       set: (p) => set({ ...p, ...(p.zoom !== undefined ? { zoom: clampZoom(p.zoom) } : {}) }),
     }),
     { name: "trb.browser.v1", version: 1 },

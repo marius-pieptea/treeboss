@@ -9,25 +9,24 @@
  *   GET    /api/lab/:root/sweep?lens=&scopes=&limit=   what a sweep would cover, with a token estimate (starts nothing)
  *   POST   /api/lab/:root/sweep                        { lens, scopes?, limit?, parallel?, note?, engine?, … }  one run per module, `parallel` (default 3) at a time
  *                                                      (the checklist lens is not swept from here: the checklist panel starts those)
- *   POST   /api/lab/:root/bugs                         a bug report from the browser (lab/capture.ts)  ->  201 the logged bug
- *   POST   /api/lab/:root/bugs/fix-all                 { engine?, model?, effort?, agent?, pairId? }  fix every open bug, one at a time; agent-logged bugs only once confirmed  ->  201 { sweep, sessions }
+ *   POST   /api/lab/:root/bugs                         a bug report from the browser, with feature? (a feature id) (lab/capture.ts)  ->  201 the logged bug
  *   POST   /api/lab/:root/sweeps/:id/cancel            stop starting new modules; running ones finish
  *   GET    /api/lab/:root/estimate?scope=              files and tokens in a scope
- *   PATCH  /api/lab/:root/findings/:id                 { status?, impact?, effort?, confirmed? }  (confirmed: a person vouches for a bug a QA agent logged; dismissing a checklist finding marks its item n/a; a required one is refused)
+ *   PATCH  /api/lab/:root/findings/:id                 { status?, impact?, effort?, feature? }  (feature: the feature id a bug is filed under, or null; dismissing a checklist finding marks its item n/a; a required one is refused)
  *   DELETE /api/lab/:root/findings/:id
  *   POST   /api/lab/:root/findings/:id/roadmap         { lane? }  add to the roadmap
  *   POST   /api/lab/:root/findings/:id/spec            start the spec workflow from it
- *   POST   /api/lab/:root/findings/:id/fix             { engine?, … }  a build session that implements it
+ *   POST   /api/lab/:root/findings/:id/fix             { engine?, … }  a build session that implements it (not a bug: bugs are fixed from the QA view)
  *   POST   /api/lab/:root/findings/:id/design          a design review focused on it
  */
 import { resolveRoot } from "../../workspaces";
 import { getSession, viewSession } from "../../sessions/manager";
-import { LENSES, listFindings, removeFinding, unconfirmedBug, type Finding } from "../../lab/findings";
+import { LENSES, listFindings, removeFinding, type Finding } from "../../lab/findings";
 import { LENS_DEFS, PICKABLE_LENSES } from "../../lab/lenses";
 import { patchLabFinding } from "../../checklists/findings";
-import { checkScope, discoverModules, estimateScope, findingToRoadmap, findingToSpec, fixFinding, listRuns, markRoadmapShipped, planSweep, reviewFindingDesign, runningFix, startLab, summaryOf, type LabOpts } from "../../lab/sessions";
+import { checkScope, discoverModules, estimateScope, findingToRoadmap, findingToSpec, fixFinding, listRuns, markRoadmapShipped, planSweep, reviewFindingDesign, startLab, summaryOf, type LabOpts } from "../../lab/sessions";
 import { db } from "../../db";
-import { cancelSweep, listSweeps, openFixSweep, startFixSweep, startSweep } from "../../lab/sweeps";
+import { cancelSweep, listSweeps, startSweep } from "../../lab/sweeps";
 import { logBug, parseBugReport } from "../../lab/capture";
 import { HttpError, json, type Ctx, type RouteModule } from "../http";
 
@@ -93,18 +92,6 @@ export const labRoutes: RouteModule = async (c: Ctx) => {
     return json({ sweepId: r.sweepId, plan: r.plan, sessions: r.sessions.map((s) => view(s.id)) }, 201);
   }
   if (rest === "bugs" && c.method === "POST") return json(await logBug(dir, parseBugReport(b)), 201);
-  if (rest === "bugs/fix-all" && c.method === "POST") {
-    const busy = runningFix(dir);
-    if (busy) throw new HttpError(409, `A fix for ${busy.findingId} is already running (${busy.sessionId}). Fixes share the project folder: wait for it to finish.`);
-    if (openFixSweep(dir)) throw new HttpError(409, "A fix-all run is already working through the bugs. Cancel it first, or wait for it.");
-    // A bug an agent logged waits for a person to confirm it: fix-all never turns a false alarm into a change.
-    const ids = listFindings(dir).filter((f) => f.lens === "bug" && !f.problem && !unconfirmedBug(f) && (f.status === "new" || f.status === "accepted")).map((f) => f.id);
-    if (!ids.length && listFindings(dir).some((f) => f.lens === "bug" && unconfirmedBug(f) && f.status === "new")) throw new HttpError(400, "The open bugs were all logged by a QA agent and are not confirmed yet. Confirm the real ones first.");
-    if (!ids.length) throw new HttpError(400, "There are no open bugs to fix.");
-    const r = startFixSweep(dir, ids, optsOf(b));
-    const sweep = listSweeps(dir).find((s) => s.id === r.sweepId)!;
-    return json({ sweep, sessions: r.sessions.map((s) => view(s.id)) }, 201);
-  }
   const sw = /^sweeps\/([^/]+)\/cancel$/.exec(rest);
   if (sw && c.method === "POST") {
     const r = cancelSweep(dir, decodeURIComponent(sw[1]!));
@@ -122,8 +109,9 @@ export const labRoutes: RouteModule = async (c: Ctx) => {
     const act = f[2];
     const reply = (finding: Finding, extra: Record<string, unknown> = {}) => json({ finding, ...extra });
     if (!act && c.method === "PATCH") {
-      if (b.confirmed !== undefined && typeof b.confirmed !== "boolean") throw new HttpError(400, "confirmed must be true or false.");
-      return reply(patchLabFinding(dir, id, { status: str(b.status) as any ?? undefined, impact: str(b.impact) as any ?? undefined, effort: str(b.effort) as any ?? undefined, confirmed: b.confirmed }));
+      if (b.confirmed !== undefined) throw new HttpError(400, "Unknown field confirmed.");
+      if (b.feature !== undefined && b.feature !== null && typeof b.feature !== "string") throw new HttpError(400, "feature must be a feature id or null.");
+      return reply(patchLabFinding(dir, id, { status: str(b.status) as any ?? undefined, impact: str(b.impact) as any ?? undefined, effort: str(b.effort) as any ?? undefined, feature: b.feature }));
     }
     if (!act && c.method === "DELETE") {
       removeFinding(dir, id);

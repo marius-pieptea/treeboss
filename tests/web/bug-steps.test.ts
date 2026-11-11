@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import vm from "node:vm";
 import { INSPECTOR_JS } from "../../src/preview/inspector";
-import { DIALOG_STEPS, MAX_STEPS, isStepMessage, moveItem, pushStep, stepLine, stepLines, type Step } from "../../web/src/features/browser/logic";
+import { DIALOG_STEPS, MAX_STEPS, MAX_TITLE, initialDraft, isStepMessage, moveItem, pushStep, stepLine, stepLines, type Step } from "../../web/src/features/browser/logic";
 
 describe("stepLine", () => {
   test("renders each kind of step as a sentence", () => {
@@ -235,5 +235,19 @@ describe("secrets in the address", () => {
     p.fire("popstate", {});
     expect(p.steps().at(-1)).toEqual({ kind: "navigate", url: "/gate#top" });
     expect(JSON.stringify(p.steps())).not.toContain("pin-4242");
+  });
+});
+
+describe("initialDraft", () => {
+  const prefill = { title: "Pay", kind: "functional" as const, steps: ["Open /cart", "Click Pay (recorded)"], expected: "A receipt", actual: "Blank" };
+  test("a prefill becomes the dialog's fields as given", () => {
+    expect(initialDraft(prefill, ["Go to /x"])).toEqual(prefill);
+  });
+  test("without one the dialog starts empty with the recorded steps", () => {
+    expect(initialDraft(undefined, ["Go to /x"])).toEqual({ title: "", kind: "functional", steps: ["Go to /x"], expected: "", actual: "" });
+  });
+  test("a title over the limit is cut so the server does not reject the report", () => {
+    expect(initialDraft({ ...prefill, title: "t".repeat(500) }, []).title).toHaveLength(MAX_TITLE);
+    expect(initialDraft({ ...prefill, steps: Array.from({ length: 60 }, (_, i) => `s${i}`) }, []).steps).toHaveLength(50);
   });
 });
