@@ -95,6 +95,8 @@ describe("the run bar", () => {
   test("the status line says where the pipeline is", () => {
     expect(statusLine(view({ kind: "running", stage: "plan" }, [stage("plan", { done: 3, total: 8, problems: 1 })]))).toBe("Running · Plan 3/8 · 1 problem");
     expect(statusLine(view({ kind: "held", after: "plan", next: "test" }))).toBe("Plan done · Test next");
+    expect(statusLine(view({ kind: "held", after: "map", next: "plan" }, [stage("map", { state: "done", problems: 1 })]))).toBe("Map: 1 problem · Plan next");
+    expect(statusLine(view({ kind: "held", after: "test", next: "fix" }, [stage("test", { state: "done", problems: 2 })]))).toBe("Test: 2 problems · Fix next");
     expect(statusLine(view({ kind: "stopping", stage: "test" }))).toBe("Stopping · running sessions finish");
     expect(statusLine(view({ kind: "ended", reason: "done", at: 1 }, [stage("plan", { problems: 1 }), stage("test", { problems: 1 })]))).toBe("Done · 2 problems");
     expect(statusLine(view({ kind: "ended", reason: "stopped", at: 1 }))).toBe("Stopped");

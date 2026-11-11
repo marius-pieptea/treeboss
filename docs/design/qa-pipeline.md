@@ -584,7 +584,7 @@ A job settles when `job.session` is set, `settledAt` is null and `treeIdle(job.s
 - **BROWSER**: today's `BROWSER` constant.
 - **BUGS**: today's `BUGS` constant, with "The bug starts unconfirmed" removed, plus: `Pass feature: <id> to bug_log when you are asked to (several features in one job).`
 - **OPEN_BUGS**: today's `openBugsBlock`.
-- **NOTE**: when non-empty, `\nThe operator's note:\n<note>\n`.
+- **NOTE**: not in the instructions. A non-empty note is the job's visible text, which `withInstructions` puts first, so the model reads it once.
 - **PLAN_FORMAT**, exactly:
 
 ```

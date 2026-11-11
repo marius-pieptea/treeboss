@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
 import { STAGES, bugPatchBody, refetchMs, type Driver, type PipelineView, type QaBoard } from "../../web/src/features/qa/api";
 import { bugFixRequest, countsLine, defaultForm, featureForUrl, pipelineRequest, rowRequest, scopeOf, stageLine, toggleStage, type RunForm } from "../../web/src/features/qa/logic";
 import { openQa, takeQaIntent } from "../../web/src/features/qa/open";
@@ -167,9 +166,8 @@ describe("the wire copy", () => {
   test("the stages are the contract's, in run order", () => {
     expect([...STAGES]).toEqual(["map", "plan", "test", "fix"]);
   });
-  const server = ["types", "pipeline"].map((n) => `${import.meta.dir}/../../src/qa/${n}.ts`).filter((p) => existsSync(p) && /export const STAGES\b/.test(readFileSync(p, "utf8")));
-  test.skipIf(server.length === 0)("the web STAGES equals the server STAGES", async () => {
-    const mod = await import(server[0]!);
+  test("the web STAGES equals the server STAGES", async () => {
+    const mod = await import("../../src/qa/types");
     expect([...STAGES]).toEqual([...mod.STAGES]);
   });
 });

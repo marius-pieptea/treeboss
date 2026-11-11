@@ -137,8 +137,11 @@ export function statusLine(p: PipelineView): string {
       return `Running · ${stageLine(p.stages.find((s) => s.stage === c.stage)!)}`;
     case "stopping":
       return "Stopping · running sessions finish";
-    case "held":
-      return `${STAGE_LABEL[c.after]} done · ${STAGE_LABEL[c.next]} next`;
+    case "held": {
+      const problems = p.stages.find((s) => s.stage === c.after)?.problems ?? 0;
+      const ended = problems > 0 ? `: ${problems} ${problems === 1 ? "problem" : "problems"}` : " done";
+      return `${STAGE_LABEL[c.after]}${ended} · ${STAGE_LABEL[c.next]} next`;
+    }
     case "ended": {
       const problems = p.stages.reduce((n, s) => n + s.problems, 0);
       const word = c.reason === "done" ? "Done" : c.reason === "stopped" ? "Stopped" : "Replaced";

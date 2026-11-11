@@ -40,8 +40,6 @@ function openBugs(open: PromptInputs["openBugs"]): string {
   return `These bugs are already open. When what you see is one of them, use its id instead of logging it again:\n${shown.join("\n")}${open.length > shown.length ? `\n(and ${open.length - shown.length} more)` : ""}`;
 }
 
-const NOTE = (note: string): string => (note ? `\nThe operator's note:\n${note}\n` : "");
-
 const PLAN_FORMAT = `---
 title: <feature title>
 ---
@@ -98,7 +96,7 @@ Rules: \`id:\` lowercase letters, digits and dashes, unique. Keep every existing
 line. Check each feature in the browser.
 ${BUGS}
 No feature is needed for bug_log in this job. Change no other file.
-${openBugs(i.openBugs)}${NOTE(i.note)}`;
+${openBugs(i.openBugs)}`;
   if (i.pairCap === null) return agent;
   return (
     agent +
@@ -137,7 +135,7 @@ ${walk} ${BUGS}${together ? "\nPass feature: <id> to bug_log, with the id of the
 ${write}
 ${PLAN_FORMAT}
 ${only}
-${openBugs(i.openBugs)}${NOTE(i.note)}`;
+${openBugs(i.openBugs)}`;
   if (i.pairCap === null) return agent;
   return (
     agent +
@@ -164,7 +162,7 @@ ${together ? "" : `Do the steps in order. Record each one with qa_record before 
 Do not record a step you did not try. Do not change any file.
 ${BUGS}
 ${openBugs(i.openBugs)}
-End with one paragraph: passed, failed, blocked, and the bug ids.${NOTE(i.note)}`;
+End with one paragraph: passed, failed, blocked, and the bug ids.`;
 }
 
 function fixPrompt(i: PromptInputs, ids: readonly BugId[]): string {
@@ -179,7 +177,7 @@ function fixPrompt(i: PromptInputs, ids: readonly BugId[]): string {
     ? `Reproduce it first in the browser at ${one.url}, following the steps${one.capture ? ` (read the capture ${one.capture} for the page state, console and requests)` : ""}. If you cannot reproduce it, set \`status: dismissed\` in ${one.path} and add one line under the body saying why, then stop. Otherwise fix the cause, not the symptom; keep the change to what the bug needs; for a visual bug follow DESIGN.md and design/tokens.css. Verify in the browser that it is fixed, then set \`status: shipped\` in ${one.path} and say what you changed. Do not commit.`
     : `For each bug, reproduce it first in the browser at its page, following its steps (read its evidence capture for the page state, console and requests). If you cannot reproduce it, set \`status: dismissed\` in its file and add one line under the body saying why, then go on to the next. Otherwise fix the cause, not the symptom; keep the change to what the bug needs; for a visual bug follow DESIGN.md and design/tokens.css. Verify in the browser that it is fixed, then set \`status: shipped\` in its file and say what you changed. Do not commit.`;
   const lead = together ? "Fix these bugs one at a time, in this order. Finish one (shipped or dismissed) before you\nstart the next." : "Fix this bug.";
-  const agent = `${lead}\n${ids.map(brief).join("\n\n")}\n${APP(i.baseUrl)}\n${reproduce}${NOTE(i.note)}`;
+  const agent = `${lead}\n${ids.map(brief).join("\n\n")}\n${APP(i.baseUrl)}\n${reproduce}`;
   if (i.pairCap === null) return agent;
   return (
     agent +

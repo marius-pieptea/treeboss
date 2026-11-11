@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { withInstructions } from "../src/design/sessions";
 import { jobPrompt, qaLabel, type PromptInputs } from "../src/qa/prompts";
 import type { Batching, BugId, Driver, Feature, FeatureId, Launch, Plan, Run, StepId } from "../src/qa/types";
 
@@ -42,10 +43,9 @@ const launches: Record<string, { each: Launch; together: Launch }> = {
 describe("every stage's prompt shares its blocks", () => {
   for (const stage of ["map", "plan", "test", "fix"] as const) {
     for (const batching of ["each", "together"] as Batching[]) {
-      test(`${stage} ${batching}: app, note and the open bugs`, () => {
+      test(`${stage} ${batching}: app and the open bugs`, () => {
         const t = text(inputs(launches[stage]![batching], { batching, note: "Focus on the new card form" }));
         expect(t).toContain("The app is running at http://localhost:3000.");
-        expect(t).toContain("The operator's note:\nFocus on the new card form");
         if (stage !== "fix") expect(t).toContain("- bug-old: Old bug (http://localhost:3000/x)");
         if (stage !== "fix") expect(t).toContain("browser_navigate");
       });
@@ -168,6 +168,16 @@ describe("visible text and title", () => {
   test("the operator's note is what the thread shows, else a line per stage", () => {
     expect(jobPrompt(inputs(launches.plan!.each, { note: "Check mobile" })).visible).toBe("Check mobile");
     expect(jobPrompt(inputs(launches.plan!.each)).visible).toBe("Write the test flows.");
+  });
+  test("the operator's note reaches the model once, in the combined prompt", () => {
+    for (const stage of ["map", "plan", "test", "fix"] as const) {
+      for (const batching of ["each", "together"] as Batching[]) {
+        const t = jobPrompt(inputs(launches[stage]![batching], { batching, note: "Focus on the new card form" }));
+        const prompt = withInstructions(t.visible, qaLabel(stage), t.instructions);
+        expect(prompt.split("Focus on the new card form").length - 1).toBe(1);
+        expect(prompt.startsWith("Focus on the new card form\n\n")).toBe(true);
+      }
+    }
   });
   test("the title names the stage, the first unit and how many more", () => {
     expect(jobPrompt(inputs(launches.plan!.each)).title).toBe("QA · plan · Checkout");
