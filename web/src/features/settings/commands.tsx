@@ -1,12 +1,12 @@
-import { BookOpen, FileDown, FolderPlus, Layers, ListChecks, Plus, Server, Smartphone, Stethoscope, UserRoundCog } from "lucide-react";
+import { BookOpen, FileDown, FolderPlus, Info, Layers, ListChecks, Plus, Server, Smartphone, Stethoscope, UserRoundCog } from "lucide-react";
 import { useCommandStore, type Command } from "@/lib/commands";
 import { queryClient } from "@/lib/queries";
 import { useUi } from "@/lib/store";
 import { keys } from "./data";
 import { useSettingsUi, type SettingsDialog } from "./ui-state";
 
-type Page = "agents" | "pairs" | "mcp" | "skills" | "engines" | "config" | "workspace" | "remote" | "verify" | "practices" | "templates" | "design-systems" | "checklists";
-const TITLES: Record<Page, string> = { agents: "Agents", pairs: "Hydra pairs", mcp: "MCP servers", skills: "Skills", engines: "Engines", config: "Settings", workspace: "Workspace", remote: "Remote access", verify: "Verification", practices: "Practices", templates: "Templates", "design-systems": "Design systems", checklists: "Checklists" };
+type Page = "agents" | "pairs" | "mcp" | "skills" | "engines" | "config" | "workspace" | "remote" | "verify" | "practices" | "templates" | "design-systems" | "checklists" | "about";
+const TITLES: Record<Page, string> = { agents: "Agents", pairs: "Hydra pairs", mcp: "MCP servers", skills: "Skills", engines: "Engines", config: "Settings", workspace: "Workspace", remote: "Remote access", verify: "Verification", practices: "Practices", templates: "Templates", "design-systems": "Design systems", checklists: "Checklists", about: "About" };
 
 export function openSettingsPage(page: Page): void {
   useUi.getState().openTab({ kind: "settings", page, title: TITLES[page] });
@@ -27,6 +27,7 @@ const commands: Command[] = [
   { id: "settings-checklists", group: "Settings", title: "Checklists: edit the launch checklists", icon: <ListChecks />, keywords: "launch checklist audit item deploy gate", run: () => openSettingsPage("checklists") },
   { id: "settings-practices", group: "Settings", title: "Practices: edit rules and checks for agents", icon: <ListChecks />, keywords: "practice pack rule check lint agent standard", run: () => openSettingsPage("practices") },
   { id: "settings-remote", group: "Settings", title: "Remote access: pair a phone…", icon: <Smartphone />, keywords: "mobile qr pair phone lan tailscale", run: () => openSettingsPage("remote") },
+  { id: "settings-about", group: "Settings", title: "Check for updates / About TreeBoss", icon: <Info />, keywords: "version update upgrade release", run: () => openSettingsPage("about") },
   { id: "settings-agents", group: "Settings", title: "Agents", icon: <UserRoundCog />, keywords: "specialized instructions persona", run: () => openSettingsPage("agents") },
   { id: "settings-add-mcp", group: "Settings", title: "Add MCP server…", icon: <Server />, keywords: "tools context7 playwright", run: withDialog("mcp", "mcp-add") },
   { id: "settings-import-mcp", group: "Settings", title: "Import MCP servers from Claude…", icon: <FileDown />, run: withDialog("mcp", "mcp-import") },

@@ -1,6 +1,7 @@
 import { lazy, Suspense } from "react";
 import type { Tab } from "@/lib/store";
 import { Spinner } from "@/components/ui/misc";
+import { AboutPage } from "./AboutPage";
 import { AgentsPage } from "./AgentsPage";
 import { ConfigPage } from "./ConfigPage";
 import { EnginesPage } from "./EnginesPage";
@@ -20,6 +21,8 @@ const SkillsPage = lazy(() => import("./SkillsPage").then((m) => ({ default: m.S
 
 export function SettingsTab({ tab }: { tab: Extract<Tab, { kind: "settings" }> }) {
   switch (tab.page) {
+    case "about":
+      return <AboutPage />;
     case "agents":
       return <AgentsPage />;
     case "pairs":

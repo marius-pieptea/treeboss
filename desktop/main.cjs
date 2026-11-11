@@ -190,9 +190,10 @@ app.whenReady().then(async () => {
       { role: "windowMenu" },
     ]),
   );
+  // Before the window opens, so its page can ask for the update state as soon as it loads.
+  startUpdater(() => win);
   try {
     await openWindow({ fresh: true, dir: folderFrom(pathArgs(process.argv), process.cwd()) });
-    startUpdater(() => win);
   } catch (err) {
     dialog.showErrorBox("TreeBoss could not start", String(err && err.message ? err.message : err));
     app.quit();

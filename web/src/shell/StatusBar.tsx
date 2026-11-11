@@ -2,12 +2,17 @@ import { ArrowDownUp, GitBranch, Terminal } from "lucide-react";
 import { useUi } from "@/lib/store";
 import { useGitStatus } from "@/lib/queries";
 import { useWorkspace } from "@/lib/workspace";
+import { useUpdate } from "@/lib/updates";
+import { updateChip } from "@/lib/updates-logic";
+import { openSettingsPage } from "@/features/settings/commands";
 import { CodegraphButton } from "@/features/codegraph/CodegraphButton";
 
 export function StatusBar() {
   const { root } = useWorkspace();
   const git = useGitStatus(root);
   const { setActivity, toggleBottom, bottomOpen } = useUi();
+  const { state: update } = useUpdate();
+  const chip = update ? updateChip(update) : null;
   const cell = "flex h-full items-center gap-1.5 px-2 outline-none transition-colors hover:bg-hover";
 
   return (
@@ -32,6 +37,11 @@ export function StatusBar() {
         <CodegraphButton />
       </div>
       <div className="flex items-stretch">
+        {update && (
+          <button onClick={() => openSettingsPage("about")} className={`${cell} ${chip ? "text-fg" : ""}`} title={chip ?? "About TreeBoss and updates"}>
+            {chip ?? `v${update.version}`}
+          </button>
+        )}
         <button onClick={toggleBottom} className={`${cell} ${bottomOpen ? "text-fg" : ""}`}>
           <Terminal className="size-3" /> Terminal
         </button>

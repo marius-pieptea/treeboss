@@ -1,5 +1,6 @@
 // Self-update from GitHub Releases (feed files latest*.yml are published by electron-builder).
-const { app, dialog, shell } = require("electron");
+// The updater owns a small state the window shows (status bar, toast, Settings > About): see web/src/lib/updates.ts.
+const { app, ipcMain, shell } = require("electron");
 
 const RELEASES_URL = "https://github.com/marius-pieptea/treeboss/releases/latest";
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
@@ -17,54 +18,60 @@ function canSelfInstall() {
   return false;
 }
 
-function startUpdater(getWindow) {
+/** status: idle | checking | available | downloading | ready | current | error. */
+const state = { status: "idle", version: app.getVersion(), latest: null, percent: 0, message: "", checkedAt: null, selfInstall: canSelfInstall(), enabled: false };
+let autoUpdater = null;
+let getWindow = () => null;
+
+function set(patch) {
+  Object.assign(state, patch);
+  const w = getWindow();
+  if (w && !w.isDestroyed()) w.webContents.send("update:changed", { ...state });
+}
+
+function check() {
+  if (!autoUpdater || state.status === "checking" || state.status === "downloading") return Promise.resolve({ ...state });
+  set({ status: "checking", message: "" });
+  return autoUpdater
+    .checkForUpdates()
+    .catch(() => {})
+    .then(() => ({ ...state }));
+}
+
+function registerIpc() {
+  ipcMain.handle("update:state", () => ({ ...state }));
+  ipcMain.handle("update:check", () => check());
+  ipcMain.on("update:install", () => {
+    if (autoUpdater && state.status === "ready") autoUpdater.quitAndInstall();
+  });
+  ipcMain.on("update:open-release", () => shell.openExternal(RELEASES_URL));
+}
+
+function startUpdater(getWin) {
+  getWindow = getWin;
+  registerIpc();
   // Dev runs and unpackaged builds have no feed; TRB_NO_UPDATE is the off switch.
   if (!app.isPackaged || process.env.TRB_NO_UPDATE) return;
-  let autoUpdater;
   try {
     ({ autoUpdater } = require("electron-updater"));
   } catch {
     return;
   }
-  const selfInstall = canSelfInstall();
-  autoUpdater.autoDownload = selfInstall;
-  autoUpdater.autoInstallOnAppQuit = selfInstall;
-  let announced = "";
-  const parent = () => {
-    const w = getWindow();
-    return w && !w.isDestroyed() ? w : undefined;
-  };
-  const ask = (options) => (parent() ? dialog.showMessageBox(parent(), options) : dialog.showMessageBox(options));
+  state.enabled = true;
+  autoUpdater.autoDownload = state.selfInstall;
+  autoUpdater.autoInstallOnAppQuit = state.selfInstall;
 
-  autoUpdater.on("update-available", async (info) => {
-    if (selfInstall || announced === info.version) return;
-    announced = info.version;
-    const r = await ask({
-      type: "info",
-      message: `TreeBoss ${info.version} is available`,
-      detail: `You have ${app.getVersion()}. This build updates by hand: download the new version from the release page.`,
-      buttons: ["Open release page", "Later"],
-      defaultId: 0,
-      cancelId: 1,
-    });
-    if (r.response === 0) shell.openExternal(RELEASES_URL);
+  autoUpdater.on("update-available", (info) => set({ status: state.selfInstall ? "downloading" : "available", latest: info.version, percent: 0, checkedAt: Date.now() }));
+  autoUpdater.on("update-not-available", () => set({ status: "current", latest: null, checkedAt: Date.now() }));
+  autoUpdater.on("download-progress", (p) => set({ status: "downloading", percent: Math.round(p.percent || 0) }));
+  // On "Later" the update installs when the app quits (autoInstallOnAppQuit).
+  autoUpdater.on("update-downloaded", (info) => set({ status: "ready", latest: info.version, percent: 100, checkedAt: Date.now() }));
+  // A failed check (offline, rate limit, no feed yet) shows in About but never interrupts the user.
+  autoUpdater.on("error", (e) => {
+    console.error("update check failed:", e && e.message ? e.message : e);
+    set({ status: "error", message: "Could not check for updates. Are you online?", checkedAt: Date.now() });
   });
-  autoUpdater.on("update-downloaded", async (info) => {
-    const r = await ask({
-      type: "info",
-      message: `TreeBoss ${info.version} is ready`,
-      detail: "Restart to finish updating. Running turns stop when the app restarts.",
-      buttons: ["Restart now", "Later"],
-      defaultId: 0,
-      cancelId: 1,
-    });
-    // On "Later" the update installs when the app quits (autoInstallOnAppQuit).
-    if (r.response === 0) autoUpdater.quitAndInstall();
-  });
-  // A failed check (offline, rate limit, no feed yet) is not worth interrupting the user for.
-  autoUpdater.on("error", (e) => console.error("update check failed:", e && e.message ? e.message : e));
 
-  const check = () => autoUpdater.checkForUpdates().catch(() => {});
   setTimeout(check, 15000);
   setInterval(check, CHECK_EVERY_MS).unref();
 }

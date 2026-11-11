@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Blocks, BookOpen, Cpu, FolderCog, Layers, LayoutTemplate, ListChecks, Palette, Search, ShieldCheck, SlidersHorizontal, Smartphone, UserRoundCog } from "lucide-react";
+import { Blocks, BookOpen, Cpu, FolderCog, Info, Layers, LayoutTemplate, ListChecks, Palette, Search, ShieldCheck, SlidersHorizontal, Smartphone, UserRoundCog } from "lucide-react";
 import { Input } from "@/components/ui/form";
 import { useAgents, useEngines, usePairs } from "@/lib/queries";
 import { useUi, useWs, type SettingsPage } from "@/lib/store";
@@ -59,6 +59,7 @@ export function SettingsSidebar() {
     { page: "practices", icon: <ListChecks />, label: "Practices", hint: "Rules and checks for agents" },
     { page: "remote", icon: <Smartphone />, label: "Remote access", hint: "Pair a phone, paired devices" },
     { page: "config", icon: <SlidersHorizontal />, label: "Daemon settings", hint: "Limits, timeouts, isolation" },
+    { page: "about", icon: <Info />, label: "About", hint: "Version and updates" },
   ];
   const searching = query.trim() !== "";
   const shownModules = modules.filter((m) => !searching || settingMatches(query, { key: m.page, label: m.label, group: "", help: m.hint }));

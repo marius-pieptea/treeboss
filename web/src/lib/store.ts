@@ -15,7 +15,7 @@ export type Activity = "sessions" | "explorer" | "search" | "git" | "specs" | "d
 export type RightTab = "agent" | "heads";
 export type BottomTab = "terminal" | "output";
 export type FactoryPage = "portfolio" | "autopilot" | "ship" | "releases" | "practices" | "mobile" | "signals" | "secrets";
-export type SettingsPage = "agents"| "pairs" | "mcp" | "skills" | "engines" | "config" | "workspace" | "remote" | "verify" | "practices" | "templates" | "design-systems" | "checklists";
+export type SettingsPage = "agents"| "pairs" | "mcp" | "skills" | "engines" | "config" | "workspace" | "remote" | "verify" | "practices" | "templates" | "design-systems" | "checklists" | "about";
 
 export type Tab =
   | { id: string; kind: "file"; root: string; path: string; title: string; preview?: boolean; line?: number }
