@@ -59,6 +59,17 @@ export function drainsOn(turnEnd: { sessionId: string; rootId: string; status: s
   return turnEnd.sessionId === turnEnd.rootId && turnEnd.status === "completed";
 }
 
+/**
+ * Why the daemon refused a send, when the refusal is about timing: the session's turn is still live ("working",
+ * e.g. an interrupt that has not landed yet) or still being recorded ("finishing"). Both are worth asking again a
+ * moment later; anything else is a real failure.
+ */
+export function busyKind(error: string): "working" | "finishing" | null {
+  if (/is still working/i.test(error)) return "working";
+  if (/is still finishing/i.test(error)) return "finishing";
+  return null;
+}
+
 /** One line for a strip row: the first line of the text, clipped. */
 export function preview(text: string, max = 90): string {
   const line = text.split("\n").find((l) => l.trim()) ?? "";

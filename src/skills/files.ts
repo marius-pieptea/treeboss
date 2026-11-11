@@ -72,7 +72,12 @@ export function walkSkillDir(root: string): SkillWalk {
         out.dirs.push(childRel);
         walk(abs, childRel, depth + 1);
       } else if (st.isFile()) {
-        if (st.size > MAX_SKILL_FILE_BYTES) throw new UserError(`${childRel} is ${(st.size / 1048576).toFixed(1)} MB; a single skill file may not exceed ${MAX_SKILL_FILE_BYTES / 1048576} MB.`);
+        // Usually a prebuilt binary or model the skill can fetch again (impeccable's engine has a download fallback):
+        // leave the one file out rather than refuse the whole skill.
+        if (st.size > MAX_SKILL_FILE_BYTES) {
+          out.skipped.push(`${childRel}: ${(st.size / 1048576).toFixed(1)} MB, over the ${MAX_SKILL_FILE_BYTES / 1048576} MB limit for one file; not copied`);
+          continue;
+        }
         out.files.push({ rel: childRel, abs, size: st.size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs });
         out.bytes += st.size;
         if (out.files.length > MAX_SKILL_FILES) throw new UserError(`More than ${MAX_SKILL_FILES} files: that is a repository, not a skill. Point at the skill's own folder.`);

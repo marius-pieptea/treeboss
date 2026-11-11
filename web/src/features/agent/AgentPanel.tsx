@@ -1,4 +1,4 @@
-import { type CSSProperties, useCallback, useEffect, useMemo, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRightLeft, AtSign, BookOpen, Bot, ClipboardCopy, CornerDownLeft, Eye, GitBranch, MoreHorizontal, Network, Pencil, Play, ShieldCheck, Slash, Square, SquareTerminal, Trash2, UserRoundCog, WifiOff, XCircle } from "lucide-react";
 import { toast } from "sonner";
@@ -217,6 +217,9 @@ function Header({ session, mode, onMode, onRename, onClose, onDelete, onStop, on
   );
 }
 
+/** How many of a session's own messages the transcript holds. */
+const userMessages = (items: TranscriptItem[], session: string) => items.filter((i) => i.type === "user" && i.session === session).length;
+
 /** Stands in for the session id until a new session has one. */
 const NEW_SESSION = "__new";
 
@@ -243,12 +246,25 @@ export function AgentPanel() {
   }, []);
 
   // The pending message ends when the transcript has it, or when the session it was sent to is left.
-  const userMessages = (items: TranscriptItem[], session: string) => items.filter((i) => i.type === "user" && i.session === session).length;
   useEffect(() => {
     if (!pending) return;
     if (pending.sid !== (sid ?? NEW_SESSION)) setPending(null);
     else if (userMessages(stream.transcript.items, sid ?? "") > pending.baseline) setPending(null);
   }, [pending, sid, stream.transcript.items]);
+
+  // A queued message going out (Send now, Enter on an empty composer, a turn ending) shows in the thread at once too.
+  const live = useRef({ sid, items: stream.transcript.items });
+  live.current = { sid, items: stream.transcript.items };
+  useEffect(() => {
+    const offStart = bus.on("queue-send-start", ({ sessionId, text }) => {
+      if (sessionId === live.current.sid) setPending({ sid: sessionId, text, baseline: userMessages(live.current.items, sessionId) });
+    });
+    const offFail = bus.on("queue-send-fail", ({ sessionId }) => setPending((p) => (p && p.sid === sessionId ? null : p)));
+    return () => {
+      offStart();
+      offFail();
+    };
+  }, []);
 
   // Drafts are kept per workspace and session (and survive the panel unmounting and a reload), so switching away and back does not lose a half-written message.
   const key = draftKey(useUi((s) => s.current), sid);
@@ -435,6 +451,7 @@ export function AgentPanel() {
         }}
         session={view}
         running={running}
+        sending={!!here && !!sid}
         draft={draft}
         setDraft={setDraft}
         onStarted={(id) => {

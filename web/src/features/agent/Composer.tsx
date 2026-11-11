@@ -20,7 +20,7 @@ import { cn, basename, dirname } from "@/lib/utils";
 import { Dialog, Popover } from "@/components/ui/overlay";
 import { ContextMeter } from "./ContextMeter";
 import { QueueStrip } from "./QueueStrip";
-import { useQueue } from "./queue-store";
+import { sendQueuedNow, useQueue } from "./queue-store";
 import { SessionModelChip } from "./SessionModel";
 import { AttachChips, useAttachments } from "@/features/attach/AttachPicker";
 import { ContextChips, useContextPalette } from "@/features/context/useContextPalette";
@@ -91,6 +91,8 @@ export interface ComposerProps {
   /** The open session, or null to start a new one. */
   session: SessionView | null;
   running: boolean;
+  /** A message to this session is on its way and its turn has not shown up yet: what you type now queues behind it. */
+  sending?: boolean;
   draft: string;
   setDraft: (v: string) => void;
   onStarted: (sessionId: string) => void;
@@ -110,7 +112,7 @@ interface Outgoing {
   design?: DesignIntent;
 }
 
-export function Composer({ session, running, draft, setDraft, onStarted, onNewSession, shelf = null, onOpenHead, onSendStart, onSendFail }: ComposerProps) {
+export function Composer({ session, running, sending = false, draft, setDraft, onStarted, onNewSession, shelf = null, onOpenHead, onSendStart, onSendFail }: ComposerProps) {
   const { workspace, root } = useWorkspace();
   // Read by the error handlers, which run after the draft has been cleared for the send.
   const draftRef = useRef(draft);
@@ -178,6 +180,10 @@ export function Composer({ session, running, draft, setDraft, onStarted, onNewSe
   useEffect(() => setAskPick(null), [eff.engine]);
   const problem = !session ? leadProblem(engines.data, eff.engine, !!pair) : null;
   const closed = session?.status === "closed";
+  // A message typed now waits its turn: one is running, or one was just sent and has not started yet.
+  const queueing = !!session && (running || sending);
+  // The id of the next queued message for this session, or null.
+  const nextQueued = useQueue((s) => (session ? (s.queue.find((m) => m.sessionId === session.id)?.id ?? null) : null));
 
   const agent = useMemo(() => agentsQuery.data?.find((a) => a.name === agentName) ?? null, [agentsQuery.data, agentName]);
   const enabledSkills = useMemo(() => (skillsQuery.data ?? []).filter((x) => x.enabled).map((x) => x.name), [skillsQuery.data]);
@@ -494,6 +500,11 @@ export function Composer({ session, running, draft, setDraft, onStarted, onNewSe
 
   const submit = () => {
     const text = draft.trim();
+    // Enter on an empty box with messages queued: send the next one now (stopping the turn, as its Send now does).
+    if (!text && !designIntent && session && nextQueued && !closed) {
+      void sendQueuedNow(nextQueued, queueing);
+      return;
+    }
     // `/design …`: a design turn now, or just the chip when there is nothing to send yet.
     const dc = parseDesignCommand(text);
     if (dc && !dc.send) {
@@ -512,8 +523,9 @@ export function Composer({ session, running, draft, setDraft, onStarted, onNewSe
     if (closed) return toast.error("This session is closed. Start a new one.");
     const why = design ? designProblem(design, body) : null;
     if (why) return toast.error(why);
-    // A turn is running: line the message up behind it. It goes out when the turn finishes cleanly.
-    if (running && session) {
+    // A turn is running, or about to (a send is still on its way): line the message up behind it. It goes out
+    // when the turn finishes cleanly.
+    if (queueing && session) {
       useQueue.getState().add({ sessionId: session.id, text: body, ...(design ? { design } : {}), ...(ctx.payload.length ? { context: ctx.payload } : {}) });
       setDesignIntent(null);
       setDraft("");
@@ -554,8 +566,17 @@ export function Composer({ session, running, draft, setDraft, onStarted, onNewSe
   };
 
   const busy = create.isPending || send.isPending;
-  const canSend = (draft.trim().length > 0 || (!!designIntent && !needsText(designIntent.kind))) && !busy && !closed;
-  const placeholder = closed ? "This session is closed" : running ? "Working… Enter queues your message for when it finishes" : designIntent ? placeholderFor(designIntent.kind) : modeView(modeControl.mode, modeControl.depth).placeholder(!!session);
+  // While a send is in flight the box still takes the next message: it queues.
+  const canSend = (draft.trim().length > 0 || (!!designIntent && !needsText(designIntent.kind))) && (!busy || queueing) && !closed;
+  const placeholder = closed
+    ? "This session is closed"
+    : nextQueued && !designIntent
+      ? running
+        ? "Working… Enter stops it and sends the next queued message"
+        : "Enter sends the next queued message"
+      : queueing
+        ? "Working… Enter queues your message for when it finishes"
+        : designIntent ? placeholderFor(designIntent.kind) : modeView(modeControl.mode, modeControl.depth).placeholder(!!session);
   const planning = modeControl.mode === "plan" && !closed;
   const asking = modeControl.mode === "ask" && !closed;
 
@@ -617,7 +638,7 @@ export function Composer({ session, running, draft, setDraft, onStarted, onNewSe
           </div>
         )}
 
-        {session && <QueueStrip sessionId={session.id} running={running} />}
+        {session && <QueueStrip sessionId={session.id} running={queueing} />}
         <div
           data-composer
           onDrop={ctx.onDrop}

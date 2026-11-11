@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { drainsOn, edit, enqueue, forSession, move, preview, putBack, remove, takeHead, type QueuedMessage } from "../../web/src/features/agent/queue-logic";
+import { busyKind, drainsOn, edit, enqueue, forSession, move, preview, putBack, remove, takeHead, type QueuedMessage } from "../../web/src/features/agent/queue-logic";
 
 const m = (id: string, sessionId = "s1", text = id): QueuedMessage => ({ id, sessionId, text });
 
@@ -52,5 +52,12 @@ describe("queue", () => {
   test("preview shows the first non-empty line, clipped", () => {
     expect(preview("\n  hello\nworld")).toBe("hello");
     expect(preview("x".repeat(100), 10)).toBe("xxxxxxxxx…");
+  });
+
+  test("busyKind tells a timing refusal (worth asking again) from a real failure", () => {
+    expect(busyKind("Session s_1 is still working. Wait for it, or interrupt it first.")).toBe("working");
+    expect(busyKind("Session s_1 is still finishing its last turn. Try again in a moment.")).toBe("finishing");
+    expect(busyKind("Session s_1 is closed. Open a new one.")).toBeNull();
+    expect(busyKind("Network error")).toBeNull();
   });
 });

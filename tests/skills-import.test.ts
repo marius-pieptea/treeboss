@@ -79,11 +79,15 @@ describe("a skill is a whole folder", () => {
     expect(() => walkSkillDir(root)).toThrow(/repository, not a skill/);
   });
 
-  test("an oversized single file is refused with its name", () => {
-    const root = tree({ "SKILL.md": md("big") });
-    fs.closeSync(fs.openSync(path.join(root, "model.bin"), "w"));
-    fs.truncateSync(path.join(root, "model.bin"), 11 * 1024 * 1024);
-    expect(() => walkSkillDir(root)).toThrow(/model\.bin is 11\.0 MB/);
+  test("an oversized single file is left out with its name; the rest of the skill still imports", () => {
+    const root = tree({ "SKILL.md": md("big"), "scripts/run.sh": "#!/bin/sh\n" });
+    fs.mkdirSync(path.join(root, "scripts/bin"), { recursive: true });
+    fs.closeSync(fs.openSync(path.join(root, "scripts/bin/engine.exe"), "w"));
+    fs.truncateSync(path.join(root, "scripts/bin/engine.exe"), 11 * 1024 * 1024);
+    const w = walkSkillDir(root);
+    expect(w.files.map((f) => f.rel).sort()).toEqual(["SKILL.md", "scripts/run.sh"]);
+    expect(w.bytes).toBeLessThan(1024);
+    expect(w.skipped.join(" ")).toMatch(/scripts\/bin\/engine\.exe: 11\.0 MB, over the 10 MB limit/);
   });
 
   test("materialising puts the whole folder where the engine looks, and takes it all back out", () => {
@@ -192,12 +196,15 @@ describe("importing with progress", () => {
 
   test("one bad skill fails alone and says why; the rest still import", async () => {
     const root = many(3);
-    fs.closeSync(fs.openSync(path.join(root, "s1", "huge.bin"), "w"));
-    fs.truncateSync(path.join(root, "s1", "huge.bin"), 11 * 1024 * 1024);
+    // Each file is under the one-file limit; together they pass the whole-skill limit, which still refuses the skill.
+    for (let i = 0; i < 6; i++) {
+      fs.closeSync(fs.openSync(path.join(root, "s1", `huge${i}.bin`), "w"));
+      fs.truncateSync(path.join(root, "s1", `huge${i}.bin`), 9 * 1024 * 1024);
+    }
     const job = startImport(root);
     const done = await until(() => (getImportJob(job.id)!.status === "done" ? getImportJob(job.id)! : null));
     expect(done.results.map((r) => r.status)).toEqual(["added", "failed", "added"]);
-    expect(done.results[1].reason).toContain("huge.bin");
+    expect(done.results[1].reason).toMatch(/larger than 50 MB/);
     expect(SkillStore.get("skill-1")).toBeNull();
   });
 

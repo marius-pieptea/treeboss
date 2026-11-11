@@ -35,6 +35,10 @@ export interface BusEvents {
   "checklists-open": void;
   /** A tab with unsaved edits was closed on purpose: the editor should drop its buffer. */
   "tab-discard": { id: string };
+  /** A queued message left the queue and is on its way (features/agent/queue-store.ts): the thread shows it at once. */
+  "queue-send-start": { sessionId: string; text: string };
+  /** That send failed and the message is back in the queue: the thread drops it. */
+  "queue-send-fail": { sessionId: string };
 }
 
 const handlers = new Map<string, Set<Handler<any>>>();
