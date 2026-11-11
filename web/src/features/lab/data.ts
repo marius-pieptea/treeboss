@@ -28,10 +28,10 @@ export interface Finding {
   /** `<checklistId>/<itemId>` for a finding raised by a failing checklist item. */
   checklist: string | null;
   /**
-   * Set exactly when `lens` is `bug`: the page, its evidence capture id, and how the screenshot was taken. `by: "agent"` is a
-   * bug a QA agent logged; it is unconfirmed (and left out of fix-all) until a person confirms it.
+   * Set exactly when `lens` is `bug`: the page, its evidence capture id, how the screenshot was taken, and the QA feature it
+   * belongs to. `by: "agent"` is a bug a QA agent logged.
    */
-  bug: { url: string; capture: string | null; shot: "desktop" | "rerender" | "agent" | "none"; kind: BugKind; by?: "agent"; confirmed?: boolean } | null;
+  bug: { url: string; capture: string | null; shot: "desktop" | "rerender" | "agent" | "none"; kind: BugKind; by?: "agent"; feature: string | null } | null;
   /** The session that wrote or last changed the file during a run. */
   session: string | null;
   /** The fix session started from this finding. */
@@ -71,8 +71,8 @@ export interface LabRun {
 
 export interface SweepView {
   id: string;
-  /** `fix` queues findings to fix one at a time; `run` queues modules for a lens. */
-  kind: "run" | "fix";
+  /** Sweeps queue modules for a lens. */
+  kind: "run";
   lens: string;
   total: number;
   queued: number;
@@ -155,11 +155,8 @@ export function useLabActions(root: string) {
   return {
     run: mut((v: RunInput) => post<{ session: SessionView }>(`${base}/run`, v)),
     sweep: mut((v: Who & { lens: Lens; scopes: string[]; limit: number; parallel: number; note?: string }) => post<{ sweepId: string; sessions: SessionView[]; plan: SweepPlan }>(`${base}/sweep`, v)),
-    fixAllBugs: mut((v: Who) => post<{ sweep: SweepView; sessions: SessionView[] }>(`${base}/bugs/fix-all`, v)),
     cancelSweep: mut((id: string) => post<{ sweep: SweepView }>(`${base}/sweeps/${encodeURIComponent(id)}/cancel`, {})),
     setStatus: mut((v: { id: string; status: Status }) => patch<{ finding: Finding }>(`${base}/findings/${encodeURIComponent(v.id)}`, { status: v.status })),
-    /** A person vouches for a bug a QA agent logged: fix-all may then pick it up. */
-    confirm: mut((id: string) => patch<{ finding: Finding }>(`${base}/findings/${encodeURIComponent(id)}`, { confirmed: true })),
     remove: mut((id: string) => del<{ ok: true }>(`${base}/findings/${encodeURIComponent(id)}`)),
     toRoadmap: mut((id: string) => post<{ finding: Finding; itemId: string }>(`${base}/findings/${encodeURIComponent(id)}/roadmap`, {})),
     toSpec: mut((v: FindingActionInput) => findingAction("spec", v)),

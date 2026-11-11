@@ -1,7 +1,8 @@
-import { openBugs, openChecklists, openFindings, openQa } from "@/features/lab/open";
+import { openChecklists, openFindings } from "@/features/lab/open";
+import { openQa } from "@/features/qa/open";
 import { openFactory } from "@/features/factory/open";
 import { openEmulator } from "@/features/emulator/open";
-import { ListChecks, ClipboardCheck, Tag,ShieldCheck, Bot, Bug, Brain, Factory, FlaskConical, Compass, FolderOpen, FolderPlus, GitBranch, GitPullRequest, Kanban, KeyRound, Layers, Palette, PanelBottom, PanelLeft, PanelRight, Radio, ScrollText, Search, Settings2, Smartphone, SquareTerminal, X, BookText, FilePlus2, Gavel, Sparkles, History, Fingerprint } from "lucide-react";
+import { ListChecks, ClipboardCheck, Tag,ShieldCheck, Bot, Brain, Factory, FlaskConical, Compass, FolderOpen, FolderPlus, GitBranch, GitPullRequest, Kanban, KeyRound, Layers, Palette, PanelBottom, PanelLeft, PanelRight, Radio, ScrollText, Search, Settings2, Smartphone, SquareTerminal, X, BookText, FilePlus2, Gavel, Sparkles, History, Fingerprint } from "lucide-react";
 import { useRegisterCommands, type Command } from "@/lib/commands";
 import { useUi, useWs } from "@/lib/store";
 import { bus } from "@/lib/bus";
@@ -39,9 +40,8 @@ export function useShellCommands(): void {
     { id: "lab-perf", group: "Lab", title: "Lab: sweep modules for performance…", icon: <FlaskConical />, keywords: "performance slow speed bundle sweep lab", run: () => openFindings({ lens: "perf", sweep: true }) },
     { id: "lab-ai", group: "Lab", title: "Lab: find AI opportunities…", icon: <FlaskConical />, keywords: "ai llm model automate lab", run: () => openFindings({ lens: "ai", scope: "project" }) },
     { id: "findings", group: "Lab", title: "Open Findings", icon: <FlaskConical />, keywords: "lab improve suggestions ideas sweep audit performance ui ai features review findings", run: () => openFindings() },
-    { id: "bugs", group: "Lab", title: "Open Bugs", icon: <Bug />, keywords: "lab bugs logged browser defects issues findings", run: () => openBugs() },
     { id: "checklists", group: "Lab", title: "Open Checklists", icon: <ListChecks />, keywords: "lab launch checklist prod deploy readiness required checks", run: () => openChecklists() },
-    { id: "qa", group: "Lab", title: "Open QA", icon: <ClipboardCheck />, keywords: "qa test plan manual testing runs", run: () => openQa() },
+    { id: "qa", group: "Lab", title: "Open QA", icon: <ClipboardCheck />, keywords: "qa test plan flows bugs fix features map", run: () => openQa() },
     { id: "emulator", group: "Mobile", title: "Open emulator", icon: <Smartphone />, keywords: "android phone device expo react native app avd", run: () => openEmulator() },
     { id: "design", group: "Design", title: "Open design system", icon: <Palette />, keywords: "design.md tokens colors typography brand theme", run: () => void ui.openTab({ kind: "design", title: "Design" }) },
     { id: "roadmap", group: "Roadmap", title: "Open roadmap", icon: <Kanban />, keywords: "board lanes timeline plan", run: () => void ui.openTab({ kind: "roadmap", title: "Roadmap" }) },

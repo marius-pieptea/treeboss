@@ -1,6 +1,6 @@
 import { lazy, memo, Suspense, useEffect, useRef } from "react";
 import { PaneBoundary } from "@/components/PaneBoundary";
-import { Brain, Bug, ClipboardCheck, FileDiff, Factory, Fingerprint, FlaskConical, Globe, Smartphone, GitCommitHorizontal, Kanban, ListChecks, ScrollText, Settings2, X, BookText, ClipboardList, History, Palette } from "lucide-react";
+import { Brain, ClipboardCheck, FileDiff, Factory, Fingerprint, FlaskConical, Globe, Smartphone, GitCommitHorizontal, Kanban, ListChecks, ScrollText, Settings2, X, BookText, ClipboardList, History, Palette } from "lucide-react";
 import { useUi, useWs, type Tab } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { ContextMenu } from "@/components/ui/overlay";
@@ -20,7 +20,6 @@ const SessionTab = lazy(() => import("@/features/session/SessionTab").then((m) =
 const RoadmapTab = lazy(() => import("@/features/roadmap/RoadmapTab").then((m) => ({ default: m.RoadmapTab })));
 const DesignTab = lazy(() => import("@/features/design/DesignTab").then((m) => ({ default: m.DesignTab })));
 const FindingsTab = lazy(() => import("@/features/lab/FindingsTab").then((m) => ({ default: m.FindingsTab })));
-const BugsTab = lazy(() => import("@/features/lab/BugsTab").then((m) => ({ default: m.BugsTab })));
 const EmulatorView = lazy(() => import("@/features/emulator/EmulatorView").then((m) => ({ default: m.EmulatorView })));
 const QaTab = lazy(() => import("@/features/qa/QaTab").then((m) => ({ default: m.QaTab })));
 const ChecklistsTab = lazy(() => import("@/features/lab/ChecklistsTab").then((m) => ({ default: m.ChecklistsTab })));
@@ -63,8 +62,6 @@ function TabIcon({ tab }: { tab: Tab }) {
       return <Palette className="size-3.5 text-accent" />;
     case "findings":
       return <FlaskConical className="size-3.5 text-accent" />;
-    case "bugs":
-      return <Bug className="size-3.5 text-accent" />;
     case "checklists":
       return <ListChecks className="size-3.5 text-accent" />;
     case "qa":
@@ -169,8 +166,6 @@ function TabContent({ tab }: { tab: Tab }) {
       return <DesignTab />;
     case "findings":
       return <FindingsTab />;
-    case "bugs":
-      return <BugsTab />;
     case "checklists":
       return <ChecklistsTab />;
     case "qa":

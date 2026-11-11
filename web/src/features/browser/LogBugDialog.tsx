@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Plus, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -8,7 +8,9 @@ import { Field, Input, Select, Switch, Textarea, type Option } from "@/component
 import { Badge } from "@/components/ui/misc";
 import { Dialog } from "@/components/ui/overlay";
 import { useIssues } from "../run/data";
-import { openBugs } from "../lab/open";
+import { useQaBoard } from "../qa/api";
+import { featureForUrl } from "../qa/logic";
+import { openQa } from "../qa/open";
 import { BUG_KINDS, type BugKind } from "../lab/logic";
 import type { Shot } from "./capture";
 import { MAX_BUG_STEP as MAX_STEP, MAX_BUG_STEPS as MAX_STEPS, MAX_TITLE, initialDraft, moveItem, type BugPrefill } from "./logic";
@@ -28,10 +30,11 @@ export interface LoggedBug {
 }
 
 /** The body of POST /api/lab/:root/bugs. */
-export function bugBody(i: { title: string; kind: BugKind; steps: string[]; expected: string; actual: string; url: string; port: number | null; shot: Shot | null; screenshot: boolean; console: boolean; logs: boolean }) {
+export function bugBody(i: { title: string; kind: BugKind; feature: string | null; steps: string[]; expected: string; actual: string; url: string; port: number | null; shot: Shot | null; screenshot: boolean; console: boolean; logs: boolean }) {
   return {
     title: i.title.trim(),
     kind: i.kind,
+    feature: i.feature,
     steps: i.steps.map((l) => l.trim().slice(0, MAX_STEP)).filter(Boolean).slice(0, MAX_STEPS),
     expected: i.expected.trim(),
     actual: i.actual.trim(),
@@ -57,8 +60,11 @@ function Toggle({ label, hint, checked, onChange }: { label: string; hint?: stri
 export function LogBugDialog({ open, onOpenChange, root, url, port, shot, steps, prefill, onLogged }: { open: boolean; onOpenChange: (o: boolean) => void; root: string; url: string; port: number | null; shot: Shot | null; steps: string[]; prefill?: BugPrefill; onLogged?: (findingId: string | null) => void }) {
   const qc = useQueryClient();
   const issues = useIssues(port, open);
+  const features = useQaBoard(open ? root : null).data?.features;
   const [title, setTitle] = useState("");
   const [kind, setKind] = useState<BugKind>("functional");
+  const [feature, setFeature] = useState("");
+  const featureTouched = useRef(false);
   const [lines, setLines] = useState<Array<{ id: number; text: string }>>([]);
   const nextId = useRef(0);
   const [expected, setExpected] = useState("");
@@ -74,6 +80,7 @@ export function LogBugDialog({ open, onOpenChange, root, url, port, shot, steps,
     const d = initialDraft(prefill, steps);
     setTitle(d.title);
     setKind(d.kind);
+    featureTouched.current = false;
     setLines(d.steps.map((text) => ({ id: nextId.current++, text })));
     setExpected(d.expected);
     setActual(d.actual);
@@ -84,6 +91,11 @@ export function LogBugDialog({ open, onOpenChange, root, url, port, shot, steps,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
+  useEffect(() => {
+    if (open && features && !featureTouched.current) setFeature(featureForUrl(features, url) ?? "");
+  }, [open, features, url]);
+
+  const featureOptions = useMemo<Option[]>(() => [{ value: "", label: "No feature" }, ...(features ?? []).map((f) => ({ value: f.id, label: f.title, hint: f.id }))], [features]);
   const count = issues.data?.count ?? issues.data?.issues.length ?? 0;
   const cancel = () => {
     onLogged?.(null);
@@ -94,11 +106,11 @@ export function LogBugDialog({ open, onOpenChange, root, url, port, shot, steps,
     setBusy(true);
     setError(null);
     try {
-      const r = await post<LoggedBug>(`/api/lab/${root}/bugs`, bugBody({ title, kind, steps: lines.map((l) => l.text), expected, actual, url, port, shot, screenshot, console: console_, logs }));
+      const r = await post<LoggedBug>(`/api/lab/${root}/bugs`, bugBody({ title, kind, feature: feature || null, steps: lines.map((l) => l.text), expected, actual, url, port, shot, screenshot, console: console_, logs }));
       void qc.invalidateQueries({ queryKey: ["lab", root] });
       onLogged?.(r.finding.id);
       onOpenChange(false);
-      toast.success("Bug logged", { description: r.shotNote ?? r.finding.title, action: { label: "Open bugs", onClick: () => openBugs() } });
+      toast.success("Bug logged", { description: r.shotNote ?? r.finding.title, action: { label: "Open in QA", onClick: () => openQa({ bug: r.finding.id }) } });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -145,6 +157,9 @@ export function LogBugDialog({ open, onOpenChange, root, url, port, shot, steps,
         </Field>
         <Field label="Kind">
           <Select value={kind} onChange={(v) => BUG_KINDS.includes(v as BugKind) && setKind(v as BugKind)} options={KIND_OPTIONS} aria-label="Kind of bug" />
+        </Field>
+        <Field label="Feature" hint="The QA feature this bug belongs to, matched from the page.">
+          <Select value={feature} onChange={(v) => { featureTouched.current = true; setFeature(v); }} options={featureOptions} placeholder="No feature" aria-label="Feature the bug belongs to" />
         </Field>
         <Field label="Steps to reproduce" hint="Recorded from what you did in the preview. Edit, reorder or add lines.">
           <div className="flex flex-col gap-1.5">

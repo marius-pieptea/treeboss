@@ -27,7 +27,7 @@ describe("saved tabs from before the checklists moved to Lab", () => {
   });
 });
 
-describe("saved Lab tab from before Findings, Bugs and Checklists became views", () => {
+describe("saved Lab tab from before Findings and Checklists became views", () => {
   test("a lab tab becomes the Findings tab", () => {
     const saved = [{ id: "lab", kind: "lab", title: "Lab" }];
     expect(migrateSavedTabs(saved)).toEqual([{ id: "findings", kind: "findings", title: "Findings" }]);
@@ -39,7 +39,7 @@ describe("saved Lab tab from before Findings, Bugs and Checklists became views",
   });
 
   test("a workspace with no lab tab is unchanged", () => {
-    const ws = { tabs: [{ id: "bugs", kind: "bugs", title: "Bugs" }], activeTab: "bugs", history: ["bugs"] };
+    const ws = { tabs: [{ id: "roadmap", kind: "roadmap", title: "Roadmap" }], activeTab: "roadmap", history: ["roadmap"] };
     expect(migrateSavedWs(ws)).toEqual(ws);
   });
 
@@ -49,5 +49,32 @@ describe("saved Lab tab from before Findings, Bugs and Checklists became views",
     expect(out.tabs.map((t) => t.id)).toEqual(["findings"]);
     expect(out.history).toEqual(["findings"]);
     expect(out.activeTab).toBe("findings");
+  });
+});
+
+describe("saved Bugs tab from before Bugs became part of QA", () => {
+  const qa = { id: "qa", kind: "qa", title: "QA" };
+
+  test("a bugs tab becomes the QA tab", () => {
+    expect(migrateSavedTabs([{ id: "bugs", kind: "bugs", title: "Bugs" }])).toEqual([qa]);
+  });
+
+  test("the workspace's active tab and history follow the renamed id", () => {
+    const ws = { tabs: [{ id: "roadmap", kind: "roadmap", title: "Roadmap" }, { id: "bugs", kind: "bugs", title: "Bugs" }], activeTab: "bugs", history: ["bugs", "roadmap"] };
+    expect(migrateSavedWs(ws)).toEqual({ tabs: [{ id: "roadmap", kind: "roadmap", title: "Roadmap" }, qa], activeTab: "qa", history: ["qa", "roadmap"] });
+  });
+
+  test("a state with both a QA and a Bugs tab keeps one QA tab, whichever came first", () => {
+    for (const tabs of [[qa, { id: "bugs", kind: "bugs", title: "Bugs" }], [{ id: "bugs", kind: "bugs", title: "Bugs" }, qa]]) {
+      const out = migrateSavedWs({ tabs, activeTab: "bugs", history: ["bugs", "qa", "roadmap"] });
+      expect(out.tabs).toEqual([qa]);
+      expect(out.activeTab).toBe("qa");
+      expect(out.history).toEqual(["qa", "roadmap"]);
+    }
+  });
+
+  test("a state that already has a QA tab and no Bugs tab is unchanged", () => {
+    const ws = { tabs: [qa], activeTab: "qa", history: ["qa"] };
+    expect(migrateSavedWs(ws)).toEqual(ws);
   });
 });

@@ -29,9 +29,8 @@ export interface BusEvents {
   "docs-new-adr": void;
   "docs-generate": void;
   "roadmap-new-item": void;
-  /** The Findings, Bugs and Checklists views pick up the intent features/lab/open.ts left for them. */
+  /** The Findings and Checklists views pick up the intent features/lab/open.ts left for them. */
   "findings-open": void;
-  "bugs-open": void;
   "checklists-open": void;
   /** The QA view picks up the intent features/qa/open.ts left for it. */
   "qa-open": void;

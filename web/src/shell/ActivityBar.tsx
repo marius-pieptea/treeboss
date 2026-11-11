@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { Bot, Bug, ClipboardCheck, Factory, FlaskConical, ListChecks, Files, GitBranch, Kanban, Palette, ScrollText, Search, Settings2, BookText, Fingerprint, Smartphone } from "lucide-react";
+import { Bot, ClipboardCheck, Factory, FlaskConical, ListChecks, Files, GitBranch, Kanban, Palette, ScrollText, Search, Settings2, BookText, Fingerprint, Smartphone } from "lucide-react";
 import { useUi, useWs, type Activity } from "@/lib/store";
 import { openFactory } from "@/features/factory/open";
 import { openEmulator } from "@/features/emulator/open";
-import { openBugs, openChecklists, openFindings, openQa } from "@/features/lab/open";
+import { openChecklists, openFindings } from "@/features/lab/open";
+import { openQa } from "@/features/qa/open";
 import { useLabCounts } from "@/features/lab/data";
 import { useEvidenceSwitches } from "@/features/evidence/data";
 import { cn } from "@/lib/utils";
@@ -20,8 +21,8 @@ const ITEMS: Array<{ id: Activity; label: string; icon: React.ReactNode; shortcu
   { id: "docs", label: "Docs", icon: <BookText /> },
 ];
 
-type TabView = "roadmap" | "design" | "findings" | "bugs" | "checklists" | "qa" | "emulator" | "evidence" | "factory";
-const TAB_VIEWS: readonly string[] = ["roadmap", "design", "findings", "bugs", "checklists", "qa", "emulator", "evidence", "factory"];
+type TabView = "roadmap" | "design" | "findings" | "checklists" | "qa" | "emulator" | "evidence" | "factory";
+const TAB_VIEWS: readonly string[] = ["roadmap", "design", "findings", "checklists", "qa", "emulator", "evidence", "factory"];
 
 const isTabView = (id: string | null): id is TabView => id !== null && TAB_VIEWS.includes(id);
 
@@ -50,7 +51,6 @@ export function ActivityBar({ changes, runningHeads }: { changes: number; runnin
             if (id === "roadmap") openTab({ kind: "roadmap", title: "Roadmap" });
             else if (id === "design") openTab({ kind: "design", title: "Design" });
             else if (id === "findings") openFindings();
-            else if (id === "bugs") openBugs();
             else if (id === "checklists") openChecklists();
             else if (id === "qa") openQa();
             else if (id === "emulator") openEmulator();
@@ -77,9 +77,8 @@ export function ActivityBar({ changes, runningHeads }: { changes: number; runnin
       {item("roadmap", "Roadmap", <Kanban />, undefined)}
       {item("design", "Design", <Palette />, undefined)}
       {item("findings", "Findings", <FlaskConical />, undefined, countBadge(labCounts?.open ?? 0))}
-      {item("bugs", "Bugs", <Bug />, undefined, countBadge(labCounts?.bugs ?? 0))}
       {item("checklists", "Checklists", <ListChecks />, undefined)}
-      {item("qa", "QA", <ClipboardCheck />, undefined)}
+      {item("qa", "QA", <ClipboardCheck />, undefined, countBadge(labCounts?.bugs ?? 0))}
       {item("emulator", "Emulator", <Smartphone />, undefined)}
       {item("factory", "Factory", <Factory />, undefined)}
       {item("evidence", "Evidence", <Fingerprint />, undefined, undefined, !evidenceOn)}

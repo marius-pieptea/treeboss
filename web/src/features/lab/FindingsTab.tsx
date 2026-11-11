@@ -309,10 +309,10 @@ export function FindingsTab() {
         <Textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Optional: what to focus on (“checkout flow”, “startup time”)" aria-label="Focus" />
       </section>
 
-      {state.sweeps.some((s) => s.kind !== "fix" && (s.running > 0 || s.queued > 0)) && (
+      {state.sweeps.some((s) => s.running > 0 || s.queued > 0) && (
         <section className="flex flex-col gap-2" aria-label="Sweeps in progress">
           {state.sweeps
-            .filter((s) => s.kind !== "fix" && (s.running > 0 || s.queued > 0))
+            .filter((s) => s.running > 0 || s.queued > 0)
             .map((s) => (
               <SweepRow key={s.id} sweep={s} onCancel={() => actions.cancelSweep.mutate(s.id)} />
             ))}
