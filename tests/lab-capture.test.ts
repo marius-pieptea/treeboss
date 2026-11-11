@@ -91,6 +91,19 @@ describe("parseBugReport kind and steps", () => {
   });
 });
 
+describe("parseBugReport feature", () => {
+  test("absent and null are no feature; a feature id is kept", () => {
+    expect(parseBugReport(GOOD).feature).toBeNull();
+    expect(parseBugReport({ ...GOOD, feature: null }).feature).toBeNull();
+    expect(parseBugReport({ ...GOOD, feature: "checkout" }).feature).toBe("checkout");
+    expect(parseBugReport({ ...GOOD, feature: "a".repeat(60) }).feature).toBe("a".repeat(60));
+  });
+
+  test("anything that is not a feature id is a 400", () => {
+    for (const feature of ["Checkout", "", "-x", "has space", "a".repeat(61), 3, ["cart"]]) rejects({ ...GOOD, feature }, /feature must be a feature id\./);
+  });
+});
+
 describe("excerpt", () => {
   test("keeps the newest lines inside the byte cap and counts them", () => {
     const lines = Array.from({ length: 500 }, (_, i) => `line ${String(i).padStart(4, "0")} ${"x".repeat(40)}`);
@@ -168,7 +181,7 @@ describe("logBug", () => {
     const out = await logBug(root, report({ shot: { kind: "desktop", png: PNG } }));
     for (const f of [readFinding(root, out.finding.id), listFindings(root).find((x) => x.id === out.finding.id)!]) {
       expect(f.lens).toBe("bug");
-      expect(f.bug).toEqual({ url: "http://localhost:4000/", capture: out.capture!.id, shot: "desktop", kind: "functional" });
+      expect(f.bug).toEqual({ url: "http://localhost:4000/", capture: out.capture!.id, shot: "desktop", kind: "functional", feature: null });
       expect(f.problem).toBeNull();
       expect(f.missing).toEqual([]);
       expect(f.evidence).toEqual([]);
@@ -197,6 +210,22 @@ describe("logBug", () => {
     expect(only.finding.body).toBe("## Steps to reproduce\n\n1. Go to /");
     const bare = await logBug(root, report({ actual: "" }));
     expect(bare.finding.body).toBe("Button is dead");
+  });
+
+  test("a logged bug is filed under its feature, and an agent's bug carries found_by but no confirmed line", async () => {
+    const root = makeDir();
+    const filed = await logBug(root, report({ feature: "checkout" }));
+    expect(filed.finding.bug).toMatchObject({ feature: "checkout" });
+    expect(readFinding(root, filed.finding.id).bug?.feature).toBe("checkout");
+    const plain = await logBug(root, report({ title: "Other bug" }));
+    expect(plain.finding.bug).toMatchObject({ feature: null });
+    expect(plain.finding.bug).not.toHaveProperty("by");
+    const agent = await logBug(root, report({ title: "Agent bug", byAgent: true, feature: "cart" }));
+    expect(agent.finding.bug).toEqual({ url: "http://localhost:4000/", capture: null, shot: "none", kind: "functional", by: "agent", feature: "cart" });
+    const file = fs.readFileSync(path.join(root, agent.finding.path), "utf8");
+    expect(file).toMatch(/^found_by: agent$/m);
+    expect(file).toMatch(/^feature: cart$/m);
+    expect(file).not.toContain("confirmed");
   });
 
   test("an empty console and log still write the finding, with no evidence item", async () => {

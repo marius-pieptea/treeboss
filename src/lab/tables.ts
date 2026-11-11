@@ -38,8 +38,9 @@ export function tables(): void {
   const sweepCols = new Set((db().prepare("PRAGMA table_info(lab_sweeps)").all() as Array<{ name: string }>).map((c) => c.name));
   // The last reason a module could not be started, shown on the sweep: a failure is no longer only a count.
   if (!sweepCols.has("last_error")) db().exec(`ALTER TABLE lab_sweeps ADD COLUMN last_error TEXT`);
-  // 'run' sweeps queue module scopes; 'fix' sweeps queue finding ids and start one fix at a time.
+  // Only 'run' sweeps exist now; a 'fix' sweep a version before the QA pipeline left open would keep fixing bugs on its own.
   if (!sweepCols.has("kind")) db().exec(`ALTER TABLE lab_sweeps ADD COLUMN kind TEXT NOT NULL DEFAULT 'run'`);
+  db().exec(`UPDATE lab_sweeps SET cancelled = 1 WHERE kind = 'fix' AND cancelled = 0`);
   db().exec(`CREATE TABLE IF NOT EXISTS lab_checklist_sessions (
     session_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP
   )`);

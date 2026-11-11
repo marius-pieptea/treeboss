@@ -575,6 +575,7 @@ export function runningFix(rootDir: string): { findingId: string; sessionId: str
 /** A build session that fixes one finding, with the finding named by reference. */
 export function fixFinding(rootDir: string, id: string, o: LabOpts = {}, sweepId: string | null = null): { finding: Finding; session: SessionRecord } {
   const f = readFinding(rootDir, id);
+  if (f.lens === "bug") throw new UserError("Bugs are fixed from the QA view.");
   const busy = runningFix(rootDir);
   if (busy) {
     throw new UserError(
@@ -586,9 +587,7 @@ export function fixFinding(rootDir: string, id: string, o: LabOpts = {}, sweepId
   const measure = f.lens === "perf" ? "\nThis is a performance finding: take the baseline measurement first, make the change, measure again, and report both numbers. If the number did not improve, say so and revert." : "";
   const design = f.lens === "ui" || f.lens === "ux" ? "\nFollow DESIGN.md and design/tokens.css; add a missing token to both files first." : "";
   const secure = f.lens === "security" ? "\nThis is a security finding: fix the missing or wrong check at its source, not at one call site; add a test that fails without the fix; do not weaken or bypass any existing check; keep secrets and exploit details out of code comments, commit messages and your reply." : "";
-  const bug = f.bug ? `
-This is a ${f.bug.kind} bug logged from the browser: reproduce it at ${f.bug.url} first, following the Steps to reproduce in the finding${f.bug.capture ? `, and read the evidence capture ${f.bug.capture} for the page state, console and requests` : ""}.` : "";
-  const prompt = `Implement this Lab finding.\n\n${findingBrief(f)}\n${measure}${design}${secure}${bug}\nRead the code at the evidence first and confirm the problem is still there; if it is not, say so and stop. Keep the change to what the finding asks for. When it is done and verified, set \`status: shipped\` in ${f.path} and say what you did.`;
+  const prompt = `Implement this Lab finding.\n\n${findingBrief(f)}\n${measure}${design}${secure}\nRead the code at the evidence first and confirm the problem is still there; if it is not, say so and stop. Keep the change to what the finding asks for. When it is done and verified, set \`status: shipped\` in ${f.path} and say what you did.`;
   let session: SessionRecord;
   const pre = snapshot(rootDir);
   if (o.sessionId) {

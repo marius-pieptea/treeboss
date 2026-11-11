@@ -14,6 +14,7 @@
  *   roadmap: r12              set when the finding was sent to the roadmap
  *   spec: specs/106-search    set when a spec was started from it
  *   checklist: marketing-site/meta-title   set on a finding raised by a failing launch checklist item (lens: checklist)
+ *   feature: checkout         bugs only: the feature id (lab/features.md) the bug is filed under
  *   session: s_3f2a…          stamped by the run that wrote or changed the file
  *   fix_session: s_9b1c…      the fix session started from it
  *   evidence_hashes:          written at the end of a run: "path:line=hash8", so a moved or edited line shows as drifted
@@ -61,16 +62,14 @@ export interface BugInfo {
   capture: string | null;
   shot: ShotKind;
   kind: BugKind;
-  /**
-   * Set on a bug a QA agent logged (`found_by: agent`). Such a bug is unconfirmed until a person confirms it
-   * (`confirmed: true`): fix-all leaves it alone, so a false alarm never becomes a code change by itself.
-   */
+  /** Set on a bug a QA agent logged (`found_by: agent`). */
   by?: "agent";
-  confirmed?: boolean;
+  /** The feature id (lab/features.md) the bug is filed under, when one was set. The QA view falls back to the page's URL. */
+  feature: string | null;
 }
 
-/** A bug an agent logged that no person has confirmed yet. */
-export const unconfirmedBug = (f: { bug: BugInfo | null }): boolean => f.bug?.by === "agent" && f.bug.confirmed !== true;
+/** A feature id is also the file name of its test plan. */
+export const FEATURE_ID = /^[a-z0-9][a-z0-9-]{0,59}$/;
 
 export interface Finding {
   /** The file's name without `.md`. */
@@ -195,9 +194,12 @@ export function parseFinding(rel: string, text: string, updatedAt = 0, rootDir?:
   const lens = lensRaw && (LENSES as readonly string[]).includes(lensRaw) ? (lensRaw as Lens) : null;
   if (lensRaw && !lens) warnings.push(`lens "${lensRaw}" is not one of ${LENSES.join(", ")}.`);
   const url = strOrNull(d.url);
+  const featureRaw = strOrNull(d.feature);
+  const feature = featureRaw && FEATURE_ID.test(featureRaw) ? featureRaw : null;
+  if (lens === "bug" && featureRaw && !feature) warnings.push(`feature "${featureRaw}" is not a feature id: read as none.`);
   const bug: BugInfo | null =
     lens === "bug"
-      ? { url: url ?? "", capture: strOrNull(d.capture), shot: pick(SHOT_KINDS, "shot", "none"), kind: oneOf(BUG_KINDS, d.kind, "functional"), ...(String(d.found_by ?? "").trim() === "agent" ? { by: "agent" as const, confirmed: String(d.confirmed).trim() === "true" } : {}) }
+      ? { url: url ?? "", capture: strOrNull(d.capture), shot: pick(SHOT_KINDS, "shot", "none"), kind: oneOf(BUG_KINDS, d.kind, "functional"), ...(String(d.found_by ?? "").trim() === "agent" ? { by: "agent" as const } : {}), feature }
       : null;
   if (bug && !url) warnings.push("A bug needs a url in the front matter.");
   const evidenceHashes: Record<string, string> = {};
@@ -324,8 +326,8 @@ export interface FindingPatch {
   session?: string | null;
   fix_session?: string | null;
   evidence_hashes?: string[] | null;
-  /** A person confirmed (or un-confirmed) a bug an agent logged. */
-  confirmed?: boolean;
+  /** The feature a bug is filed under; `null` removes it. Bugs only. */
+  feature?: string | null;
 }
 
 function writeText(abs: string, text: string): void {
@@ -350,11 +352,15 @@ export function shipChecklistFindings(rootDir: string, checklistId: string, keep
 export function patchFinding(rootDir: string, id: string, patch: FindingPatch): Finding {
   const abs = fileOf(rootDir, id);
   const before = readFinding(rootDir, id);
-  if (patch.confirmed !== undefined && before.bug?.by !== "agent") throw new UserError("Only a bug a QA agent logged needs confirming.");
+  if (patch.feature !== undefined && patch.feature !== null) {
+    if (!before.bug) throw new UserError("Only a bug is filed under a feature.");
+    if (!FEATURE_ID.test(patch.feature)) throw new UserError("feature must be a feature id.");
+  }
   if (patch.status !== undefined && !(STATUSES as readonly string[]).includes(patch.status)) throw new UserError(`Status must be one of ${STATUSES.join(", ")}.`);
   if (patch.impact !== undefined && !(IMPACTS as readonly string[]).includes(patch.impact)) throw new UserError(`Impact must be one of ${IMPACTS.join(", ")}.`);
   if (patch.effort !== undefined && !(EFFORTS as readonly string[]).includes(patch.effort)) throw new UserError(`Effort must be one of ${EFFORTS.join(", ")}.`);
-  let text = fs.readFileSync(abs, "utf8");
+  // A `confirmed:` line from before bugs needed no confirmation is dropped by the first write.
+  let text = setKey(fs.readFileSync(abs, "utf8"), "confirmed", undefined);
   for (const [k, v] of Object.entries(patch)) if (v !== undefined) text = setKey(text, k, v === null ? undefined : v);
   writeText(abs, text);
   return readFinding(rootDir, id);
@@ -401,7 +407,8 @@ export function writeFinding(rootDir: string, id: string, f: FindingFields, body
     ...(f.roadmap ? [`roadmap: ${yamlScalar(f.roadmap)}`] : []),
     ...(f.spec ? [`spec: ${yamlScalar(f.spec)}`] : []),
     ...(f.bug ? [`url: ${yamlScalar(f.bug.url)}`, ...(f.bug.capture ? [`capture: ${yamlScalar(f.bug.capture)}`] : []), `shot: ${f.bug.shot}`, `kind: ${f.bug.kind}`] : []),
-    ...(f.bug?.by === "agent" ? ["found_by: agent", `confirmed: ${f.bug.confirmed === true}`] : []),
+    ...(f.bug?.by === "agent" ? ["found_by: agent"] : []),
+    ...(f.bug?.feature ? [`feature: ${f.bug.feature}`] : []),
     "---",
   ];
   fs.mkdirSync(path.dirname(abs), { recursive: true });

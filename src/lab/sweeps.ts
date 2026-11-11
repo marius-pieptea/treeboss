@@ -7,11 +7,9 @@
  * Starting them a few at a time also means a later module's run is told about the findings an earlier one wrote.
  */
 import { db } from "../db";
-import { UserError } from "../util";
 import { Hub } from "../sessions/hub";
 import { type SessionRecord } from "../sessions/manager";
-import { CLOSED, readFinding } from "./findings";
-import { finishRun, fixFinding, labTurn, launch, planSweep, realOf, runningFix, tables, type LabOpts, type SweepPlan } from "./sessions";
+import { finishRun, labTurn, launch, planSweep, realOf, tables, type LabOpts, type SweepPlan } from "./sessions";
 
 export const DEFAULT_PARALLEL = 3;
 export const MAX_PARALLEL = 6;
@@ -34,8 +32,8 @@ interface Row {
   created_at: string;
 }
 
-/** A `run` sweep queues module scopes for a lens. A `fix` sweep queues finding ids and fixes them one at a time. */
-export type SweepKind = "run" | "fix";
+/** A sweep queues module scopes for a lens. */
+export type SweepKind = "run";
 
 export interface SweepView {
   id: string;
@@ -73,16 +71,9 @@ export function pumpSweep(sweepId: string): SessionRecord[] {
   let failed = row.failed;
   let lastError = row.last_error;
   while (room > 0 && pending.length) {
-    // Any running fix blocks this one, not only the sweep's own: the driver pumps the sweep again when it ends.
-    if (row.kind === "fix" && runningFix(row.root_dir)) break;
     const scope = pending.shift()!;
     try {
-      if (row.kind === "fix") {
-        // Read again now: the finding may have been closed, or fixed by hand, since the sweep was queued.
-        const f = readFinding(row.root_dir, scope);
-        if (CLOSED.includes(f.status)) continue;
-        out.push(fixFinding(row.root_dir, scope, { ...opts, sessionId: null }, sweepId).session);
-      } else out.push(launch(row.root_dir, labTurn(row.root_dir, row.lens, scope, opts.note, opts.fix), { ...opts, sessionId: null }, sweepId));
+      out.push(launch(row.root_dir, labTurn(row.root_dir, row.lens, scope, opts.note, opts.fix), { ...opts, sessionId: null }, sweepId));
       room--;
     } catch (err) {
       failed++;
@@ -105,24 +96,6 @@ export function startSweep(rootDir: string, lens: string, scopes: string[] | nul
   return { sweepId, sessions: pumpSweep(sweepId), plan };
 }
 
-/** Queue a fix for each finding, one session at a time (a fix works in the project's own folder, so two would collide). */
-export function startFixSweep(rootDir: string, ids: string[], o: LabOpts = {}): { sweepId: string; sessions: SessionRecord[] } {
-  tables();
-  const queue = [...new Set(ids)];
-  if (!queue.length) throw new UserError("Nothing to fix: name at least one finding.");
-  const sweepId = `sw_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
-  const opts: Opts = { engine: o.engine, model: o.model, effort: o.effort, agent: o.agent, pairId: o.pairId, note: null, fix: null, workspaceId: null };
-  db()
-    .prepare("INSERT INTO lab_sweeps (id, root_dir, lens, kind, opts, pending, total, parallel) VALUES (?, ?, 'bug', 'fix', ?, ?, ?, 1)")
-    .run(sweepId, realOf(rootDir), JSON.stringify(opts), JSON.stringify(queue), queue.length);
-  return { sweepId, sessions: pumpSweep(sweepId) };
-}
-
-/** The fix sweep still working through its queue or running a fix, if there is one. */
-export function openFixSweep(rootDir: string): SweepView | null {
-  return listSweeps(rootDir, 50).find((s) => s.kind === "fix" && !s.cancelled && (s.queued > 0 || s.running > 0)) ?? null;
-}
-
 /** Stop starting new modules. The ones already running finish. */
 export function cancelSweep(rootDir: string, sweepId: string): SweepView | null {
   tables();
@@ -141,12 +114,9 @@ export function listSweeps(rootDir: string, limit = 10): SweepView[] {
 }
 
 /** Sweeps with modules still queued: what a restart has to continue. */
-function openSweeps(rootDir?: string): string[] {
+function openSweeps(): string[] {
   tables();
-  const rows = (rootDir === undefined
-    ? db().prepare("SELECT id FROM lab_sweeps WHERE cancelled = 0 AND pending != '[]'").all()
-    : db().prepare("SELECT id FROM lab_sweeps WHERE cancelled = 0 AND pending != '[]' AND root_dir = ?").all(rootDir)) as Array<{ id: string }>;
-  return rows.map((r) => r.id);
+  return (db().prepare("SELECT id FROM lab_sweeps WHERE cancelled = 0 AND pending != '[]'").all() as Array<{ id: string }>).map((r) => r.id);
 }
 
 let unsubscribe: (() => void) | null = null;
@@ -157,12 +127,10 @@ export function startSweepDriver(): void {
   tables();
   unsubscribe = Hub.subscribe((e) => {
     if (e.type !== "turn_end" && !(e.type === "state" && e.status !== "running")) return;
-    const r = db().prepare("SELECT sweep_id, root_dir FROM lab_sessions WHERE session_id = ?").get(e.sessionId) as { sweep_id: string | null; root_dir: string } | null;
+    const r = db().prepare("SELECT sweep_id FROM lab_sessions WHERE session_id = ?").get(e.sessionId) as { sweep_id: string | null } | null;
     if (!r) return;
     if (e.type === "turn_end") finishRun(e.sessionId);
     if (r.sweep_id) pumpSweep(r.sweep_id);
-    // A fix that is not the sweep's own (Fix now, or a cancelled sweep's) may be what held a fix sweep back.
-    for (const id of openSweeps(r.root_dir)) if (id !== r.sweep_id) pumpSweep(id);
   });
   for (const id of openSweeps()) pumpSweep(id);
 }
