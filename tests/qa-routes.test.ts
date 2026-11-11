@@ -1,254 +1,226 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import fs from "fs";
 import path from "path";
+import { findChrome } from "../src/browser/chrome";
 import { startServer } from "../src/daemon/server";
 import { db } from "../src/db";
 import type { RunTurnOptions, TurnResult } from "../src/engines/runner";
+import { createBugFinding } from "../src/lab/findings";
+import { startQaDriver, stopQaDriver } from "../src/qa/jobs";
+import { jobOfSession } from "../src/qa/registry";
+import { runsOfSession, setOutcome } from "../src/qa/runs";
 import { interruptAll, setTurnRunner } from "../src/sessions/manager";
-import { qaSession, startQaDriver, stopQaDriver } from "../src/qa/sessions";
+import { resetSetting, setSetting } from "../src/settings";
 import { Workspaces } from "../src/workspaces";
-import { makeRepo, resetState, settled } from "./helpers";
+import { makeRepo, resetState } from "./helpers";
+
+setDefaultTimeout(60_000);
 
 const TOKEN = "qa-test-token";
 const ok = (output: string): TurnResult => ({ success: true, output, sessionId: "cli-1", resumeRejected: false, aborted: false, timedOut: false, maxTurnsHit: false, usage: null, exitCode: 0, stderr: "", ...({} as object) });
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let srv: ReturnType<typeof startServer>;
 let dir: string;
 let root: string;
+let hold: boolean;
+const gates: Array<() => void> = [];
+
+const FEATURES = "# Features\n## Checkout\nid: checkout\nwhere: /cart\nPays.\n## Invite\nid: invite\nwhere: /team\nInvites.\n";
+const PLAN = "---\ntitle: Checkout flow\n---\n## Steps\n1. [s-open] Open the cart\n   path: /cart\n   expect: Two items\n";
 
 beforeAll(() => {
   srv = startServer({ port: 0, token: TOKEN });
-  startQaDriver();
 });
-afterAll(() => {
-  stopQaDriver();
-  srv.stop();
-});
+afterAll(() => srv.stop());
 beforeEach(() => {
   resetState();
-  setTurnRunner(null);
-  db().exec("DELETE FROM qa_runs; DELETE FROM qa_sessions");
-  dir = makeRepo({ "a.txt": "x\n" });
+  db().exec("DELETE FROM qa_runs; DELETE FROM qa_jobs; DELETE FROM qa_pipelines");
+  process.env.TRB_CHROME = process.execPath;
+  findChrome({ fresh: true });
+  setSetting("agent_browser", "on");
+  dir = makeRepo({ "a.txt": "x\n", "lab/features.md": FEATURES, "lab/qa/checkout.md": PLAN });
   root = Workspaces.open(dir).id;
+  hold = false;
+  setTurnRunner(async (o: RunTurnOptions) => {
+    if (hold) await new Promise<void>((r) => gates.push(r));
+    const session = o.key.slice(0, o.key.indexOf("-"));
+    const job = jobOfSession(session);
+    if (job?.stage === "test") for (const r of runsOfSession(session)) for (const s of r.steps) setOutcome(r.id as never, s.id as never, { state: "pass", at: 1, note: "ok" });
+    return ok("done");
+  });
+  startQaDriver();
 });
 afterEach(async () => {
+  stopQaDriver();
+  for (const g of gates.splice(0)) g();
   await interruptAll();
   setTurnRunner(null);
+  resetSetting("agent_browser");
 });
 
-async function call(p: string, method = "GET", body?: unknown) {
-  const res = await fetch(`${srv.url}/api/qa/${root}/${p}`, { method, headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+async function call(p: string, method = "GET", body?: unknown, auth = true) {
+  const res = await fetch(`${srv.url}/api/qa/${p}`, { method, headers: { ...(auth ? { authorization: `Bearer ${TOKEN}` } : {}), "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
   const text = await res.text();
   return { status: res.status, data: text ? JSON.parse(text) : null };
 }
-
-const PROPOSALS = "## Steps\n1. Try an expired card\n   expect: A clear error shows\n   after: start\n   why: Failures\n2. Try an empty cart\n   expect: Checkout is disabled\n   after: start\n   why: Empty state\n";
-
-/** A turn runner that records every prompt and writes `file` (relative to the turn's cwd) when given. */
-function runner(write?: { file: string; text: string }) {
-  const prompts: string[] = [];
-  setTurnRunner(async (o: RunTurnOptions) => {
-    prompts.push(o.prompt);
-    if (write) {
-      fs.mkdirSync(path.dirname(path.join(o.cwd, write.file)), { recursive: true });
-      fs.writeFileSync(path.join(o.cwd, write.file), write.text);
-    }
-    return ok("done");
-  });
-  return prompts;
+const at = (rest = "") => `${root}${rest ? `/${rest}` : ""}`;
+const request = (stages: object, o: object = {}) => ({ stages, scope: { kind: "all" }, pace: "auto", driver: { kind: "agent" }, ...o });
+async function ended() {
+  for (let i = 0; i < 400; i++) {
+    const b = (await call(at())).data;
+    if (b.pipeline?.control.kind === "ended") return b;
+    await sleep(25);
+  }
+  throw new Error("the pipeline did not end");
 }
 
-describe("plans over HTTP", () => {
-  test("auth is required", async () => {
-    expect((await fetch(`${srv.url}/api/qa/${root}/plans`)).status).toBe(401);
+describe("the board and its reads", () => {
+  test("auth is required, and an unknown root is a 404", async () => {
+    expect((await call(at(), "GET", undefined, false)).status).toBe(401);
+    expect((await call("w_nope")).status).toBe(404);
   });
 
-  test("create, edit, read and delete a plan", async () => {
-    expect((await call("plans")).data).toEqual({ plans: [] });
-    const made = await call("plans", "POST", { title: "Cart flow" });
-    expect(made.status).toBe(201);
-    expect(made.data.session).toBeNull();
-    expect(made.data.plan).toMatchObject({ slug: "cart-flow", title: "Cart flow", source: { kind: "manual" }, steps: [], proposals: [] });
-
-    const added = await call("plans/cart-flow", "PATCH", { edit: { op: "add", step: { action: "Open the cart", expected: "Two items", path: "http://localhost:3000/cart" }, after: "start" } });
-    expect(added.status).toBe(200);
-    expect(added.data.plan.steps[0]).toMatchObject({ action: "Open the cart", path: "/cart" });
-    const id = added.data.plan.steps[0].id;
-    expect(fs.existsSync(path.join(dir, "lab/qa/cart-flow.md"))).toBe(true);
-
-    const upd = await call("plans/cart-flow", "PATCH", { edit: { op: "update", id, fields: { expected: "Three items" } } });
-    expect(upd.data.plan.steps[0].expected).toBe("Three items");
-
-    const got = await call("plans/cart-flow");
-    expect(got.data.plan.steps).toHaveLength(1);
-    expect(got.data).toMatchObject({ runs: [], lastOutcomes: {}, session: null });
-    expect((await call("plans")).data.plans[0]).toMatchObject({ slug: "cart-flow", steps: 1, proposals: 0, problem: null, lastRun: null });
-
-    expect((await call("plans/cart-flow", "DELETE")).data).toEqual({ ok: true });
-    expect((await call("plans/cart-flow")).status).toBe(404);
+  test("GET the board", async () => {
+    const r = await call(at());
+    expect(r.status).toBe(200);
+    expect(r.data).toMatchObject({ browser: true, map: { exists: true, activity: { kind: "idle" } }, bugsWithoutFeature: [], plansWithoutFeature: [], pipeline: null });
+    expect(r.data.features.map((f: any) => [f.id, f.plan.kind])).toEqual([["checkout", "ready"], ["invite", "missing"]]);
   });
 
-  test("a blank plan, with or without a manual source, never starts a draft", async () => {
-    const prompts = runner();
-    const made = await call("plans", "POST", { title: "Blank one", from: { kind: "manual" } });
-    expect(made.status).toBe(201);
-    expect(made.data.session).toBeNull();
-    expect(made.data.plan).toMatchObject({ slug: "blank-one", source: { kind: "manual" } });
-    expect(prompts).toHaveLength(0);
+  test("GET a feature's detail; an unknown feature is a 404", async () => {
+    const r = await call(at("features/checkout"));
+    expect(r.status).toBe(200);
+    expect(r.data).toMatchObject({ feature: { id: "checkout" }, plan: { title: "Checkout flow", path: "lab/qa/checkout.md" }, runs: [], lastRun: null });
+    expect(r.data.plan.steps[0]).toEqual({ id: "s-open", action: "Open the cart", expected: "Two items", path: "/cart", last: null });
+    const missing = await call(at("features/nope"));
+    expect(missing.status).toBe(404);
+    expect(missing.data).toEqual({ error: 'No feature "nope".' });
   });
 
-  test("a text draft without a note names text as the source", async () => {
-    const r = await call("plans", "POST", { title: "X", from: { kind: "text" } });
-    expect(r.status).toBe(400);
-    expect(r.data.error).toContain("a draft from text needs a note");
+  test("GET a run: a bad id is 400, another project's or an unknown run is 404", async () => {
+    await call(at("pipelines"), "POST", request({ test: { batching: "each" } }));
+    const b = await ended();
+    const id = (await call(at("features/checkout"))).data.runs[0].id;
+    const r = await call(at(`runs/${id}`));
+    expect(r.status).toBe(200);
+    expect(r.data.summary).toMatchObject({ id, feature: "checkout", finished: true, counts: { pass: 1 } });
+    expect(r.data.run.steps[0].outcome.state).toBe("pass");
+    expect(b.pipeline.jobs).toHaveLength(1);
+    expect((await call(at("runs/Bad Id"))).status).toBe(400);
+    expect((await call(at("runs/qa_nope"))).status).toBe(404);
+    const other = Workspaces.open(makeRepo({ "a.txt": "y\n" })).id;
+    expect((await call(`${other}/runs/${id}`)).status).toBe(404);
   });
 
-  test("bad requests are 400 and missing things are 404", async () => {
-    await call("plans", "POST", { title: "Cart flow" });
-    expect((await call("plans", "POST", { title: "" })).status).toBe(400);
-    expect((await call("plans", "POST", { title: "X", from: { kind: "bogus" } })).status).toBe(400);
-    expect((await call("plans", "POST", { title: "X", from: { kind: "text" } })).status).toBe(400);
-    expect((await call("plans/Cart_Flow")).status).toBe(400);
-    expect((await call("plans/nope")).status).toBe(404);
-    expect((await call("plans/cart-flow", "PATCH", { edit: { op: "remove", id: "s-zzzz" } })).status).toBe(400);
-    expect((await call("plans/cart-flow", "PATCH", { edit: { op: "nope" } })).status).toBe(400);
-    expect((await call("plans/cart-flow/proposals/p-zzzz", "POST", { decision: "accept" })).status).toBe(404);
-    expect((await call("plans/cart-flow/proposals/all", "POST", { decision: "maybe" })).status).toBe(400);
-    expect((await call("plans/cart-flow/suggest", "POST", { focus: ["vibes"] })).status).toBe(400);
-    expect((await call("plans/cart-flow/runs", "POST")).status).toBe(400);
-    expect((await call("runs/qa_nope")).status).toBe(404);
-    expect((await call("nothing")).status).toBe(404);
-  });
-
-  test("a draft from a spec starts a session whose prompt names the source, then accept-all fills the plan", async () => {
-    const prompts = runner({ file: "lab/qa/checkout.proposals.md", text: PROPOSALS });
-    const made = await call("plans", "POST", { title: "Checkout", from: { kind: "spec", dir: "specs/121-checkout" }, note: "Mind the coupons" });
-    expect(made.status).toBe(201);
-    expect(made.data.plan).toMatchObject({ slug: "checkout", source: { kind: "spec", dir: "specs/121-checkout" } });
-    expect(made.data.session).toMatchObject({ kind: "draft" });
-    await settled(made.data.session.sessionId);
-    expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain("specs/121-checkout");
-    expect(prompts[0]).toContain("lab/qa/checkout.proposals.md");
-    expect(prompts[0]).toContain("Mind the coupons");
-
-    const got = await call("plans/checkout");
-    expect(got.data.session).toMatchObject({ kind: "draft", running: false, problem: null });
-    expect(got.data.plan.proposals).toHaveLength(2);
-    expect(got.data.plan.proposals[0]).toMatchObject({ after: "start", why: "Failures", orphan: false });
-
-    const acc = await call("plans/checkout/proposals/all", "POST", { decision: "accept" });
-    expect(acc.data.plan.steps.map((s: any) => s.action)).toEqual(["Try an expired card", "Try an empty cart"]);
-    expect(acc.data.plan.proposals).toEqual([]);
-  });
-
-  test("a draft from a diff and from a page name their source", async () => {
-    const prompts = runner();
-    const a = await call("plans", "POST", { title: "Diff", from: { kind: "diff", base: "main", head: "feat/x" } });
-    await settled(a.data.session.sessionId);
-    const b = await call("plans", "POST", { title: "Page", from: { kind: "page", path: "/pricing" } });
-    await settled(b.data.session.sessionId);
-    expect(prompts[0]).toContain("git diff main..feat/x");
-    expect(prompts[1]).toContain("browser_navigate");
-    expect(prompts[1]).toContain("/pricing");
-  });
-
-  test("suggest puts the existing steps and the focus in the prompt and records a missing file as a problem", async () => {
-    await call("plans", "POST", { title: "Cart flow" });
-    await call("plans/cart-flow", "PATCH", { edit: { op: "add", step: { action: "Open the cart", expected: "Two items" }, after: "start" } });
-    const prompts = runner();
-    const r = await call("plans/cart-flow/suggest", "POST", { focus: ["errors", "mobile"], note: "Payment especially" });
-    expect(r.status).toBe(201);
-    await settled(r.data.session.sessionId);
-    expect(prompts[0]).toContain("Open the cart");
-    expect(prompts[0]).toContain("- errors:");
-    expect(prompts[0]).toContain("- mobile:");
-    expect(prompts[0]).not.toContain("- accessibility:");
-    expect(prompts[0]).toContain("Payment especially");
-    expect(prompts[0]).toContain("Do not repeat any of them");
-    expect(qaSession(dir, "cart-flow" as any)).toMatchObject({ kind: "suggest", running: false });
-    expect(qaSession(dir, "cart-flow" as any)!.problem).toContain("did not write");
-  });
-
-  test("a malformed proposals file is recorded as the session's problem", async () => {
-    await call("plans", "POST", { title: "Cart flow" });
-    runner({ file: "lab/qa/cart-flow.proposals.md", text: "Sorry, I could not.\n" });
-    const r = await call("plans/cart-flow/suggest", "POST", {});
-    await settled(r.data.session.sessionId);
-    expect(qaSession(dir, "cart-flow" as any)!.problem).toContain("malformed");
-    expect((await call("plans/cart-flow")).data.plan.proposalsProblem).toContain("## Steps");
-  });
-
-  test("a suggest turn that writes nothing is a problem even when an earlier turn left proposals, which stay", async () => {
-    await call("plans", "POST", { title: "Cart flow" });
-    runner({ file: "lab/qa/cart-flow.proposals.md", text: PROPOSALS });
-    const first = await call("plans/cart-flow/suggest", "POST", {});
-    await settled(first.data.session.sessionId);
-    expect(qaSession(dir, "cart-flow" as any)!.problem).toBeNull();
-
-    runner();
-    const second = await call("plans/cart-flow/suggest", "POST", {});
-    await settled(second.data.session.sessionId);
-    expect(qaSession(dir, "cart-flow" as any)!.problem).toContain("did not add");
-    expect((await call("plans/cart-flow")).data.plan.proposals).toHaveLength(2);
-
-    runner({ file: "lab/qa/cart-flow.proposals.md", text: `${PROPOSALS}3. Try a coupon
-   expect: The total drops
-   after: start
-   why: Coupons
-` });
-    const third = await call("plans/cart-flow/suggest", "POST", {});
-    await settled(third.data.session.sessionId);
-    expect(qaSession(dir, "cart-flow" as any)!.problem).toBeNull();
-  });
-
-  test("only one QA session runs per plan", async () => {
-    await call("plans", "POST", { title: "Cart flow" });
-    const release: Array<() => void> = [];
-    setTurnRunner(async () => {
-      await new Promise<void>((r) => release.push(r));
-      return ok("done");
-    });
-    const first = await call("plans/cart-flow/suggest", "POST", {});
-    expect(first.status).toBe(201);
-    expect((await call("plans/cart-flow")).data.session.running).toBe(true);
-    expect((await call("plans/cart-flow/suggest", "POST", {})).status).toBe(409);
-    release.splice(0).forEach((r) => r());
-    await settled(first.data.session.sessionId);
-    runner();
-    expect((await call("plans/cart-flow/suggest", "POST", {})).status).toBe(201);
+  test("a route that does not exist is a 404, and the old routes are gone", async () => {
+    expect((await call(at("nothing"))).status).toBe(404);
+    for (const old of ["plans", "features"]) expect((await call(at(old))).status).toBe(404);
+    for (const old of ["e2e", "batches/x/cancel", "features/map", "plans"]) expect((await call(at(old), "POST", {})).status).toBe(404);
   });
 });
 
-describe("runs over HTTP", () => {
-  test("start a run, mark steps, read it back", async () => {
-    await call("plans", "POST", { title: "Cart flow" });
-    const a = (await call("plans/cart-flow", "PATCH", { edit: { op: "add", step: { action: "Open the cart", expected: "Two items" }, after: "start" } })).data.plan.steps[0];
-    const b = (await call("plans/cart-flow", "PATCH", { edit: { op: "add", step: { action: "Pay", expected: "Confirmation" }, after: a.id } })).data.plan.steps[1];
+describe("pipelines", () => {
+  test("POST starts a pipeline: 201 with its view, and the board shows it", async () => {
+    hold = true;
+    const r = await call(at("pipelines"), "POST", request({ test: { batching: "each" } }, { note: "  careful  ", baseUrl: "http://localhost:3000/" }));
+    expect(r.status).toBe(201);
+    const id = r.data.pipeline.id;
+    expect(id).toMatch(/^qap_/);
+    expect(r.data.pipeline).toMatchObject({
+      config: { stages: { test: { batching: "each" } }, scope: { kind: "all" }, pace: "auto", note: "careful", baseUrl: "http://localhost:3000" },
+      control: { kind: "running", stage: "test" },
+    });
+    expect(r.data.pipeline.jobs).toHaveLength(1);
+    expect(r.data.pipeline.jobs[0]).toMatchObject({ stage: "test", units: ["checkout"], pair: false, state: "running", error: null });
+    expect(r.data.pipeline.stages.map((s: any) => s.stage)).toEqual(["map", "plan", "test", "fix"]);
+    const board = (await call(at())).data;
+    expect(board.pipeline.id).toBe(id);
+    expect(board.features[0].activity.test).toMatchObject({ kind: "working" });
+  });
 
-    const started = await call("plans/cart-flow/runs", "POST");
-    expect(started.status).toBe(201);
-    const runId = started.data.run.id;
-    expect(started.data.summary).toMatchObject({ finished: false, counts: { pending: 2 } });
+  test("bad bodies are 400 with the parseConfig message", async () => {
+    const bad = async (body: unknown, msg: string) => {
+      const r = await call(at("pipelines"), "POST", body);
+      expect(r.status).toBe(400);
+      expect(r.data.error).toContain(msg);
+    };
+    await bad({ ...request({}) }, "Pick at least one stage.");
+    await bad(request({ plan: { batching: "each" } }, { scope: { kind: "bugs", ids: ["bug-a"] } }), "A list of bugs can only be fixed: choose the Fix stage alone.");
+    await bad(request({ plan: { batching: "each" } }, { scope: { kind: "features", ids: ["nope"] } }), 'No feature "nope".');
+    await bad(request({ plan: { batching: "each" } }, { driver: { kind: "pair", pairId: "nope" } }), 'No Hydra pair "nope". See `trb pair list`.');
+    await bad(request({ plan: { batching: "x" } }), 'batching must be "each" or "together".');
+    await bad(request({ plan: { batching: "each" } }, { pace: "fast" }), 'pace must be "auto" or "step".');
+    await bad(request({ plan: { batching: "each" } }, { baseUrl: "ftp://x" }), "baseUrl must be an http or https address.");
+  });
 
-    const pass = await call(`runs/${runId}/steps/${a.id}`, "PUT", { outcome: { state: "pass", note: "ok" } });
-    expect(pass.status).toBe(200);
-    expect(pass.data.run.steps[0].outcome).toMatchObject({ state: "pass", note: "ok" });
-    expect(typeof pass.data.run.steps[0].outcome.at).toBe("number");
+  test("the agent browser must be on for map, plan and test, and not for fix", async () => {
+    setSetting("agent_browser", "off");
+    const r = await call(at("pipelines"), "POST", request({ map: {} }));
+    expect(r.status).toBe(400);
+    expect(r.data.error).toContain("trb config set agent_browser on");
+    createBugFinding(dir, { title: "A bug", body: "x", bug: { url: "http://localhost:3000/x", capture: null, shot: "none", kind: "functional", feature: null }, impact: "medium", effort: "s" });
+    hold = true;
+    expect((await call(at("pipelines"), "POST", request({ fix: { batching: "each" } }))).status).toBe(201);
+  });
 
-    expect((await call(`runs/${runId}/steps/${b.id}`, "PUT", { outcome: { state: "blocked" } })).status).toBe(400);
-    expect((await call(`runs/${runId}/steps/${b.id}`, "PUT", { outcome: { state: "great" } })).status).toBe(400);
-    expect((await call(`runs/${runId}/steps/s-zzzz`, "PUT", { outcome: { state: "skip" } })).status).toBe(404);
+  test("a second start while one runs is a 409", async () => {
+    hold = true;
+    await call(at("pipelines"), "POST", request({ test: { batching: "each" } }));
+    const r = await call(at("pipelines"), "POST", request({ test: { batching: "each" } }));
+    expect(r.status).toBe(409);
+    expect(r.data).toEqual({ error: "A QA pipeline is already running in this project. Stop it or wait for it." });
+  });
 
-    const fail = await call(`runs/${runId}/steps/${b.id}`, "PUT", { outcome: { state: "fail", actual: "500 page" } });
-    expect(fail.data.summary).toMatchObject({ finished: true, counts: { pass: 1, fail: 1, pending: 0 } });
-    expect(fail.data.run.steps[1].outcome).toMatchObject({ state: "fail", actual: "500 page", bug: null });
-    expect((await call(`runs/${runId}/steps/${b.id}`, "PUT", { outcome: { state: "fail", bug: "bug-does-not-exist" } })).status).toBe(400);
+  test("continue: 200 when held, 409 when not, 404 for an unknown pipeline", async () => {
+    const started = await call(at("pipelines"), "POST", request({ test: { batching: "each" }, fix: { batching: "each" } }, { pace: "step" }));
+    const id = started.data.pipeline.id;
+    for (let i = 0; i < 200 && (await call(at())).data.pipeline.control.kind !== "held"; i++) await sleep(25);
+    const held = (await call(at())).data.pipeline;
+    expect(held.control).toEqual({ kind: "held", after: "test", next: "fix" });
+    const c = await call(at(`pipelines/${id}/continue`), "POST");
+    expect(c.status).toBe(200);
+    expect(["running", "ended"]).toContain(c.data.pipeline.control.kind);
+    const again = await call(at(`pipelines/${id}/continue`), "POST");
+    expect(again.status).toBe(409);
+    expect(again.data).toEqual({ error: "The pipeline is not waiting to continue." });
+    const none = await call(at("pipelines/qap_nope/continue"), "POST");
+    expect(none.status).toBe(404);
+    expect(none.data).toEqual({ error: 'No pipeline "qap_nope".' });
+  });
 
-    expect((await call(`runs/${runId}`)).data.run.steps).toHaveLength(2);
-    const plan = await call("plans/cart-flow");
-    expect(plan.data.runs).toHaveLength(1);
-    expect(plan.data.lastOutcomes[b.id]).toMatchObject({ run: runId, outcome: { state: "fail" } });
-    expect((await call("plans")).data.plans[0].lastRun).toMatchObject({ id: runId, finished: true });
+  test("stop: running becomes stopping then ended; it is idempotent; an unknown pipeline is a 404", async () => {
+    hold = true;
+    const id = (await call(at("pipelines"), "POST", request({ test: { batching: "each" } }))).data.pipeline.id;
+    const s = await call(at(`pipelines/${id}/stop`), "POST");
+    expect(s.status).toBe(200);
+    expect(s.data.pipeline.control).toEqual({ kind: "stopping", stage: "test" });
+    expect((await call(at(`pipelines/${id}/stop`), "POST")).data.pipeline.control.kind).toBe("stopping");
+    hold = false;
+    for (const g of gates.splice(0)) g();
+    const b = await ended();
+    expect(b.pipeline.control).toMatchObject({ kind: "ended", reason: "stopped" });
+    expect((await call(at(`pipelines/${id}/stop`), "POST")).data.pipeline.control.kind).toBe("ended");
+    expect((await call(at("pipelines/qap_nope/stop"), "POST")).status).toBe(404);
+  });
+});
+
+describe("deleting a plan", () => {
+  test("200 removes the file and its runs; 400 for a bad name; 404 for a missing plan; 409 while a job works on it", async () => {
+    hold = true;
+    await call(at("pipelines"), "POST", request({ test: { batching: "each" } }));
+    const busy = await call(at("plans/checkout"), "DELETE");
+    expect(busy.status).toBe(409);
+    expect(busy.data).toEqual({ error: 'A job is working on "checkout". Wait for it.' });
+    hold = false;
+    for (const g of gates.splice(0)) g();
+    await ended();
+    const r = await call(at("plans/checkout"), "DELETE");
+    expect(r.status).toBe(200);
+    expect(r.data).toEqual({ ok: true });
+    expect(fs.existsSync(path.join(dir, "lab/qa/checkout.md"))).toBe(false);
+    expect(db().prepare("SELECT COUNT(*) AS n FROM qa_runs").get()).toEqual({ n: 0 });
+    expect((await call(at("plans/checkout"), "DELETE")).status).toBe(404);
+    expect((await call(at("plans/Bad_Name"), "DELETE")).status).toBe(400);
   });
 });
