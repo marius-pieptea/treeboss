@@ -5,6 +5,7 @@ publish:
   provider: github
   owner: marius-pieptea
   repo: treeboss
+  releaseType: release   # publish directly; the default is a draft, which updaters cannot see
 directories:
   output: dist
 files:
