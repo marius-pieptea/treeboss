@@ -55,10 +55,7 @@ export type ShotKind = (typeof SHOT_KINDS)[number];
 export const BUG_KINDS = ["functional", "visual", "logic", "content", "performance"] as const;
 export type BugKind = (typeof BUG_KINDS)[number];
 
-export const FEATURE_ID = /^[a-z0-9][a-z0-9-]{0,59}$/;
-
 export interface BugInfo {
-  feature?: string | null;
   url: string;
   /** The evidence item id of the page capture, when one was saved. */
   capture: string | null;
@@ -200,7 +197,7 @@ export function parseFinding(rel: string, text: string, updatedAt = 0, rootDir?:
   const url = strOrNull(d.url);
   const bug: BugInfo | null =
     lens === "bug"
-      ? { url: url ?? "", capture: strOrNull(d.capture), shot: pick(SHOT_KINDS, "shot", "none"), kind: oneOf(BUG_KINDS, d.kind, "functional"), feature: strOrNull(d.feature), ...(String(d.found_by ?? "").trim() === "agent" ? { by: "agent" as const, confirmed: String(d.confirmed).trim() === "true" } : {}) }
+      ? { url: url ?? "", capture: strOrNull(d.capture), shot: pick(SHOT_KINDS, "shot", "none"), kind: oneOf(BUG_KINDS, d.kind, "functional"), ...(String(d.found_by ?? "").trim() === "agent" ? { by: "agent" as const, confirmed: String(d.confirmed).trim() === "true" } : {}) }
       : null;
   if (bug && !url) warnings.push("A bug needs a url in the front matter.");
   const evidenceHashes: Record<string, string> = {};
@@ -403,7 +400,7 @@ export function writeFinding(rootDir: string, id: string, f: FindingFields, body
     ...(f.checklist ? [`checklist: ${yamlScalar(f.checklist)}`] : []),
     ...(f.roadmap ? [`roadmap: ${yamlScalar(f.roadmap)}`] : []),
     ...(f.spec ? [`spec: ${yamlScalar(f.spec)}`] : []),
-    ...(f.bug ? [`url: ${yamlScalar(f.bug.url)}`, ...(f.bug.capture ? [`capture: ${yamlScalar(f.bug.capture)}`] : []), `shot: ${f.bug.shot}`, `kind: ${f.bug.kind}`, ...(f.bug.feature ? [`feature: ${f.bug.feature}`] : [])] : []),
+    ...(f.bug ? [`url: ${yamlScalar(f.bug.url)}`, ...(f.bug.capture ? [`capture: ${yamlScalar(f.bug.capture)}`] : []), `shot: ${f.bug.shot}`, `kind: ${f.bug.kind}`] : []),
     ...(f.bug?.by === "agent" ? ["found_by: agent", `confirmed: ${f.bug.confirmed === true}`] : []),
     "---",
   ];

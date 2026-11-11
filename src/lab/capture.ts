@@ -30,7 +30,6 @@ export interface BugReport {
   consoleLines?: string[];
   /** Logged by a QA agent: the finding is marked found_by: agent and starts unconfirmed. */
   byAgent?: boolean;
-  feature?: string | null;
 }
 
 export interface LoggedBug {
@@ -196,6 +195,6 @@ export async function logBug(rootDir: string, r: BugReport, deps: CaptureDeps = 
   const expected = section("Expected", r.expected);
   const actual = section("Actual", r.actual);
   const body = [steps || expected || actual ? "" : r.title, steps, expected, actual, con.count ? `## Console (last ${con.count})\n\n\`\`\`\n${con.text}\n\`\`\`` : "", log.count ? `## Server log (last ${log.count})\n\n\`\`\`\n${log.text}\n\`\`\`` : ""].filter(Boolean).join("\n\n");
-  const finding = deps.write(rootDir, { title: r.title, body, bug: { url, capture: capture?.id ?? null, shot: shot.kind, kind: r.kind, feature: r.feature ?? null, ...(r.byAgent ? { by: "agent" as const, confirmed: false } : {}) }, impact: "medium", effort: "s" });
+  const finding = deps.write(rootDir, { title: r.title, body, bug: { url, capture: capture?.id ?? null, shot: shot.kind, kind: r.kind, ...(r.byAgent ? { by: "agent" as const, confirmed: false } : {}) }, impact: "medium", effort: "s" });
   return { finding, capture, shotNote: shot.note };
 }
