@@ -20,8 +20,8 @@ describe("feature map", () => {
 
   test("parses sections, keys and summaries, makes ids, and flags duplicates", () => {
     const { features, problem } = parseFeatures(MAP);
-    expect(features.map((f) => f.id)).toEqual(["checkout", "apply-discount", "invite-a-teammate", "checkout-2"]);
-    expect(features[0]).toEqual({ id: "checkout", title: "Checkout", where: ["/cart", "/checkout"], parent: null, summary: "A buyer pays.\n\nSecond line." });
+    expect<unknown>(features.map((f) => f.id)).toEqual(["checkout", "apply-discount", "invite-a-teammate", "checkout-2"]);
+    expect<unknown>(features[0]).toEqual({ id: "checkout", title: "Checkout", where: ["/cart", "/checkout"], parent: null, summary: "A buyer pays.\n\nSecond line." });
     expect(features[1]).toMatchObject({ parent: "checkout", where: ["/cart"], summary: "A buyer enters a code." });
     expect(features[2]).toMatchObject({ where: [], parent: null, summary: "An owner invites someone." });
     expect(problem).toContain('Two features have the id "checkout"');
@@ -29,13 +29,13 @@ describe("feature map", () => {
 
   test("a plans: line is read and ignored, and does not leak into the summary", () => {
     const [f] = parseFeatures("## Checkout\nid: checkout\nplans: a, b\nPays.\n").features;
-    expect(f).toEqual({ id: "checkout", title: "Checkout", where: [], parent: null, summary: "Pays." });
+    expect<unknown>(f).toEqual({ id: "checkout", title: "Checkout", where: [], parent: null, summary: "Pays." });
   });
 
   test("a parent must be a top-level feature of the map, else it is a problem and the parent is dropped", () => {
     const text = "## A\nid: a\n## B\nid: b\nparent: a\n## C\nid: c\nparent: b\n## D\nid: d\nparent: ghost\n## E\nid: e\nparent: e\n## F\nid: f\nparent: later\n## Later\nid: later\n";
     const { features, problem } = parseFeatures(text);
-    expect(features.map((f) => [f.id, f.parent])).toEqual([["a", null], ["b", "a"], ["c", null], ["d", null], ["e", null], ["f", "later"], ["later", null]]);
+    expect<unknown>(features.map((f) => [f.id, f.parent])).toEqual([["a", null], ["b", "a"], ["c", null], ["d", null], ["e", null], ["f", "later"], ["later", null]]);
     expect(problem).toContain('"C" has the parent "b", which has a parent itself');
     expect(problem).toContain('"D" has the parent "ghost", which is not a feature');
     expect(problem).toContain('"E" has the parent "e"');

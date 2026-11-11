@@ -49,7 +49,7 @@ describe("plan files", () => {
   test("steps written without an id get one once, and the ids they keep never change", () => {
     put(planPath("checkout"), "---\ntitle: Checkout\n---\n## Steps\n1. [s-keep] Keep me\n2. Add me\n   expect: It appears\n");
     const first = readPlan(root, id("checkout"));
-    expect(first.steps[0]!.id).toBe("s-keep");
+    expect<unknown>(first.steps[0]!.id).toBe("s-keep");
     expect(first.steps[1]!.id).toMatch(/^s-[a-z0-9]{4}$/);
     const written = fs.readFileSync(planPath("checkout"), "utf-8");
     expect(written).toContain(`2. [${first.steps[1]!.id}] Add me`);
@@ -112,7 +112,7 @@ describe("plan files", () => {
   });
 
   test("step ids are validated at the boundary", () => {
-    expect(stepId("s-7k2p")).toBe("s-7k2p");
+    expect<unknown>(stepId("s-7k2p")).toBe("s-7k2p");
     expect(() => stepId("p-1")).toThrow("not a step id");
   });
 });
@@ -126,7 +126,7 @@ describe("listPlans", () => {
     put(planPath("old-flow.proposals"), "## Steps\n1. nope\n");
     put(planPath("checkout.proposals"), "garbage");
     const { byFeature, loose } = listPlans(root);
-    expect([...byFeature.keys()]).toEqual(["checkout"]);
+    expect<unknown>([...byFeature.keys()]).toEqual(["checkout"]);
     expect(byFeature.get(id("checkout"))).toMatchObject({ title: "Checkout with saved card", updatedAt: expect.any(Number) });
     expect(byFeature.get(id("checkout"))!.steps).toHaveLength(2);
     expect(loose).toEqual([

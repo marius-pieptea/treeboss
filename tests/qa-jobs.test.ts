@@ -335,7 +335,7 @@ describe("pairs", () => {
     putPlan("a");
     bug("Pair bug");
     for (const [stages, scope] of [[{ map: {} }, undefined], [{ plan: { batching: "each" } }, { kind: "features", ids: ["a"] }], [{ fix: { batching: "each" } }, undefined]] as const) {
-      const v = await run(request(stages as StageSettings, { driver: { kind: "pair", pairId: pair.id }, ...(scope ? { scope } : {}) }));
+      const v = await run(request(stages as StageSettings, { driver: { kind: "pair", pairId: pair.id }, ...(scope ? { scope: scope as unknown as PipelineRequest["scope"] } : {}) }));
       const s = getSession(v.jobs[0]!.sessionId!)!;
       expect(s.pair_id).toBe(pair.id);
       expect(v.jobs[0]!.pair).toBe(true);

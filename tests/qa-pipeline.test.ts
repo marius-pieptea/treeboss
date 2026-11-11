@@ -36,7 +36,7 @@ describe("reconcile: control", () => {
   ];
   for (const [name, control, jobs, want] of cases) {
     test(name, () => {
-      expect(reconcile(pipeline(c, control, ["a", "b"] as Unit[]), snap({ jobs: jobs as Snapshot["jobs"] }), 99)).toEqual(want);
+      expect<unknown>(reconcile(pipeline(c, control, ["a", "b"] as Unit[]), snap({ jobs: jobs as unknown as Snapshot["jobs"] }), 99)).toEqual(want);
     });
   }
 
@@ -73,7 +73,7 @@ describe("reconcile: launching", () => {
     test(r.name, () => {
       const c = config({ stages: { [r.stage]: r.stage === "map" ? {} : { batching: r.batching, ...(r.stage === "plan" ? { replan: false } : {}) } } as PipelineConfig["stages"] });
       const d = reconcile(pipeline(c, { kind: "running", stage: r.stage }, r.units as Unit[]), snap({ jobs: r.jobs, fixBusyElsewhere: r.fixBusy ?? false }), 7);
-      expect(r.want === "wait" ? d : launches(d)).toEqual(r.want === "wait" ? { kind: "wait" } : r.want);
+      expect<unknown>(r.want === "wait" ? d : launches(d)).toEqual(r.want === "wait" ? { kind: "wait" } : r.want);
     });
   }
 
@@ -140,7 +140,7 @@ describe("reconcile: advancing", () => {
   test("a drained stage opens the next with fresh units (auto)", () => {
     const p = pipeline(all("auto"), { kind: "running", stage: "plan" }, ["a", "b"] as Unit[]);
     const s = snap({ plans: planned("a", "b", "c"), jobs: [job("plan", ["a"]), job("plan", ["b"])] });
-    expect(reconcile(p, s, 4)).toEqual({ kind: "control", control: { kind: "running", stage: "test" }, units: ["a", "b", "c"] });
+    expect<unknown>(reconcile(p, s, 4)).toEqual({ kind: "control", control: { kind: "running", stage: "test" }, units: ["a", "b", "c"] });
   });
 
   test("a drained stage holds under pace step", () => {
@@ -167,7 +167,7 @@ describe("reconcile: advancing", () => {
     const c = config({ stages: { map: {}, fix: { batching: "each" } } });
     const p = pipeline(c, { kind: "running", stage: "map" }, ["map"] as Unit[]);
     const d = reconcile(p, snap({ jobs: [job("map", ["map"])], openBugs: [{ id: bid("bug-9"), feature: null }] }), 4);
-    expect(d).toEqual({ kind: "control", control: { kind: "running", stage: "fix" }, units: ["bug-9"] });
+    expect<unknown>(d).toEqual({ kind: "control", control: { kind: "running", stage: "fix" }, units: ["bug-9"] });
   });
 
   test("a failed launch still counts the unit as covered, so the stage drains", () => {
@@ -186,25 +186,25 @@ describe("unitsFor", () => {
   test("map is its one unit", () => expect(unitsFor("map", config({ stages: { map: {} } }), s)).toEqual(["map"]));
 
   test("plan without replan takes features with no usable plan, in features.md order", () => {
-    expect(unitsFor("plan", config({ stages }), s)).toEqual(["b", "c", "d", "e"]);
+    expect<unknown>(unitsFor("plan", config({ stages }), s)).toEqual(["b", "c", "d", "e"]);
   });
   test("plan with replan takes every feature in scope", () => {
-    expect(unitsFor("plan", config({ stages: { plan: { batching: "each", replan: true } } }), s)).toEqual(["a", "b", "c", "d", "e"]);
+    expect<unknown>(unitsFor("plan", config({ stages: { plan: { batching: "each", replan: true } } }), s)).toEqual(["a", "b", "c", "d", "e"]);
   });
-  test("test takes only features whose plan is usable", () => expect(unitsFor("test", config({ stages }), s)).toEqual(["a"]));
+  test("test takes only features whose plan is usable", () => expect<unknown>(unitsFor("test", config({ stages }), s)).toEqual(["a"]));
   test("a features scope narrows plan and test and drops ids that no longer exist", () => {
     const c = config({ stages, scope: { kind: "features", ids: ["c", "a", "gone"] } });
-    expect(unitsFor("plan", c, s)).toEqual(["c"]);
-    expect(unitsFor("test", c, s)).toEqual(["a"]);
+    expect<unknown>(unitsFor("plan", c, s)).toEqual(["c"]);
+    expect<unknown>(unitsFor("test", c, s)).toEqual(["a"]);
   });
   test("fix with scope all takes every open bug, one with no feature too, in id order", () => {
-    expect(unitsFor("fix", config({ stages }), s)).toEqual(["bug-a", "bug-b", "bug-z"]);
+    expect<unknown>(unitsFor("fix", config({ stages }), s)).toEqual(["bug-a", "bug-b", "bug-z"]);
   });
   test("fix with a features scope takes the bugs of those features", () => {
-    expect(unitsFor("fix", config({ stages, scope: { kind: "features", ids: ["b"] } }), s)).toEqual(["bug-b"]);
+    expect<unknown>(unitsFor("fix", config({ stages, scope: { kind: "features", ids: ["b"] } }), s)).toEqual(["bug-b"]);
   });
   test("fix with a bugs scope takes the named bugs that are still open", () => {
-    expect(unitsFor("fix", config({ stages: { fix: { batching: "each" } }, scope: { kind: "bugs", ids: ["bug-z", "bug-gone"] } }), s)).toEqual(["bug-z"]);
+    expect<unknown>(unitsFor("fix", config({ stages: { fix: { batching: "each" } }, scope: { kind: "bugs", ids: ["bug-z", "bug-gone"] } }), s)).toEqual(["bug-z"]);
   });
 });
 
@@ -265,12 +265,12 @@ describe("featureForUrl", () => {
     ["a tie is null", f(["a", ["/x"]], ["b", ["/x"]]), "http://localhost:3000/x/1", null],
     ["a url that does not parse is null", f(["a", ["/x"]]), "not a url", null],
   ];
-  for (const [name, features, url, want] of vectors) test(name, () => expect(featureForUrl(features, url)).toBe(want));
+  for (const [name, features, url, want] of vectors) test(name, () => expect<unknown>(featureForUrl(features, url)).toBe(want));
 
   test("a bug is shown under its stored feature when that still exists, else by url", () => {
     const fs = f(["cart", ["/cart"]]);
-    expect(bugFeature("cart", "http://x/other", fs)).toEqual({ feature: "cart", source: "stored" });
-    expect(bugFeature("gone", "http://x/cart", fs)).toEqual({ feature: "cart", source: "url" });
+    expect<unknown>(bugFeature("cart", "http://x/other", fs)).toEqual({ feature: "cart", source: "stored" });
+    expect<unknown>(bugFeature("gone", "http://x/cart", fs)).toEqual({ feature: "cart", source: "url" });
     expect(bugFeature(null, "http://x/none", fs)).toEqual({ feature: null, source: null });
   });
 });
