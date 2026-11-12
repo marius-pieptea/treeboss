@@ -218,9 +218,32 @@ function statusFrom(base: CodegraphStatus, r: CliRun): CodegraphStatus {
   }
 }
 
+/** Index roots an index/sync job is writing to right now. */
+const busyRoots = new Set<string>();
+
+/**
+ * Mark an index root as being written by a job. While it is, status answers from the last reading
+ * instead of running `codegraph status`: that opens the same database, and the running indexer then
+ * fails with "store worker: database is locked".
+ */
+export function setIndexBusy(root: string, busy: boolean): void {
+  if (busy) busyRoots.add(path.resolve(root));
+  else busyRoots.delete(path.resolve(root));
+}
+
 function cached(key: string, fresh: boolean | undefined): CodegraphStatus | null {
   const hit = cache.get(key);
   return !fresh && hit && Date.now() - hit.at < TTL_MS ? hit.value : null;
+}
+
+/** The last status seen for `key` (or a placeholder) when its index is being written, else null. */
+function whileBusy(key: string): CodegraphStatus | null {
+  if (busyRoots.size === 0) return null;
+  const root = findIndexRoot(key);
+  if (!root || !busyRoots.has(root)) return null;
+  const last = cache.get(key)?.value;
+  if (last) return last;
+  return { ...planStatus(key, versionOf).base, state: "incomplete", note: "An index job is running on this project." };
 }
 
 /**
@@ -229,7 +252,7 @@ function cached(key: string, fresh: boolean | undefined): CodegraphStatus | null
  */
 export function codegraphStatus(dir: string, opts: { fresh?: boolean } = {}): CodegraphStatus {
   const key = path.resolve(dir);
-  const hit = cached(key, opts.fresh);
+  const hit = cached(key, opts.fresh) ?? whileBusy(key);
   if (hit) return hit;
   const plan = planStatus(key, versionOf);
   let value = plan.base;
@@ -246,7 +269,7 @@ const inflight = new Map<string, Promise<CodegraphStatus>>();
 /** Index state for the project at `dir`, without blocking the daemon. Cached for a few seconds (the UI polls it); concurrent asks share one CLI run. */
 export function codegraphStatusAsync(dir: string, opts: { fresh?: boolean } = {}): Promise<CodegraphStatus> {
   const key = path.resolve(dir);
-  const hit = cached(key, opts.fresh);
+  const hit = cached(key, opts.fresh) ?? whileBusy(key);
   if (hit) return Promise.resolve(hit);
   const running = inflight.get(key);
   if (running) return running;

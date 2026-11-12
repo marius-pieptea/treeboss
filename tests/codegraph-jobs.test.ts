@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { bundledCodegraph, clearCodegraphCache, codegraphStatus, resolveCodegraph } from "../src/codegraph/detect";
+import { bundledCodegraph, clearCodegraphCache, codegraphStatus, codegraphStatusAsync, resolveCodegraph } from "../src/codegraph/detect";
 import { estimateIndexSize } from "../src/codegraph/estimate";
 import { cancelCodegraphJob, dismissCodegraphJob, emptyProgress, jobFinished, latestJobFor, parseProgress, startCodegraph, stopAllCodegraphJobs } from "../src/codegraph/jobs";
 import { resetSetting, setSetting } from "../src/settings";
@@ -26,7 +26,7 @@ function stub(mode: "ok" | "fail" | "hang" | "slow" = "ok", status?: Record<stri
     hang: `printf 'Scanning files...\\n'; mkdir -p "$2/.codegraph"; printf 'Parsing code  ##  20%%\\n'; sleep 30`,
     slow: `printf 'Scanning files...\\n'; mkdir -p "$2/.codegraph"; sleep 30`,
   }[mode];
-  fs.writeFileSync(path.join(dir, "codegraph"), `#!/bin/sh\nD="$(dirname "$0")"\ncase "$1" in\n  --version) echo 1.6.2;;\n  status) cat "$D/status.json";;\n  init|index|sync) ${body};;\n  uninit) rm -rf "$3/.codegraph";;\n  *) exit 1;;\nesac\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(dir, "codegraph"), `#!/bin/sh\nD="$(dirname "$0")"\ncase "$1" in\n  --version) echo 1.6.2;;\n  status) echo x >> "$D/status.calls"; cat "$D/status.json";;\n  init|index|sync) ${body};;\n  uninit) rm -rf "$3/.codegraph";;\n  *) exit 1;;\nesac\n`, { mode: 0o755 });
   process.env.PATH = `${dir}:${oldPath}`;
   return dir;
 }
@@ -253,6 +253,23 @@ describe("jobs", () => {
     expect(done.state).toBe("cancelled");
     expect(done.note).toMatch(/may be incomplete/);
     expect(fs.existsSync(path.join(repo, ".codegraph"))).toBe(true);
+  });
+  test("status does not open the index while a job writes it (the indexer would hit 'database is locked')", async () => {
+    const bin = stub("hang");
+    const calls = () => (fs.existsSync(path.join(bin, "status.calls")) ? fs.readFileSync(path.join(bin, "status.calls"), "utf8").split("\n").filter(Boolean).length : 0);
+    const repo = makeRepo();
+    fs.mkdirSync(path.join(repo, ".codegraph"));
+    expect((await codegraphStatusAsync(repo, { fresh: true })).files).toBe(1204);
+    const before = calls();
+    const job = startCodegraph(repo, "reindex");
+    const during = await Promise.all([codegraphStatusAsync(repo, { fresh: true }), codegraphStatusAsync(path.join(repo, "src"), { fresh: true })]);
+    expect(during[0].files).toBe(1204); // the last reading, not a CLI run
+    expect(during[1].state).toBe("incomplete"); // never read before: a placeholder
+    expect(codegraphStatus(repo, { fresh: true }).files).toBe(1204);
+    expect(calls()).toBe(before);
+    await cancelCodegraphJob(job.id);
+    await codegraphStatusAsync(repo, { fresh: true });
+    expect(calls()).toBe(before + 1);
   });
   test("the time limit stops the job with a message that names the setting", async () => {
     stub("slow");

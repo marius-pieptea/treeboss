@@ -12,7 +12,7 @@ import path from "path";
 import { randomBytes } from "crypto";
 import { UserError } from "../util";
 import { getSetting } from "../settings";
-import { clearCodegraphCache, codegraphBinary, codegraphStatus, codegraphStatusAsync, findIndexRoot } from "./detect";
+import { clearCodegraphCache, codegraphBinary, codegraphStatus, codegraphStatusAsync, findIndexRoot, setIndexBusy } from "./detect";
 import { ensureCodegraphIgnored } from "./gitignore";
 
 export type CodegraphJobMode = "init" | "sync" | "reindex";
@@ -239,7 +239,14 @@ export function startCodegraph(dir: string, requested: CodegraphJobMode, opts: S
     }
   };
 
-  const { proc, pumps } = spawnCli([bin, mode === "reindex" ? "index" : mode, target], onData);
+  setIndexBusy(target, true);
+  let proc: ReturnType<typeof Bun.spawn>, pumps: Promise<unknown>;
+  try {
+    ({ proc, pumps } = spawnCli([bin, mode === "reindex" ? "index" : mode, target], onData));
+  } catch (e) {
+    setIndexBusy(target, false);
+    throw e;
+  }
   procs.set(job.id, proc);
   const timer = timeoutMs > 0 ? setTimeout(() => stopProc(job.id, "timeout"), timeoutMs) : null;
 
@@ -251,6 +258,7 @@ export function startCodegraph(dir: string, requested: CodegraphJobMode, opts: S
       if (carry.trim()) onData("\n");
       if (timer) clearTimeout(timer);
       procs.delete(job.id);
+      setIndexBusy(job.path, false);
       const reason = stopReason.get(job.id);
       stopReason.delete(job.id);
       const ms = Date.now() - Date.parse(job.startedAt);
