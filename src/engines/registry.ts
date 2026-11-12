@@ -250,10 +250,9 @@ const codex: EngineDef = {
     // Reasoning effort is config, not a flag. A bare word parses as a TOML string.
     if (input.effort) args.push("-c", `model_reasoning_effort=${input.effort}`);
     args.push(...codexMcpOverrides(input.mcp));
-    // The prompt is the positional argument (`-p` is --profile here). Codex appends piped
-    // stdin to it, so nothing is written to stdin.
-    args.push(input.prompt);
-    return { cmd: bin, args, stdin: null, env: baseEnv(), cleanup: () => {}, notes: [] };
+    // `-` reads the prompt from stdin for both exec and resume, avoiding command-line length limits.
+    args.push("-");
+    return { cmd: bin, args, stdin: input.prompt, env: baseEnv(), cleanup: () => {}, notes: [] };
   },
 };
 
