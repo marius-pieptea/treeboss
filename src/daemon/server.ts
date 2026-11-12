@@ -51,6 +51,7 @@ import { scaffoldRoutes } from "./routes/scaffold";
 import { designFoldRoutes, designRoutes } from "./routes/design";
 import { sessionsExtRoutes } from "./routes/x_sessions";
 import { settingsExtRoutes } from "./routes/x_settings";
+import { OAUTH_CALLBACK_PATH, callbackPage, finishSignIn } from "../mcp/oauth";
 import { gitExtRoutes } from "./routes/x_git";
 import { fsExtRoutes } from "./routes/x_fs";
 import { browserExtRoutes } from "./routes/x_browser";
@@ -133,6 +134,16 @@ export function startServer(opts: ServerOptions) {
 
     // A phone pairs here with a one-time code (404 unless remote access is on).
     if (url.pathname === "/_pair") return handlePair(req, url, peer, url.protocol === "https:" || (isLoopbackPeer(peer) && req.headers.get("x-forwarded-proto") === "https"));
+
+    // An MCP server's OAuth redirect: the browser carries no trb credentials here, the single-use state is what authenticates it.
+    if (url.pathname === OAUTH_CALLBACK_PATH && req.method === "GET") {
+      try {
+        const name = await finishSignIn(url.searchParams);
+        return callbackPage(true, `Signed in to ${name}. Sessions use it from their next turn.`);
+      } catch (err: any) {
+        return callbackPage(false, err instanceof UserError ? err.message : `Sign-in failed: ${err?.message ?? err}`);
+      }
+    }
 
     if (!url.pathname.startsWith("/api/")) {
       if (req.method !== "GET" && req.method !== "HEAD") throw new HttpError(405, "Method not allowed.");

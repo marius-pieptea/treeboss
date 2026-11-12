@@ -21,6 +21,8 @@ export interface ProbeResult {
   /** Handshake plus tools/list, wall clock. */
   latencyMs: number;
   error?: string;
+  /** http: the server answered 401 and no credentials were sent, so signing in (OAuth) is the likely fix. */
+  authRequired?: boolean;
   /** The last of the server's stderr, which is where a crash says why. */
   stderrTail?: string;
 }
@@ -194,7 +196,11 @@ export async function probeHttp(url: string, headers: Record<string, string> = {
   const post = (body: unknown, extra: Record<string, string> = {}) => fetch(url, { method: "POST", headers: { ...common, ...extra }, body: JSON.stringify(body), signal: AbortSignal.timeout(timeout) });
   try {
     const res = await post({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: CLIENT } });
-    if (res.status === 401 || res.status === 403) return { ...base, latencyMs: Date.now() - started, error: `The server refused the credentials (HTTP ${res.status}). Check the headers.` };
+    if (res.status === 401 || res.status === 403) {
+      const sent = Object.keys(headers).some((k) => k.toLowerCase() === "authorization");
+      const authRequired = res.status === 401 && !sent;
+      return { ...base, latencyMs: Date.now() - started, authRequired, error: `The server refused the credentials (HTTP ${res.status}). ${authRequired ? "Sign in, or add an Authorization header." : "Sign in again, or check the headers."}` };
+    }
     if (!res.ok) return { ...base, latencyMs: Date.now() - started, error: `HTTP ${res.status} ${res.statusText}`.trim() };
     const sid = res.headers.get("mcp-session-id");
     const init = await readHttpRpc(res);

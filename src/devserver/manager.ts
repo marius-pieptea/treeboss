@@ -16,6 +16,7 @@ import path from "path";
 import { spawn, type ChildProcess } from "child_process";
 import { Hub } from "../sessions/hub";
 import { resolveEnv } from "../secrets/store";
+import { cargoEnv, cargoLimits } from "../git/cargotarget";
 import { owningWorkspace } from "../workspaces";
 import { detect, type PackageManager, type RunService } from "./detect";
 import { pickPort, portArgs, portFromOutput, withPortArgs } from "./ports";
@@ -250,7 +251,9 @@ export async function startService(input: StartInput): Promise<InstanceView> {
   push(inst, "sys", `$ ${command}${port ? `   (PORT=${port})` : ""}`);
 
   const sh = shellInvocation(command);
-  const child = spawn(sh.file, sh.args, { cwd, env: childEnv(port, {}, secrets) as NodeJS.ProcessEnv, detached: DETACH_GROUP, windowsHide: true, windowsVerbatimArguments: sh.verbatim, stdio: ["ignore", "pipe", "pipe"] });
+  const env = childEnv(port, {}, secrets);
+  Object.assign(env, cargoEnv(cwd, env, cargoLimits(), { agent: false }));
+  const child = spawn(sh.file, sh.args, { cwd, env: env as NodeJS.ProcessEnv, detached: DETACH_GROUP, windowsHide: true, windowsVerbatimArguments: sh.verbatim, stdio: ["ignore", "pipe", "pipe"] });
   inst.child = child;
   inst.pid = child.pid ?? null;
   child.stdout?.on("data", (d: Buffer) => feed(inst, "out", d.toString("utf-8")));

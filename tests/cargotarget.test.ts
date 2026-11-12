@@ -3,7 +3,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { paths } from "../src/paths";
-import { cargoTargetRoot, pruneSharedTargets, sharedCargoTarget } from "../src/git/cargotarget";
+import { autoCargoJobs, cargoEnv, cargoTargetRoot, isRustProject, pruneSharedTargets, rustBuildHint, sharedCargoTarget } from "../src/git/cargotarget";
 
 let tmp: string;
 const prev = process.env.TRB_HOME;
@@ -49,5 +49,47 @@ describe("pruneSharedTargets", () => {
     expect(fs.existsSync(busy)).toBe(true);
     expect(fs.existsSync(small)).toBe(true);
     expect(pruneSharedTargets(0)).toEqual([]);
+  });
+});
+
+describe("cargoEnv", () => {
+  const wt = () => path.join(paths.worktrees(), "app-1234abcd", "s1");
+  const on = { shareTarget: true, jobs: 0, leanDebug: true };
+  test("a worktree gets the shared dir, lean debug and capped jobs", () => {
+    const v = cargoEnv(wt(), {}, { ...on, jobs: 3 }, { agent: false });
+    expect(v).toEqual({ CARGO_TARGET_DIR: path.join(cargoTargetRoot(), "app-1234abcd"), CARGO_PROFILE_DEV_DEBUG: "line-tables-only", CARGO_BUILD_JOBS: "3" });
+  });
+  test("the operator's own checkout: jobs only for agent turns, never lean debug", () => {
+    expect(cargoEnv(os.tmpdir(), {}, on, { agent: false })).toEqual({});
+    expect(cargoEnv(os.tmpdir(), {}, on, { agent: true })).toEqual({ CARGO_BUILD_JOBS: String(autoCargoJobs()) });
+  });
+  test("variables already set win, and settings switch each part off", () => {
+    expect(cargoEnv(wt(), { CARGO_TARGET_DIR: "x", CARGO_BUILD_JOBS: "1", CARGO_PROFILE_DEV_DEBUG: "full" }, on, { agent: true })).toEqual({});
+    expect(cargoEnv(wt(), {}, { shareTarget: false, jobs: 2, leanDebug: false }, { agent: true })).toEqual({ CARGO_BUILD_JOBS: "2" });
+  });
+});
+
+describe("autoCargoJobs", () => {
+  test("half the cores, one per 4 GB, at least 2", () => {
+    expect(autoCargoJobs(24, 32 * 1024 ** 3)).toBe(8);
+    expect(autoCargoJobs(8, 64 * 1024 ** 3)).toBe(4);
+    expect(autoCargoJobs(2, 4 * 1024 ** 3)).toBe(2);
+  });
+});
+
+describe("isRustProject / rustBuildHint", () => {
+  test("finds Cargo.toml at the root or one level down", () => {
+    const root = fs.mkdtempSync(path.join(tmp, "proj-"));
+    expect(isRustProject(root)).toBe(false);
+    fs.mkdirSync(path.join(root, "src-tauri"));
+    fs.writeFileSync(path.join(root, "src-tauri", "Cargo.toml"), "");
+    expect(isRustProject(root)).toBe(true);
+  });
+  test("forbids private target dirs and names what trb set", () => {
+    const h = rustBuildHint({ CARGO_TARGET_DIR: "t", CARGO_BUILD_JOBS: "8" });
+    expect(h).toContain("`CARGO_BUILD_JOBS`");
+    expect(h).toContain("Never set `CARGO_TARGET_DIR`");
+    expect(h).toContain("unset CARGO_TARGET_DIR");
+    expect(rustBuildHint({})).not.toContain("unset CARGO_TARGET_DIR");
   });
 });

@@ -67,6 +67,7 @@ Then do the unit, in this order:
 2. Make the smallest change that meets the success criteria in your brief.
 3. Write the failing test first when a cheap local test target exists. Run it, and check that it fails for the reason you expect.
 4. Make the change. Commit in small ordered units, each verified before the next.
+5. Verify your unit only: the test you wrote, the existing tests of the files you touched, and a typecheck. Do not run the app, end-to-end tests or the whole suite: the verifier checks the real surface, independently.
 
 Never force-push, deploy, delete data or message customers. If the unit needs one of those, stop and tell the lead.
 
@@ -171,6 +172,8 @@ You are an independent verifier. You did not write this code, and you must not h
 Before any work, read the pstack-treeboss skill. ${READ_BY_PATH}
 
 Verify on the matching surface: run the app, the CLI or the tests that the change affects. An inconclusive result, or a check on the wrong surface, is not a pass. Unit tests show how the branches behave, not that no bug exists.
+
+The builder already ran its unit's tests: do not rerun the ones its report shows passing unless you doubt them. Spend your runs on what they cannot show. Run end-to-end suites only when your brief asks for them.
 
 Use interrogate for contested designs, and swarm's method for coverage and races, inside your own unit. Read the leaf \`principle-*\` skill for each principle you apply, and name it in your report.
 

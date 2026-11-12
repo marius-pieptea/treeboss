@@ -389,6 +389,8 @@ trb mcp add ctx7 -- npx -y @upstash/context7-mcp           # stdio
 trb mcp add docs --url https://example.com/mcp -H Authorization="Bearer …"
 trb mcp import --from claude                               # copy ~/.claude.json's servers across
 trb mcp test ctx7                                          # spawn it and list its tools
+trb mcp add linear --url https://mcp.linear.app/mcp && trb mcp login linear   # OAuth: sign in in the browser
+trb mcp logout linear
 
 trb skill import ~/.claude/skills        trb skill new my-skill -d "when to use it"
 trb skill add ./some-skill               trb skill disable my-skill
@@ -401,6 +403,8 @@ trb skill packs                          trb skill pack <id> on|off
 | codex | `-c mcp_servers.*` overrides, layered on `~/.codex/config.toml` | `.agents/skills/` |
 | cursor | `.cursor/mcp.json` in the workspace, backed up and restored around the turn | `.cursor/skills/` |
 | opencode, agy, grok | **not wired** (one-shot mode has no MCP hook): they work as heads, not as leads | prompt index (opencode), `.agents/skills`, `.grok/skills` |
+
+**Signing in (OAuth).** An http server that answers 401 can be signed in to from Settings > MCP (**Sign in**) or `trb mcp login <name>`. The daemon runs the flow (the engines are headless): it finds the authorization server from the server's OAuth metadata, registers itself as a client (or uses `--client-id`/`--client-secret` for servers that do not allow that; the redirect URI is `http://127.0.0.1:<daemon port>/oauth/mcp/callback`), and stores the tokens in the trb database. Before each turn it refreshes a token that is expiring and hands the engine an `Authorization: Bearer` header; an `Authorization` header you set yourself wins. A token is refreshed only at turn start, so a turn that outlives the token's lifetime can lose the server partway through.
 
 Skills are copied into the workspace for the duration of a turn and removed afterwards; a skill directory that already exists there is never touched. Everything trb writes into a workspace is taken back out before a worktree is committed.
 

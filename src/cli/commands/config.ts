@@ -23,6 +23,8 @@ import { ENGINES, engineIds, installedEngines, resolveBinary } from "../../engin
 import { liveDaemon, readInfo, startDetached, stopDaemon, runDaemon } from "../../daemon/lifecycle";
 import { paths } from "../../paths";
 import { probeHttp, probeStdio, type ProbeResult } from "../../mcp/probe";
+import { ensureFreshToken, oauthHeaders, oauthStatus, signOut } from "../../mcp/oauth";
+import { api } from "../client";
 import { runDoctor } from "../../doctor";
 import { c, die, table, ago, printJson, printLine } from "../fmt";
 
@@ -185,7 +187,7 @@ export async function cmdMcp(argv: string[]): Promise<number> {
       }
       console.log(
         table(
-          servers.map((s) => [c.bold(s.name), s.enabled ? c.green("on") : c.gray("off"), s.transport, s.transport === "stdio" ? [s.command, ...s.args].join(" ") : s.url ?? ""]),
+          servers.map((s) => [c.bold(s.name), s.enabled ? c.green("on") : c.gray("off"), s.transport, s.transport === "stdio" ? [s.command, ...s.args].join(" ") : `${s.url ?? ""}${oauthStatus(s.name).signedIn ? c.green(" (signed in)") : ""}`]),
           ["NAME", "", "TYPE", "TARGET"],
         ),
       );
@@ -236,11 +238,47 @@ export async function cmdMcp(argv: string[]): Promise<number> {
       // Spawn the server the way an engine would and ask for its tools: proves the command runs and speaks MCP.
       const rec = McpStore.get(rest[0] ?? "");
       if (!rec) die(`No MCP server "${rest[0] ?? ""}".`);
-      return printProbe(rec.transport === "stdio" ? await probeStdio(rec.command!, rec.args, rec.env) : await probeHttp(rec.url!, rec.headers));
+      if (rec.transport === "http") await ensureFreshToken(rec.name).catch(() => {});
+      return printProbe(rec.transport === "stdio" ? await probeStdio(rec.command!, rec.args, rec.env) : await probeHttp(rec.url!, oauthHeaders(rec.name, rec.headers)));
+    }
+    case "login": {
+      // The daemon runs the flow: the browser comes back to it, so it must be running.
+      const { values, positionals } = opts(rest, { "client-id": { type: "string" }, "client-secret": { type: "string" }, "no-open": { type: "boolean" } });
+      const name = positionals[0];
+      if (!name) die("Usage: trb mcp login <name> [--client-id <id> [--client-secret <secret>]] [--no-open]");
+      const r = await api<{ authorizeUrl: string; redirectUri: string }>("POST", `/api/mcp/${encodeURIComponent(name)}/oauth/start`, { clientId: values["client-id"], clientSecret: values["client-secret"] });
+      console.log(`Open this to sign in to ${c.bold(name)}:\n${r.authorizeUrl}`);
+      if (!values["no-open"]) openUrl(r.authorizeUrl);
+      process.stderr.write(c.dim("waiting for the browser… "));
+      const deadline = Date.now() + 10 * 60_000;
+      while (Date.now() < deadline) {
+        await Bun.sleep(1500);
+        const { servers } = await api<{ servers: Array<{ name: string; oauth: { signedIn: boolean } | null }> }>("GET", "/api/mcp");
+        if (servers.find((s) => s.name === name)?.oauth?.signedIn) {
+          process.stderr.write("\n");
+          console.log(c.green(`signed in to ${name}`));
+          return 0;
+        }
+      }
+      die("\nNo sign-in within 10 minutes. Run it again.");
+    }
+    case "logout": {
+      if (!rest[0]) die("Usage: trb mcp logout <name>");
+      if (!McpStore.get(rest[0])) die(`No MCP server "${rest[0]}".`);
+      console.log(signOut(rest[0]) ? `signed out of ${rest[0]}` : c.dim(`${rest[0]} was not signed in`));
+      return 0;
     }
     default:
-      die(`Unknown: trb mcp ${sub}. Subcommands: list, add, rm, enable, disable, import, test.`);
+      die(`Unknown: trb mcp ${sub}. Subcommands: list, add, rm, enable, disable, import, test, login, logout.`);
   }
+}
+
+/** Best effort: the URL is printed as well. rundll32 on Windows, because `start` reads `&` in the URL as a command separator. */
+function openUrl(url: string): void {
+  const cmd = process.platform === "darwin" ? ["open", url] : process.platform === "win32" ? ["rundll32", "url.dll,FileProtocolHandler", url] : ["xdg-open", url];
+  try {
+    Bun.spawn(cmd, { stdio: ["ignore", "ignore", "ignore"], windowsHide: true }).unref();
+  } catch {}
 }
 
 /** Print a probe result the way `trb mcp test` always has. Returns the exit code. */

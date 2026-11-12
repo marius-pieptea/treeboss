@@ -72,7 +72,7 @@ export const PAIR_ROLE_LIBRARY: PairRolePreset[] = [
     effort: "medium",
     instructions:
       "Change server code, data access and APIs. Keep schema changes additive and backwards compatible. " +
-      "Validate inputs at the boundary. Add or update tests for the behaviour you changed.",
+      "Validate inputs at the boundary. Add or update a test only where the behaviour you changed has real logic no existing test covers.",
   },
   {
     id: "tester",

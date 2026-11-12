@@ -29,9 +29,11 @@ import { HydraPairs, resolveRole, type HydraPair } from "../hydra/pairs";
 import { Agents, agentPromptBlock } from "../agents/store";
 import { PAIR_ROLE_LIBRARY } from "../hydra/roles";
 import { WorktreeManager, git, mergePatch, repoRootOf, type DepsMode, type WorktreeSession } from "../git/worktree";
-import { pruneSharedTargets } from "../git/cargotarget";
+import { cargoEnv, cargoLimits, isRustProject, pruneSharedTargets, rustBuildHint } from "../git/cargotarget";
+import { TESTING_HINT } from "./testing";
 import { drainSerialized, gitKey, LOCAL_GIT_TIMEOUT_MS, runGit } from "../git/run";
 import { buildRunMcpConfig } from "../mcp/store";
+import { refreshMcpTokens } from "../mcp/oauth";
 import { practicesBrief } from "../practices/store";
 import { CODEGRAPH_HINT } from "../codegraph/detect";
 import { evidenceEnabled, evidenceHint } from "../evidence/store";
@@ -1361,10 +1363,15 @@ function startTurn(s: SessionRecord, prompt: string, opts: { resume: boolean; fo
       // Both follow their settings (on by default). Evidence needs the daemon (its tools run there); REA is a standalone stdio server and does not.
       const evidenceOn = evidenceEnabled() && Boolean(daemon) && !asking;
       const reaOn = reaEnabled() && !asking;
+      // Signed-in http servers: a token that is expired or about to be is refreshed now, so the engine gets a live one.
+      if (!asking) await refreshMcpTokens(agent?.mcp ?? null);
       const mcp: McpRunConfig = buildRunMcpConfig({ sessionId: s.id, subagents: Boolean(s.subagents) && Boolean(daemon), plan: s.mode === "plan" && Boolean(daemon), title: s.depth === 0 && !asking && Boolean(daemon) && getSetting("session_titles") === "on", ask: asking, daemonUrl: daemon?.url ?? "", token: daemon?.token ?? "", allowed: agent?.mcp ?? null, browser: browserEnabled(), emulator: emulatorEnabled(), computer: computerUseAvailable(), evidence: evidenceOn, rea: reaOn, treeboss: !asking && isTreeboss(s.id) && Boolean(daemon), checklists: !asking && isChecklistAudit(s.id) && Boolean(daemon), qa: !asking && usesQaTools(s.id) && Boolean(daemon), codegraphDir: s.base_cwd });
       turnMcp = mcp;
       // One line, once per conversation: a resumed turn already has it.
       if (mcp.codegraph && !opts.resume && !asking) finalPrompt = `${CODEGRAPH_HINT}\n\n` + finalPrompt;
+      if (!opts.resume && !asking && !slash && getSetting("test_policy") !== "off") finalPrompt = `${TESTING_HINT}\n\n` + finalPrompt;
+      // Rust: once per conversation, so agents keep to the shared build cache instead of cold-building in folders of their own.
+      if (!opts.resume && !asking && !slash && (isRustProject(s.cwd) || isRustProject(s.base_cwd))) finalPrompt = `${rustBuildHint(cargoEnv(s.cwd, process.env, cargoLimits(), { agent: true }))}\n\n` + finalPrompt;
       // Evidence and REA: said once per conversation, like CodeGraph, and only where the engine can reach trb's MCP server.
       if (!opts.resume && !asking && !slash && def.mcp !== "none") {
         const aware = [mcp.rea ? REA_HINT : null, mcp.trb?.type === "stdio" && mcp.trb.env?.TRB_EVIDENCE === "1" ? evidenceHint(s.base_cwd) : null].filter(Boolean);

@@ -79,14 +79,14 @@ const PSTACK_LEAD = [
   "- builder: poteto-agent code delegates, one unit each",
   "- verifier: independent verdicts, interrogate and swarm gauntlets; never the head that wrote the code",
   "- cleaner: comment-sicko, no-comments and unslop passes",
-  "Brief each head with file pointers, the named data shape and the success criteria. Open a fresh head per new unit; fixes to a unit go back to the head that built it with subagent_send, and a verifier is never that head. You own every diff: review it and run the checks before you merge. Pause only for irreversible actions: force-push, deploys, data deletion, customer messages.",
+  "Brief each head with file pointers, the named data shape and the success criteria. Open a fresh head per new unit; fixes to a unit go back to the head that built it with subagent_send, and a verifier is never that head. You own every diff: read it before you merge. When a verifier passed it, do not rerun its checks; without one, run the typecheck and the tests the change affects. Pause only for irreversible actions: force-push, deploys, data deletion, customer messages.",
 ].join("\n");
 
 /** One line per pstack role. Each role carries its own line, so the library's text for a role is never appended. */
 const PSTACK_ROLE_NOTE = {
   explorer: "Read-only grounding: answer the question with cited findings, and change nothing.",
   architect: "Design only: sketch at least two distinct candidates, screen them and recommend one, with no implementation.",
-  builder: "Build one unit with small verified commits, and report what you verified.",
+  builder: "Build one unit with small commits, verified by its own tests and a typecheck (the verifier checks the real surface), and report what you ran.",
   verifier: "Prove or refute on the real surface, and never be the author of the code you check.",
   cleaner: "Report the comments to cut, and delete them only when your brief explicitly asks you to.",
 };
@@ -387,7 +387,7 @@ export const HydraPairs = {
       loadStep,
       ...(this.agentsLine() ? [this.agentsLine()] : []),
       `Then open one head per independent slice (several subagent_create calls in one response). Pass \`files\` with each head: the repo-relative paths or directory prefixes it will touch. Heads that touch the same files do not run in parallel: open one, and when it finishes send the follow-up to that same head with subagent_send, instead of a second head on those files.`,
-      `Then collect with subagent_wait using mode "any", and merge each head as soon as it finishes and passes: run the tests/typecheck yourself, subagent_merge it, then move on. Do not wait for every head before merging, and do not wait on one id while others have already finished. Send fixes back to the same head with subagent_send, and report what changed and which head did it.`,
+      `Then collect with subagent_wait using mode "any", and merge each head as soon as it finishes and passes: run the typecheck and the tests its change affects yourself (not the whole suite, and no end-to-end tests unless the operator asked), subagent_merge it, then move on. Do not wait for every head before merging, and do not wait on one id while others have already finished. Send fixes back to the same head with subagent_send, and report what changed and which head did it.`,
       ...(pair.lead_instructions ? [`How this pair works:\n${pair.lead_instructions}`] : []),
       ...(openHeads.length
         ? [
@@ -422,7 +422,7 @@ export const HydraPairs = {
       `Your one hard rule: you do NOT write code. Every change to source code or tests, however small — a one-line fix included — goes to a head. Docs and plain-text edits are yours to make.`,
       `Investigation, debugging and audits go to heads too. A quick look at a file or two to scope the work is fine; a sprawling read of the codebase is not — send a head.`,
       `Fan out: split the work into independent, parallel-safe slices and open one head per slice in the same response (several \`subagent_create\` calls at once). Cap ${cap} open at once; if there is more, go in waves. Each brief is a self-contained contract: goal, files, constraints, acceptance criteria, how to verify. Heads never see this thread.`,
-      `Then collect them with \`subagent_wait\` using mode "any", so you review each head as soon as it finishes instead of idling until the slowest is done. Review each answer and diff yourself: run the test / typecheck / lint gates, and read what changed. When the pair offers a reviewer on another engine, send it the diff for a second opinion.`,
+      `Then collect them with \`subagent_wait\` using mode "any", so you review each head as soon as it finishes instead of idling until the slowest is done. Review each answer and diff yourself: run the typecheck and the tests the change affects (not the whole suite, and no end-to-end tests unless the operator asked), and read what changed. When the pair offers a reviewer on another engine, send it the diff for a second opinion.`,
       `Blocking problems go back to the SAME head with \`subagent_send\` — it keeps its context. Do not fix them yourself.`,
       `\`subagent_merge\` the work that passes, then give the operator the combined result: what changed, which head did what, how it was verified, what is left.`,
       `Reuse heads for their own work: a head keeps its whole context, so fixes and follow-ups to what a head did go back to that head with \`subagent_send\`. A separate unit of work gets its own head. Close a head with \`subagent_close\` only when its work is merged or dropped AND no more work in its area is likely; open heads carry over to your next turn.`,

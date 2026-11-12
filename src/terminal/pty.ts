@@ -9,6 +9,7 @@ import fs from "fs";
 import os from "os";
 import { newId } from "../util";
 import { killTree } from "../proctree";
+import { cargoEnv, cargoLimits } from "../git/cargotarget";
 
 const MAX_SCROLLBACK_CHARS = 400_000;
 const MAX_TERMINALS = 24;
@@ -92,6 +93,8 @@ export function createTerminal(input: CreateTerminalInput): TerminalInfo {
     LANG: process.env.LANG || "en_US.UTF-8",
     ...input.env,
   };
+  // A `cargo run` in a head's worktree builds into the repo's shared cache too, not a cold target/ of its own.
+  Object.assign(env, cargoEnv(input.cwd, env, cargoLimits(), { agent: false }));
   // The daemon's own credentials are not for the shells it hands out.
   delete env.TRB_TOKEN;
 

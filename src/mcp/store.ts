@@ -17,6 +17,7 @@ import { parseList, UserError } from "../util";
 import { codegraphFor } from "../codegraph/detect";
 import { REA_NAME, reaLaunch } from "../evidence/rea";
 import { reaEnv } from "../evidence/readiness";
+import { forgetOAuth, oauthHeaders } from "./oauth";
 
 export const RESERVED_MCP_NAMES = new Set(["trb", "codegraph"]);
 const NAME_RE = /^[A-Za-z0-9_-]{1,40}$/;
@@ -99,6 +100,7 @@ export const McpStore = {
   },
 
   remove(name: string): boolean {
+    forgetOAuth(name);
     return db().prepare("DELETE FROM mcp_servers WHERE name = ?").run(name).changes > 0;
   },
 
@@ -162,7 +164,7 @@ export function buildRunMcpConfig(opts: { sessionId: string; subagents: boolean;
     const spec: McpServerSpec =
       s.transport === "stdio"
         ? { type: "stdio", command: s.command!, args: s.args, env: s.env }
-        : { type: "http", url: s.url!, headers: s.headers };
+        : { type: "http", url: s.url!, headers: oauthHeaders(s.name, s.headers) };
     out[s.name] = spec;
   }
   // Built in, like `trb`: present only when the project already has an index and the setting is on.

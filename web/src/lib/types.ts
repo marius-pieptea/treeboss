@@ -380,6 +380,8 @@ export interface McpServer {
   url: string | null;
   headers: Record<string, string>;
   enabled: boolean;
+  /** http servers only: OAuth sign-in state. */
+  oauth?: { signedIn: boolean; expiresAt: string | null; scope: string | null } | null;
 }
 
 export interface Skill {

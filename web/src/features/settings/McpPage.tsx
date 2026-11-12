@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { FileDown, Loader2, Pencil, Play, Plus, Server, Trash2, X } from "lucide-react";
+import { FileDown, Loader2, LogIn, LogOut, Pencil, Play, Plus, Server, Trash2, X } from "lucide-react";
 import { Button, IconButton } from "@/components/ui/button";
 import { DropdownMenu } from "@/components/ui/overlay";
 import { Switch } from "@/components/ui/form";
 import { Badge, Empty, Skeleton } from "@/components/ui/misc";
-import { confirm } from "@/components/ui/dialogs";
+import { ask, confirm } from "@/components/ui/dialogs";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import type { McpServer } from "@/lib/types";
@@ -75,10 +75,13 @@ function TestResult({ result, onDismiss }: { result: ProbeResult; onDismiss: () 
   );
 }
 
-function ServerCard({ s, test, onTest, onDismiss, onEdit, onDelete, onToggle, delay }: { s: McpServer; test?: TestState; onTest: () => void; onDismiss: () => void; onEdit: () => void; onDelete: () => void; onToggle: (on: boolean) => void; delay: number }) {
+function ServerCard({ s, test, signingIn, onTest, onDismiss, onEdit, onDelete, onToggle, onSignIn, onSignOut, delay }: { s: McpServer; test?: TestState; signingIn: boolean; onTest: () => void; onDismiss: () => void; onEdit: () => void; onDelete: () => void; onToggle: (on: boolean) => void; onSignIn: () => void; onSignOut: () => void; delay: number }) {
   const envCount = Object.keys(s.env).length;
   const headerCount = Object.keys(s.headers).length;
   const running = test && test.running;
+  const signedIn = !!s.oauth?.signedIn;
+  // The prominent button only once a test showed the server wants it; otherwise it waits in the hover actions.
+  const wantsSignIn = s.transport === "http" && !signedIn && test && !test.running && test.result.authRequired;
   return (
     <div style={{ animationDelay: `${delay}ms` }} className={cn("group min-w-0 animate-slide-up rounded-xl border border-line bg-bg/40 p-3.5 transition-colors hover:border-line-strong", !s.enabled && "opacity-60")}>
       <div className="flex items-center gap-3">
@@ -89,16 +92,32 @@ function ServerCard({ s, test, onTest, onDismiss, onEdit, onDelete, onToggle, de
             <Badge tone={s.transport === "http" ? "blue" : "neutral"}>{s.transport}</Badge>
             {envCount > 0 && <Badge title={Object.keys(s.env).join(", ")}>{envCount} env</Badge>}
             {headerCount > 0 && <Badge title={Object.keys(s.headers).join(", ")}>{headerCount} header{headerCount === 1 ? "" : "s"}</Badge>}
+            {signedIn && (
+              <Badge tone="green" title={[s.oauth?.scope ? `Scope: ${s.oauth.scope}` : null, s.oauth?.expiresAt ? `Token refreshes after ${new Date(s.oauth.expiresAt).toLocaleString()}` : null].filter(Boolean).join("\n") || undefined}>
+                signed in
+              </Badge>
+            )}
           </div>
           <div className="mt-0.5 truncate font-mono text-[11px] text-fg-muted" title={s.transport === "stdio" ? [s.command, joinArgs(s.args)].join(" ") : (s.url ?? "")}>
             {s.transport === "stdio" ? [s.command, joinArgs(s.args)].filter(Boolean).join(" ") : s.url}
           </div>
         </div>
+        {(wantsSignIn || signingIn) && (
+          <Button variant="outline" size="sm" onClick={onSignIn} disabled={signingIn} aria-label={`Sign in to ${s.name}`}>
+            {signingIn ? <Loader2 className="animate-spin-fast" /> : <LogIn />}
+            {signingIn ? "Waiting for sign-in…" : "Sign in"}
+          </Button>
+        )}
         <Button variant="outline" size="sm" onClick={onTest} disabled={!!running} aria-label={`Test ${s.name}`}>
           {running ? <Loader2 className="animate-spin-fast" /> : <Play />}
           {running ? "Testing…" : "Test"}
         </Button>
         <div className="flex items-center opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+          {s.transport === "http" && !wantsSignIn && !signingIn && (
+            <IconButton label={signedIn ? "Sign out" : "Sign in (OAuth)"} size="icon-sm" onClick={signedIn ? onSignOut : onSignIn}>
+              {signedIn ? <LogOut /> : <LogIn />}
+            </IconButton>
+          )}
           <IconButton label="Edit" size="icon-sm" onClick={onEdit}>
             <Pencil />
           </IconButton>
@@ -152,6 +171,63 @@ export function McpPage() {
       setTests((t) => ({ ...t, [name]: { running: false, result } }));
     } catch (e: any) {
       setTests((t) => ({ ...t, [name]: { running: false, result: { name, ok: false, transport: "stdio", tools: [], latencyMs: 0, error: e.message } } }));
+    }
+  };
+
+  // Names waiting on the browser, with when they started. Polled until the daemon reports the token, or given up on.
+  const [signingIn, setSigningIn] = useState<Record<string, number>>({});
+  const waiting = Object.keys(signingIn);
+  useEffect(() => {
+    if (!waiting.length) return;
+    const t = setInterval(() => q.refetch(), 2000);
+    return () => clearInterval(t);
+  }, [waiting.length, q]);
+  useEffect(() => {
+    for (const name of waiting) {
+      const s = q.data?.find((x) => x.name === name);
+      const done = !!s?.oauth?.signedIn;
+      if (!done && Date.now() - signingIn[name]! < 5 * 60_000) continue;
+      setSigningIn(({ [name]: _, ...rest }) => rest);
+      if (done) {
+        toast.success(`Signed in to ${name}`);
+        void runTest(name);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.data]);
+
+  const signIn = async (s: McpServer) => {
+    // Opened before any await, while the click still counts as a user gesture, so popup blockers let it through.
+    const win = window.open("about:blank", "_blank");
+    try {
+      let r: { authorizeUrl: string };
+      try {
+        r = await api.mcp.signIn(s.name);
+      } catch (e: any) {
+        // The authorization server does not let apps register themselves: the operator brings a client.
+        if (!/client ID/i.test(String(e?.message))) throw e;
+        const clientId = await ask({ title: `Client ID for ${s.name}`, description: e.message, label: "Client ID", confirmLabel: "Continue", validate: (v) => (v.trim() ? null : "Enter the client ID.") });
+        if (!clientId) return void win?.close();
+        const clientSecret = await ask({ title: `Client secret for ${s.name}`, description: "Leave it empty for a public client.", label: "Client secret", confirmLabel: "Sign in" });
+        if (clientSecret === null) return void win?.close();
+        r = await api.mcp.signIn(s.name, { clientId: clientId.trim(), clientSecret: clientSecret.trim() || undefined });
+      }
+      if (win && !win.closed) win.location.href = r.authorizeUrl;
+      else if (!window.open(r.authorizeUrl, "_blank")) toast(`Open the sign-in page for ${s.name}`, { action: { label: "Open", onClick: () => window.open(r.authorizeUrl, "_blank") }, duration: 60_000 });
+      setSigningIn((m) => ({ ...m, [s.name]: Date.now() }));
+    } catch (e: any) {
+      win?.close();
+      toast.error(e?.message ?? String(e));
+    }
+  };
+
+  const signOut = async (s: McpServer) => {
+    try {
+      await api.mcp.signOut(s.name);
+      toast.success(`Signed out of ${s.name}`);
+      q.refetch();
+    } catch (e: any) {
+      toast.error(e?.message ?? String(e));
     }
   };
 
@@ -221,7 +297,7 @@ export function McpPage() {
       ) : (
         <div className="grid gap-2.5">
           {servers.map((s, i) => (
-            <ServerCard key={s.name} s={s} delay={i * 30} test={tests[s.name]} onTest={() => runTest(s.name)} onDismiss={() => setTests(({ [s.name]: _x, ...rest }) => rest)} onEdit={() => setEditor({ server: s })} onDelete={() => del(s)} onToggle={(on) => toggle.mutate({ name: s.name, on })} />
+            <ServerCard key={s.name} s={s} delay={i * 30} test={tests[s.name]} onTest={() => runTest(s.name)} onDismiss={() => setTests(({ [s.name]: _x, ...rest }) => rest)} onEdit={() => setEditor({ server: s })} onDelete={() => del(s)} onToggle={(on) => toggle.mutate({ name: s.name, on })} signingIn={s.name in signingIn} onSignIn={() => signIn(s)} onSignOut={() => signOut(s)} />
           ))}
         </div>
       )}

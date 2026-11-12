@@ -155,6 +155,19 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- OAuth sign-in for an http MCP server (mcp/oauth.ts): where it authorizes, the client trb registered there, and the tokens.
+-- url is the server URL the row was made for; once the server's URL changes the row no longer applies.
+CREATE TABLE IF NOT EXISTS mcp_oauth (
+  name TEXT PRIMARY KEY,
+  url TEXT NOT NULL,
+  resource TEXT NOT NULL,
+  scope TEXT,
+  as_json TEXT NOT NULL,
+  client_json TEXT,
+  tokens_json TEXT,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Evidence: pages captured from the agent browser and the findings agents wrote about them. Bulky parts live in
 -- files under <trb home>/evidence/<id>/; this is the index. workspace is the real path of the project root.
 CREATE TABLE IF NOT EXISTS evidence (

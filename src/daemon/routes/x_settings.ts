@@ -7,6 +7,8 @@ import os from "os";
 import path from "path";
 import { McpStore, RESERVED_MCP_NAMES } from "../../mcp/store";
 import { probeHttp, probeStdio } from "../../mcp/probe";
+import { OAUTH_CALLBACK_PATH, beginSignIn, ensureFreshToken, oauthHeaders, signOut } from "../../mcp/oauth";
+import { UserError } from "../../util";
 import { SkillStore, parseSkillFrontmatter } from "../../skills/store";
 import { builtinStatus, resetBuiltinSkill, restoreBuiltinSkills } from "../../skills/builtin";
 import { listSkillPacks, setSkillPackEnabled } from "../../skill-packs";
@@ -111,8 +113,22 @@ export const settingsExtRoutes: RouteModule = async (c) => {
   if ((m = c.match(/^\/api\/mcp\/([^/]+)\/test$/)) && c.method === "POST") {
     const rec = McpStore.get(m[1]);
     if (!rec) throw new HttpError(404, `No MCP server "${m[1]}".`);
-    const result = rec.transport === "stdio" ? await probeStdio(rec.command!, rec.args, rec.env, { timeoutMs: 15_000 }) : await probeHttp(rec.url!, rec.headers, { timeoutMs: 15_000 });
+    if (rec.transport === "http") await ensureFreshToken(rec.name).catch(() => {});
+    const result = rec.transport === "stdio" ? await probeStdio(rec.command!, rec.args, rec.env, { timeoutMs: 15_000 }) : await probeHttp(rec.url!, oauthHeaders(rec.name, rec.headers), { timeoutMs: 15_000 });
     return json({ name: rec.name, ...result });
+  }
+
+  // OAuth sign-in: the reply's URL is opened in the operator's browser, which comes back to OAUTH_CALLBACK_PATH (server.ts).
+  if ((m = c.match(/^\/api\/mcp\/([^/]+)\/oauth\/(start|logout)$/)) && c.method === "POST") {
+    if (!McpStore.get(m[1])) throw new HttpError(404, `No MCP server "${m[1]}".`);
+    if (m[2] === "logout") return json({ signedOut: signOut(m[1]) });
+    const redirectUri = `${c.url.origin}${OAUTH_CALLBACK_PATH}`;
+    try {
+      return json({ ...(await beginSignIn(m[1], redirectUri, { clientId: c.body.clientId, clientSecret: c.body.clientSecret })), redirectUri });
+    } catch (err: any) {
+      if (err instanceof UserError) throw new HttpError(400, err.message);
+      throw err;
+    }
   }
 
   if ((m = c.match(/^\/api\/mcp\/([^/]+)$/)) && c.method === "PUT") {

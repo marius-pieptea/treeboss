@@ -15,8 +15,7 @@ import { spawn } from "child_process";
 import { DETACH_GROUP, killTree } from "../proctree";
 import { getEngine, resolveBinary, type LaunchInput } from "./registry";
 import { shimInvocation } from "./win-shim";
-import { sharedCargoTarget } from "../git/cargotarget";
-import { getSetting } from "../settings";
+import { cargoEnv, cargoLimits } from "../git/cargotarget";
 import type { UsageEvent } from "./context";
 import { createStreamAccumulator, looksLikeResumeRejection, type StreamUsage } from "./stream";
 
@@ -154,9 +153,8 @@ export function runTurn(opts: RunTurnOptions): Promise<TurnResult> {
     // in someone's shell profile kills every run in seconds). The model is passed explicitly.
     const env: Record<string, string | undefined> = { ...process.env, ...spec.env };
     delete env.ANTHROPIC_MODEL;
-    // Heads of one repo share a Rust build cache instead of each cold-building its own target/.
-    const sharedTarget = sharedCargoTarget(opts.cwd, env, getSetting("cargo_shared_target") !== "off");
-    if (sharedTarget) env.CARGO_TARGET_DIR = sharedTarget;
+    // Heads of one repo share a Rust build cache instead of each cold-building its own target/, with capped jobs.
+    Object.assign(env, cargoEnv(opts.cwd, env, cargoLimits(), { agent: true }));
     // Running trb from inside another Claude Code session must not make the child think it is nested.
     delete env.CLAUDECODE;
 

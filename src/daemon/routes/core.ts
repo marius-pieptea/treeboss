@@ -8,6 +8,7 @@ import { installedEngines, ENGINES } from "../../engines/registry";
 import { HydraPairs, PAIR_COOKBOOK } from "../../hydra/pairs";
 import { PAIR_ROLE_LIBRARY } from "../../hydra/roles";
 import { McpStore } from "../../mcp/store";
+import { oauthStatus } from "../../mcp/oauth";
 import { SkillStore, defaultSkillNames } from "../../skills/store";
 import { builtinStatus, missingBuiltinSkills } from "../../skills/builtin";
 import { skillsUsed } from "../../sessions/skilluse";
@@ -269,7 +270,7 @@ export function coreRoutes(opts: { onShutdown?: () => void }): RouteModule {
     }
 
     /* ---- mcp ---- */
-    if (c.path === "/api/mcp" && c.method === "GET") return json({ servers: McpStore.list() });
+    if (c.path === "/api/mcp" && c.method === "GET") return json({ servers: McpStore.list().map((s) => ({ ...s, oauth: s.transport === "http" ? oauthStatus(s.name) : null })) });
     if (c.path === "/api/mcp" && c.method === "POST") return json({ server: McpStore.put(c.body as any) }, 201);
     if ((mm = c.match(/^\/api\/mcp\/([^/]+)$/)) && c.method === "DELETE") return json({ removed: McpStore.remove(mm[1]) });
     if ((mm = c.match(/^\/api\/mcp\/([^/]+)\/(enable|disable)$/)) && c.method === "POST") return json({ ok: McpStore.setEnabled(mm[1], mm[2] === "enable") });

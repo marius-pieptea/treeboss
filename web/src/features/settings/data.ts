@@ -30,6 +30,8 @@ export interface ProbeResult {
   tools: ProbeTool[];
   latencyMs: number;
   error?: string;
+  /** http: answered 401 with no credentials sent, so Sign in is the likely fix. */
+  authRequired?: boolean;
   stderrTail?: string;
 }
 
@@ -122,6 +124,8 @@ export const api = {
     remove: (name: string) => del(`/api/mcp/${encodeURIComponent(name)}`),
     toggle: (name: string, on: boolean) => post(`/api/mcp/${encodeURIComponent(name)}/${on ? "enable" : "disable"}`),
     test: (name: string) => post<ProbeResult>(`/api/mcp/${encodeURIComponent(name)}/test`),
+    signIn: (name: string, client?: { clientId: string; clientSecret?: string }) => post<{ authorizeUrl: string; redirectUri: string }>(`/api/mcp/${encodeURIComponent(name)}/oauth/start`, client ?? {}),
+    signOut: (name: string) => post<{ signedOut: boolean }>(`/api/mcp/${encodeURIComponent(name)}/oauth/logout`),
     importFrom: (from: string, o: { overwrite?: boolean; dryRun?: boolean }) => post<McpImportPreview>("/api/mcp/import", { from, ...o }),
   },
   skills: {
