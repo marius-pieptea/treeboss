@@ -1,7 +1,7 @@
 {
   "name": "treeboss-desktop",
   "productName": "TreeBoss",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Desktop shell for TreeBoss: runs the bundled daemon and opens the UI in a window.",
   "license": "PolyForm-Shield-1.0.0",
   "main": "main.cjs",
