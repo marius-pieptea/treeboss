@@ -353,7 +353,7 @@ describe("HTTP routes", () => {
   });
 
   test("design turns from the composer: the session routes take a design field", async () => {
-    // REA is on by default and its hint leads a conversation's first prompt. This test checks where the design block sits, so REA is off here.
+    // Hints (REA, testing, CodeGraph) may lead a conversation's first prompt; the design block must follow the operator's message directly.
     const prevRea = getSetting("rea_mcp");
     setSetting("rea_mcp", "off");
     const prompts: string[] = [];
@@ -365,7 +365,7 @@ describe("HTTP routes", () => {
     expect(r.data.session).toMatchObject({ title: "Design system from a brief (brainstorm)", mode: "build" });
     const id = r.data.session.id;
     await settled(id);
-    expect(prompts[0]!.startsWith("A CRM for florists\n\n<!-- trb:instructions Design · brief · brainstorm -->\n")).toBe(true);
+    expect(prompts[0]).toContain("A CRM for florists\n\n<!-- trb:instructions Design · brief · brainstorm -->\n");
     expect(prompts[0]).toContain("do NOT write DESIGN.md");
     expect(readDesign(dir).agentRule).toBe(true);
 
