@@ -15,6 +15,7 @@ import { spawn } from "child_process";
 import { DETACH_GROUP, killTree } from "../proctree";
 import { getEngine, resolveBinary, type LaunchInput } from "./registry";
 import { shimInvocation } from "./win-shim";
+import { AcpStdioClient, driveAcpSession } from "./acp";
 import { cargoEnv, cargoLimits } from "../git/cargotarget";
 import type { UsageEvent } from "./context";
 import { createStreamAccumulator, looksLikeResumeRejection, type StreamUsage } from "./stream";
@@ -223,10 +224,14 @@ export function runTurn(opts: RunTurnOptions): Promise<TurnResult> {
       else opts.signal.addEventListener("abort", onAbort, { once: true });
     }
 
+    // An ACP server (devin) takes the turn as JSON-RPC on stdin; the client below reads its answers, the
+    // accumulator reads the same stdout for progress and the final text.
+    const acpClient = spec.acp ? new AcpStdioClient(child.stdin, spec.acp.allowTools) : null;
     child.stdout.on("data", (data: Buffer) => {
       lastActivity = Date.now();
       const text = data.toString();
       stdoutKept.add(text);
+      acpClient?.feed(text);
       stream.push(text);
     });
     child.stderr.on("data", (data: Buffer) => {
@@ -236,17 +241,18 @@ export function runTurn(opts: RunTurnOptions): Promise<TurnResult> {
       for (const line of text.split("\n")) if (line.trim()) log(`[stderr] ${line}`);
     });
 
-    if (spec.stdin !== null) {
-      child.stdin.on("error", () => {}); // EPIPE when the CLI exits before reading its prompt
-      child.stdin.write(spec.stdin);
-    }
-    child.stdin.end();
+    child.stdin.on("error", () => {}); // EPIPE when the CLI exits before reading its prompt
+    if (spec.stdin !== null) child.stdin.write(spec.stdin);
+    if (!acpClient) child.stdin.end();
 
+    let settleTimer: ReturnType<typeof setTimeout> | null = null;
     const settle = (code: number | null, spawnError?: Error) => {
       if (settled) return;
       settled = true;
       clearInterval(tick);
       if (drain) clearTimeout(drain);
+      if (settleTimer) clearTimeout(settleTimer);
+      acpClient?.abort("process exited"); // a server that died mid-handshake must not leave the driver waiting
       opts.signal?.removeEventListener("abort", onAbort);
       stream.end();
       try {
@@ -301,6 +307,30 @@ export function runTurn(opts: RunTurnOptions): Promise<TurnResult> {
         ...base,
       });
     };
+
+    if (acpClient && spec.acp) {
+      stream.setReplaying(true); // a resumed session replays its history first
+      driveAcpSession({
+        client: acpClient,
+        cwd: spec.acp.cwd,
+        prompt: spec.acp.prompt,
+        resumeId: spec.acp.resumeId,
+        onSessionId: opts.onSessionId,
+        onPromptStarted: () => stream.setReplaying(false),
+        onLog: log,
+        // The prompt response ends the turn; process exit is cleanup. The server gets a moment to exit on the stdin
+        // EOF, then the tree goes (helpers it started can hold the pipes open for good, so `close` may never come).
+        onSettled: (ok) => {
+          settleTimer = setTimeout(
+            () => {
+              terminate(true);
+              settle(null);
+            },
+            ok ? 1500 : 0,
+          );
+        },
+      });
+    }
 
     child.on("error", (err) => settle(null, err));
     // The turn ends when the CLI exits. `close` also waits for every process still holding its stdout (a dev server

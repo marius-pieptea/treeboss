@@ -13,6 +13,7 @@ import path from "path";
 import { home } from "../paths";
 import { runCmd } from "../git/run";
 import { getEngine, resolveBinary } from "./registry";
+import { discoverAcpModels } from "./acp";
 
 export interface ModelInfo {
   id: string;
@@ -172,11 +173,38 @@ function fresh(cat: ModelCatalog | undefined): cat is ModelCatalog {
   return !!cat && Date.now() - Date.parse(cat.fetchedAt) < TTL_MS;
 }
 
+/** devin's fallback when it cannot be asked: the family slugs its docs name, `adaptive` being its own routing. */
+const DEVIN_STATIC: ModelInfo[] = [
+  { id: "adaptive", label: "Adaptive", hint: "devin picks a model per task", default: true },
+  { id: "swe", label: "SWE" },
+  { id: "opus", label: "Opus" },
+  { id: "sonnet", label: "Sonnet" },
+  { id: "codex", label: "Codex" },
+  { id: "gpt", label: "GPT" },
+  { id: "gemini", label: "Gemini" },
+];
+
 function staticCatalog(engine: string, error?: string): ModelCatalog {
-  return { engine, source: "static", models: engine === "claude" ? CLAUDE_STATIC : [], efforts: effortsFor(engine), fetchedAt: new Date().toISOString(), ...(error ? { error } : {}) };
+  return { engine, source: "static", models: engine === "claude" ? CLAUDE_STATIC : engine === "devin" ? DEVIN_STATIC : [], efforts: effortsFor(engine), fetchedAt: new Date().toISOString(), ...(error ? { error } : {}) };
+}
+
+/** devin: ask a throwaway `devin acp` session which models it offers; the built-in list stands in when it cannot. */
+async function fetchDevinCatalog(): Promise<ModelCatalog> {
+  const def = getEngine("devin");
+  const bin = def ? resolveBinary(def) : null;
+  if (!bin) return staticCatalog("devin", "Devin is not installed.");
+  try {
+    const found = await discoverAcpModels(bin, ["--respect-workspace-trust", "false", "acp"], LIST_TIMEOUT_MS);
+    if (found.length === 0) return staticCatalog("devin", "Devin advertised no models (are you signed in?).");
+    const models = found.map((m): ModelInfo => ({ id: m.id, label: m.name || m.id, hint: m.description, ...(m.isDefault ? { default: true } : {}) }));
+    return { engine: "devin", source: "cli", models, efforts: effortsFor("devin"), fetchedAt: new Date().toISOString() };
+  } catch (err: any) {
+    return staticCatalog("devin", `Devin did not list its models: ${String(err?.message ?? err).slice(0, 200)}`);
+  }
 }
 
 async function fetchCatalog(engine: string): Promise<ModelCatalog> {
+  if (engine === "devin") return fetchDevinCatalog();
   const src = SOURCES[engine];
   if (!src) return staticCatalog(engine);
   const def = getEngine(engine);

@@ -11,7 +11,7 @@
  * safety net is isolation, not prompting: subagents run in their own git
  * worktree and their work only reaches your checkout through `subagent_merge`.
  *
- * Not yet driven: ACP engines (devin, omp). Omni drives those over JSON-RPC.
+ * devin is an ACP server (`devin acp`) driven over JSON-RPC (engines/acp.ts). omp, the other ACP engine in Omni, is not driven yet.
  */
 import fs from "fs";
 import path from "path";
@@ -53,6 +53,8 @@ export interface LaunchSpec {
   cleanup: () => void;
   /** One-line notes for the run log ("MCP not wired for this engine"). */
   notes: string[];
+  /** The process is an ACP session server: the prompt and resume travel as JSON-RPC (engines/acp.ts), not stdin or argv. */
+  acp?: { cwd: string; resumeId?: string | null; prompt: string; allowTools: boolean };
 }
 
 export type McpWiring =
@@ -386,7 +388,50 @@ const fake: EngineDef = {
   },
 };
 
-export const ENGINES: Record<string, EngineDef> = { claude, codex, cursor, opencode, agy, grok, fake };
+/** `.devin/mcp_config.json`: stdio entries as they are, remote ones name their kind `transport`. */
+function devinMcpJson(cfg: McpRunConfig): { mcpServers: Record<string, unknown> } {
+  const mcpServers: Record<string, unknown> = {};
+  for (const [name, s] of Object.entries(cfg)) {
+    mcpServers[name] =
+      s.type === "stdio"
+        ? { command: s.command, args: s.args, ...(s.env && Object.keys(s.env).length ? { env: s.env } : {}) }
+        : { url: s.url, transport: "http", ...(s.headers && Object.keys(s.headers).length ? { headers: s.headers } : {}) };
+  }
+  return { mcpServers };
+}
+
+const devin: EngineDef = {
+  id: "devin",
+  label: "Devin",
+  binaries: ["devin"],
+  mcp: "workspace-file",
+  skillsDir: ".agents/skills",
+  resume: true,
+  build(input, bin) {
+    // `--permission-mode dangerous` and the workspace-trust flag are global options, so they sit before `acp`;
+    // `--model` is an `acp` option and sits after it. The workspace, prompt and resume are not argv at all: they
+    // go over ACP (a `--dir` here is an opencode flag that devin's parser rejects).
+    // A plan or ask turn leaves permissions at devin's default so it asks, and the ACP client refuses (see `notes`).
+    const readOnly = input.mode === "plan" || input.mode === "ask";
+    const args = [...(readOnly ? [] : ["--permission-mode", "dangerous"]), "--respect-workspace-trust", "false", "acp"];
+    if (!isDefaultModel(input.model)) args.push("--model", input.model!);
+    let restore: () => void = () => {};
+    if (Object.keys(input.mcp).length > 0) {
+      restore = writeWorkspaceFile(path.join(input.cwd, ".devin", "mcp_config.json"), JSON.stringify(devinMcpJson(input.mcp), null, 2));
+    }
+    return {
+      cmd: bin,
+      args,
+      stdin: null,
+      env: baseEnv(),
+      cleanup: restore,
+      notes: readOnly ? ["devin has no read-only mode: this turn refuses every tool permission request it is asked."] : [],
+      acp: { cwd: input.cwd, resumeId: input.resumeId, prompt: input.prompt, allowTools: !readOnly },
+    };
+  },
+};
+
+export const ENGINES: Record<string, EngineDef> = { claude, codex, cursor, opencode, agy, grok, devin, fake };
 
 /** Engines a lead may be started on or a subagent opened on. */
 export function engineIds(): string[] {

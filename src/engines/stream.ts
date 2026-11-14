@@ -2,8 +2,7 @@
  * Turns an engine's NDJSON event stream into readable progress lines and
  * recovers the final answer, session id and token usage from it.
  *
- * Ported from Omni's `harness/stream_json.ts` (minus the ACP/devin branches,
- * which this daemon does not drive yet). Two jobs, and the second is the easy
+ * Ported from Omni's `harness/stream_json.ts`. Two jobs, and the second is the easy
  * one to get wrong: the raw NDJSON must NOT become a turn's `output`. Callers
  * (a lead agent reading `subagent_wait`, a script reading `trb run --json`)
  * want the assistant's final text with the protocol stripped.
@@ -14,6 +13,7 @@
  *   cursor  `-p --output-format stream-json`: tool_call started|completed, thinking, plus claude-shaped
  *   agy     `--output-format stream-json`: { event: init | step_update | result }
  *   opencode `run --format json`: step_start, text, tool_use (completed, self-contained), step_finish
+ *   devin   `acp`: JSON-RPC session/update notifications; the session/prompt response is the terminal event
  */
 import { truncate } from "../util";
 import { compactLine, type ContextSample, type UsageEvent } from "./context";
@@ -79,6 +79,8 @@ export interface StreamAccumulator {
   context(): ContextSample | null;
   /** Tool calls seen so far. */
   toolCount(): number;
+  /** ACP: true while `session/load` replays the old conversation, so it is not taken for this turn's output. */
+  setReplaying(on: boolean): void;
 }
 
 function describeToolInput(name: string, input: any): string {
@@ -316,11 +318,137 @@ export function createStreamAccumulator(
     };
   };
 
+  // ACP state. `session/load` replays the old conversation as updates before the prompt; those are history, not this turn.
+  let replaying = false;
+  let turnText = "";
+  const acpTools = new Map<string, { kind: string; title: string; detail: string | null; logged: boolean }>();
+  const acpDetail = (raw: any): string | null => {
+    if (!raw || typeof raw !== "object") return null;
+    const v = raw.command ?? raw.cmd ?? raw.file_path ?? raw.path ?? raw.filePath ?? raw.pattern ?? raw.query ?? raw.url ?? raw.description;
+    if (Array.isArray(v)) return v.join(" ");
+    return typeof v === "string" && v.trim() ? v : null;
+  };
+  // A call opens with a bare title and may get its command later in a tool_call_update, so its line waits for the detail.
+  const logAcpTool = (id: string) => {
+    const t = acpTools.get(id);
+    if (!t || t.logged) return;
+    t.logged = true;
+    onLine(`[${label}] → ${t.kind}: ${truncate(t.detail ?? t.title ?? "tool", 120)}`);
+  };
+
+  const handleAcp = (event: any) => {
+    if (event.method === "session/update") {
+      setSession(event.params?.sessionId);
+      const u = event.params?.update ?? {};
+      switch (u.sessionUpdate) {
+        case "agent_message_chunk": {
+          if (replaying) return;
+          const delta = u.content?.text ?? (typeof u.content === "string" ? u.content : "");
+          if (typeof delta === "string" && delta) {
+            turnText += delta;
+            lastAssistantText = turnText;
+            onLine(delta.trimEnd());
+            emitText();
+          }
+          return;
+        }
+        case "agent_thought_chunk":
+          if (!replaying) onLine(`[${label}] (thinking…)`);
+          return;
+        case "tool_call": {
+          toolCount++;
+          if (replaying) return;
+          // Text before a tool call is rationale for it, not the closing answer.
+          turnText = "";
+          lastAssistantText = "";
+          const id = String(u.toolCallId ?? `anon-${toolCount}`);
+          acpTools.set(id, {
+            // devin sends no kind; a command makes it a shell call.
+            kind: typeof u.kind === "string" && u.kind ? u.kind : u.rawInput?.command ? "execute" : "other",
+            title: typeof u.title === "string" ? u.title : "",
+            detail: acpDetail(u.rawInput),
+            logged: false,
+          });
+          if (acpTools.get(id)!.detail || /^mcp__|\//.test(u.title ?? "")) logAcpTool(id);
+          return;
+        }
+        case "tool_call_update": {
+          if (replaying) return;
+          const id = String(u.toolCallId ?? "");
+          const t = acpTools.get(id);
+          if (t) {
+            if (typeof u.kind === "string" && u.kind) t.kind = u.kind;
+            if (typeof u.title === "string" && u.title) t.title = u.title;
+            t.detail = acpDetail(u.rawInput) ?? t.detail;
+            if (t.detail || u.status === "completed" || u.status === "failed") logAcpTool(id);
+          }
+          if (u.status === "completed" || u.status === "failed") {
+            onLine(`[${label}]   ${u.status === "failed" ? "✗" : "✓"} tool ${u.status}`);
+            acpTools.delete(id);
+          }
+          return;
+        }
+        case "usage_update": {
+          // Cumulative counters mid-turn: the only usage an interrupted turn ever has.
+          const meta = (u._meta ?? {}) as Record<string, unknown>;
+          const input = numOr0(meta["cognition.ai/inputTokens"]);
+          const output = numOr0(meta["cognition.ai/outputTokens"]);
+          if (input || output) noteMessageUsage("acp-usage", { inputTokens: input, outputTokens: output });
+          // `used` is how full the conversation is right now and `size` is the window: the context meter's reading.
+          // (Not the counters above, which are cumulative spend.) A replayed update is an old reading.
+          const used = numOr0(u.used);
+          const size = numOr0(u.size);
+          if (size > 0) streamWindow = size;
+          if (used > 0 && !replaying) noteContext({ tokens: used, input: used, cacheRead: 0, cacheCreation: 0, output: 0, window: size > 0 ? size : null });
+          return;
+        }
+        case "plan": {
+          if (replaying) return;
+          const steps = (Array.isArray(u.entries) ? u.entries : []).map((e: any) => e?.content ?? e?.title).filter((s: any) => typeof s === "string" && s.trim());
+          onLine(`[${label}] plan: ${steps.join(" → ") || "updated"}`);
+          return;
+        }
+        case "session_info_update":
+          if (!replaying && typeof u.title === "string" && u.title.trim()) onLine(`[${label}] session: ${truncate(u.title, 120)}`);
+          return;
+        default:
+          return;
+      }
+    }
+    if (event.error) {
+      sawResult = true;
+      errored = true;
+      const msg = typeof event.error?.message === "string" ? event.error.message : "rpc error";
+      if (RESUME_REJECTED_PATTERNS.some((re) => re.test(msg))) sawResumeRejection = true;
+      onLine(`[${label}] error: ${truncate(msg, 200)}`);
+      return;
+    }
+    if (event.result !== undefined) {
+      // initialize, session/new and session/load answer with a `result` too; only the prompt response (it carries
+      // `stopReason`) ends the turn, or the run would be complete before the prompt was sent.
+      setSession(event.result?.sessionId);
+      if (event.result?.stopReason === undefined) return;
+      sawResult = true;
+      errored = false;
+      if (event.result.usage != null) {
+        resultUsage = event.result.usage;
+        noteMessageUsage("acp-result", event.result.usage);
+      }
+      onLine(`[${label}] done${toolCount > 0 ? `, ${toolCount} tool call(s)` : ""}`);
+    }
+  };
+
   const handleEvent = (event: any) => {
     // Every claude/cursor event carries it; the first one wins, and a resumed
     // run reports the continued session rather than a new one.
     setSession(event?.session_id);
     if (!sessionId) setSession(event?.sessionId);
+
+    // ACP (devin): JSON-RPC notifications and responses. The namespace is disjoint from the shapes below.
+    if (event?.jsonrpc === "2.0") {
+      handleAcp(event);
+      return;
+    }
 
     // codex: exact context readings and compaction notices, when its event stream carries them
     // (`exec --json` forwards turn/item events; the app-server and rollout shapes nest under msg/payload).
@@ -770,6 +898,13 @@ export function createStreamAccumulator(
       finishCompact(null);
     },
     context: () => lastContext,
+    setReplaying(on: boolean) {
+      replaying = on;
+      if (!on) {
+        turnText = "";
+        lastAssistantText = "";
+      }
+    },
     finalText: () => (resultText || lastAssistantText || agyStepText || "").trim(),
     completed: () => sawResult,
     isError: () => errored,
