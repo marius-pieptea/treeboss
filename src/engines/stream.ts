@@ -321,6 +321,14 @@ export function createStreamAccumulator(
   // ACP state. `session/load` replays the old conversation as updates before the prompt; those are history, not this turn.
   let replaying = false;
   let turnText = "";
+  // Devin streams its reply in token-sized chunks; one log line per chunk reads as a paragraph per word. The step's
+  // text is held and written whole when something other than text arrives (the live reply bubble still grows per chunk).
+  let acpPending = "";
+  let acpThinking = false;
+  const flushAcpText = () => {
+    if (acpPending.trim()) onLine(acpPending.trim());
+    acpPending = "";
+  };
   const acpTools = new Map<string, { kind: string; title: string; detail: string | null; logged: boolean }>();
   const acpDetail = (raw: any): string | null => {
     if (!raw || typeof raw !== "object") return null;
@@ -345,19 +353,25 @@ export function createStreamAccumulator(
           if (replaying) return;
           const delta = u.content?.text ?? (typeof u.content === "string" ? u.content : "");
           if (typeof delta === "string" && delta) {
+            acpThinking = false;
             turnText += delta;
+            acpPending += delta;
             lastAssistantText = turnText;
-            onLine(delta.trimEnd());
             emitText();
           }
           return;
         }
         case "agent_thought_chunk":
-          if (!replaying) onLine(`[${label}] (thinking…)`);
+          if (replaying) return;
+          flushAcpText();
+          if (!acpThinking) onLine(`[${label}] (thinking…)`);
+          acpThinking = true;
           return;
         case "tool_call": {
           toolCount++;
           if (replaying) return;
+          flushAcpText();
+          acpThinking = false;
           // Text before a tool call is rationale for it, not the closing answer.
           turnText = "";
           lastAssistantText = "";
@@ -416,6 +430,7 @@ export function createStreamAccumulator(
       }
     }
     if (event.error) {
+      flushAcpText();
       sawResult = true;
       errored = true;
       const msg = typeof event.error?.message === "string" ? event.error.message : "rpc error";
@@ -428,6 +443,7 @@ export function createStreamAccumulator(
       // `stopReason`) ends the turn, or the run would be complete before the prompt was sent.
       setSession(event.result?.sessionId);
       if (event.result?.stopReason === undefined) return;
+      flushAcpText();
       sawResult = true;
       errored = false;
       if (event.result.usage != null) {
@@ -895,11 +911,13 @@ export function createStreamAccumulator(
       if (buffer.trim()) consumeLine(buffer);
       buffer = "";
       flushAgyStep();
+      flushAcpText();
       finishCompact(null);
     },
     context: () => lastContext,
     setReplaying(on: boolean) {
       replaying = on;
+      acpPending = "";
       if (!on) {
         turnText = "";
         lastAssistantText = "";

@@ -40,6 +40,9 @@ export interface WorkspaceActivity {
 export function workspaceActivity(): Record<string, WorkspaceActivity> {
   const open = listSessions({ leadsOnly: false, status: "open", limit: 500 });
   const seen = Workspaces.seenSince();
+  // One read of the workspace list for every lookup. Resolving per workspace per session read the table each time:
+  // 27 workspaces and 458 open sessions made 12,000 queries and 1.3 s, and the daemon answered nothing else meanwhile.
+  const workspaces = Workspaces.list();
   // Idle leads whose last turn completed, newer than the oldest "seen" mark (older ones are seen everywhere).
   const oldest = [...seen.values()].sort()[0] ?? "";
   const finished = db()
@@ -50,14 +53,21 @@ export function workspaceActivity(): Record<string, WorkspaceActivity> {
     .all(oldest) as Array<{ base_cwd: string; finished_at: string }>;
   const doneBy: Record<string, number> = {};
   for (const f of finished) {
-    const ws = owningWorkspace(f.base_cwd);
+    const ws = owningWorkspace(f.base_cwd, workspaces);
     if (ws && f.finished_at > (seen.get(ws) ?? "")) doneBy[ws] = (doneBy[ws] ?? 0) + 1;
   }
+  const runningBy: Record<string, number> = {};
+  const failedBy: Record<string, number> = {};
+  for (const s of open) {
+    const ws = owningWorkspace(s.base_cwd, workspaces);
+    if (!ws) continue;
+    if (s.status === "running") runningBy[ws] = (runningBy[ws] ?? 0) + 1;
+    else if (s.status === "failed" && s.depth === 0) failedBy[ws] = (failedBy[ws] ?? 0) + 1;
+  }
   const activity: Record<string, WorkspaceActivity> = {};
-  for (const w of Workspaces.list()) {
-    const mine = open.filter((s) => owningWorkspace(s.base_cwd) === w.id);
-    const running = mine.filter((s) => s.status === "running").length;
-    const failed = mine.filter((s) => s.status === "failed" && s.depth === 0).length;
+  for (const w of workspaces) {
+    const running = runningBy[w.id] ?? 0;
+    const failed = failedBy[w.id] ?? 0;
     const done = doneBy[w.id] ?? 0;
     if (running || failed || done) activity[w.id] = { running, failed, done };
   }

@@ -87,10 +87,13 @@ export const Workspaces = {
   },
 };
 
-/** The most specific registered workspace containing a directory, so a session in a nested project is not also listed in its parent. */
-export function owningWorkspace(dir: string): string | null {
+/**
+ * The most specific registered workspace containing a directory, so a session in a nested project is not also listed in its parent.
+ * Each call reads the workspace table: to resolve many directories, read `Workspaces.list()` once and pass it.
+ */
+export function owningWorkspace(dir: string, workspaces: Workspace[] = Workspaces.list()): string | null {
   let best: { id: string; len: number } | null = null;
-  for (const w of Workspaces.list()) {
+  for (const w of workspaces) {
     if ((dir === w.path || dir.startsWith(w.path + "/")) && (!best || w.path.length > best.len)) best = { id: w.id, len: w.path.length };
   }
   return best?.id ?? null;

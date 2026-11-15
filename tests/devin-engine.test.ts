@@ -53,6 +53,19 @@ describe("devin stream", () => {
     expect(acc.cliUsage()?.outputTokens).toBe(28);
   });
 
+  it("writes a streamed reply as one line per step, not one per chunk", () => {
+    const lines: string[] = [];
+    const acc = createStreamAccumulator((l) => lines.push(l), undefined, "devin");
+    for (const t of ["I'll start by ", "reading the ", "finding."]) acc.push(update({ sessionUpdate: "agent_message_chunk", content: { text: t } }));
+    acc.push(update({ sessionUpdate: "agent_thought_chunk", content: { text: "a" } }));
+    acc.push(update({ sessionUpdate: "agent_thought_chunk", content: { text: "b" } }));
+    acc.push(update({ sessionUpdate: "tool_call", toolCallId: "c", rawInput: { command: "ls" } }));
+    acc.push(update({ sessionUpdate: "agent_message_chunk", content: { text: "Done." } }));
+    acc.end();
+    expect(lines.filter((l) => !l.startsWith("[devin]"))).toEqual(["I'll start by reading the finding.", "Done."]);
+    expect(lines.filter((l) => l.includes("(thinking…)")).length).toBe(1);
+  });
+
   it("reports how full the context is and its window", () => {
     const seen: any[] = [];
     const acc = createStreamAccumulator(() => {}, undefined, "devin", { onUsage: (e) => seen.push(e) });
