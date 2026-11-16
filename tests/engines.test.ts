@@ -50,18 +50,29 @@ describe("claude", () => {
 });
 
 describe("codex", () => {
-  test("exec --json with the prompt in argv, nothing on stdin", () => {
+  test("exec --json reads the prompt from stdin", () => {
     const s = ENGINES.codex.build(input(), "codex");
     expect(s.args.slice(0, 1)).toEqual(["exec"]);
     expect(s.args).toContain("--json");
-    expect(s.args.at(-1)).toBe("do it");
-    expect(s.stdin).toBeNull();
+    expect(s.args.at(-1)).toBe("-");
+    expect(s.args).not.toContain("do it");
+    expect(s.stdin).toBe("do it");
   });
   test("resume sits right after exec; effort is config, not a flag", () => {
     const a = ENGINES.codex.build(input({ resumeId: "th_9", effort: "high", model: "gpt-x" }), "codex").args;
     expect(a.slice(0, 3)).toEqual(["exec", "resume", "th_9"]);
     expect(a).toEqual(expect.arrayContaining(["-m", "gpt-x", "-c", "model_reasoning_effort=high"]));
   });
+  for (const resumeId of [undefined, "th_9"]) {
+    test(`${resumeId ? "resumed" : "new"} sessions preserve large prompts without growing argv`, () => {
+      const prompt = '  --help "quoted" \\path\nUnicode: \u00e8 \u{1f333}\r\n'.repeat(4096) + "  ";
+      const short = ENGINES.codex.build(input({ resumeId, mcp }), "codex");
+      const large = ENGINES.codex.build(input({ resumeId, mcp, prompt }), "codex");
+      expect(large.args).toEqual(short.args);
+      expect(large.args.at(-1)).toBe("-");
+      expect(large.stdin).toBe(prompt);
+    });
+  }
   test("MCP servers become -c overrides with valid TOML values", () => {
     const o = codexMcpOverrides(mcp);
     expect(o).toContain('mcp_servers.trb.command="/usr/bin/bun"');
