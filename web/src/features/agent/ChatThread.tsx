@@ -7,8 +7,10 @@ import { AlertTriangle, ArrowDown, Check, ChevronRight, ExternalLink, GitMerge, 
 import { cn } from "@/lib/utils";
 import type { TranscriptItem } from "@/lib/transcript";
 import type { SessionView } from "@/lib/types";
-import { Button } from "@/components/ui/button";
+import { Button, IconButton } from "@/components/ui/button";
 import { EngineIcon } from "@/components/ui/engine-icon";
+import { StatusDot } from "@/components/ui/misc";
+import { shortModelName } from "@/lib/models-logic";
 import { RoleBadge } from "@/features/heads/RoleBadge";
 import { shortToolName } from "@/features/heads/model";
 import { CopyButton, ForkButton, RewindButton, useScrollToTurn } from "@/features/checkpoints/ThreadActions";
@@ -74,6 +76,13 @@ function ToolsLine({ item }: { item: ToolsItem }) {
   );
 }
 
+/**
+ * One head in the thread, on one row so none of it is empty: status light, engine, role, then the line (what it is
+ * doing, or what it came back with) taking all the room that is left, then the diff, Merge and Open. A long result
+ * wraps to a second line instead of being cut off; a live tool line stays on one. Flat on purpose: the group around
+ * it carries the frame, the pulsing light is the only motion, and the line shimmers only while the head is working.
+ * No cost, tokens or durations (Trace has those).
+ */
 function HeadCard({ item, head, onOpen, onMerge }: { item: HeadItem; head: SessionView | undefined; onOpen: (h: SessionView) => void; onMerge: (h: SessionView) => void }) {
   const label = head?.role ?? head?.engine ?? item.session.slice(0, 8);
   const status = head?.status ?? (item.activity?.running ? "running" : "idle");
@@ -81,18 +90,23 @@ function HeadCard({ item, head, onOpen, onMerge }: { item: HeadItem; head: Sessi
   const failed = status === "failed";
   const stat = head ? diffStat(head) : null;
   const line = head ? headLine(head, item) : (item.activity?.label ?? item.result ?? "");
+  const engine = head ? `${head.engine}${head.model ? ` · ${shortModelName(head.model)}` : ""}` : "";
   return (
-    <div data-chat-head={item.session} className={cn("relative flex min-w-0 items-center gap-2 overflow-hidden rounded-xl border bg-panel/50 py-1.5 pl-3.5 pr-2.5 text-[12px] shadow-sm before:absolute before:inset-y-0 before:left-0 before:w-[3px]", failed ? "border-red/30 before:bg-red" : running ? "border-violet/30 before:bg-violet sweep" : "border-line before:bg-green/70")}>
+    <div data-chat-head={item.session} className={cn("flex min-h-8 min-w-0 items-center gap-2 rounded-md border bg-panel px-2 py-1 text-xs transition-colors", failed ? "border-red/30" : "border-transparent")}>
       <span className="flex size-4 shrink-0 items-center justify-center">
-        {running ? <span className="size-3 animate-spin-fast rounded-full border-[1.5px] border-accent/30 border-t-accent" /> : failed ? <AlertTriangle className="size-3.5 text-red" /> : <Check className="size-3.5 text-green" strokeWidth={2.6} />}
+        {running ? <StatusDot status="running" size={8} /> : failed ? <AlertTriangle className="size-3.5 text-red" aria-label="failed" /> : <Check className="size-3.5 text-green" strokeWidth={2.6} aria-label="done" />}
       </span>
-      {head && <EngineIcon engine={head.engine} className="size-3.5 shrink-0 opacity-70" />}
+      {head && (
+        <span title={engine} className="flex shrink-0">
+          <EngineIcon engine={head.engine} className="size-3.5 opacity-70" />
+        </span>
+      )}
       <RoleBadge role={head?.role} fallback={head ? undefined : label} />
-      <span className={cn("min-w-0 flex-1 truncate", running ? "shimmer-text" : failed ? "text-red/90" : "text-fg-muted")} title={line}>
+      <span className={cn("min-w-0 flex-1", running ? "shimmer-text truncate" : failed ? "line-clamp-2 text-red" : "line-clamp-2 text-fg-muted")} title={line}>
         {line}
       </span>
       {stat && (
-        <span className="shrink-0 font-mono text-[10.5px] text-fg-faint" title={`${stat.files} file${stat.files === 1 ? "" : "s"} changed`}>
+        <span className="shrink-0 font-mono text-label tabular-nums text-fg-muted" title={`${stat.files} file${stat.files === 1 ? "" : "s"} changed`}>
           <span className="text-green">+{stat.plus}</span> <span className="text-red">−{stat.minus}</span>
         </span>
       )}
@@ -102,29 +116,38 @@ function HeadCard({ item, head, onOpen, onMerge }: { item: HeadItem; head: Sessi
         </Button>
       )}
       {head && (
-        <button onClick={() => onOpen(head)} aria-label={`Open ${label}`} title="Open this head" className="flex size-5 shrink-0 items-center justify-center rounded text-fg-faint outline-none transition-colors hover:bg-hover hover:text-fg focus-visible:bg-hover">
-          <ExternalLink className="size-3" />
-        </button>
+        <IconButton label={`Open ${label}`} size="icon-sm" onClick={() => onOpen(head)}>
+          <ExternalLink />
+        </IconButton>
       )}
     </div>
   );
 }
 
-/** The heads a lead is running, as one block: a live summary on top and the cards on a shared rail, so Hydra work reads as one thing. */
+/** The heads a lead is running, as one framed block: a live count on top, one card per head under it, so Hydra work reads as one thing. */
 function HeadLanes({ items, headById, onOpen, onMerge }: { items: HeadItem[]; headById: Map<string, SessionView>; onOpen: (h: SessionView) => void; onMerge: (h: SessionView) => void }) {
   const states = items.map((h) => headById.get(h.session)?.status ?? (h.activity?.running ? "running" : "idle"));
   const working = states.filter((st) => st === "running").length;
   const failed = states.filter((st) => st === "failed").length;
   const done = items.length - working - failed;
-  const summary = [working && `${working} working`, done && `${done} done`, failed && `${failed} failed`].filter(Boolean).join(" · ");
+  const progress = [working && `${working} working`, done && `${done} done`].filter(Boolean).join(" · ");
   return (
-    <section data-heads-group aria-label="Heads" className={cn("rounded-2xl border bg-violet/[0.04] p-1.5 transition-colors", working ? "border-violet/30" : failed ? "border-red/25" : "border-line")}>
-      <header className="flex items-center gap-2 px-1.5 pb-1.5 pt-0.5 text-[11px]">
+    <section data-heads-group aria-label="Heads" className={cn("rounded-lg border bg-raised/40 p-1 transition-colors", failed && !working ? "border-red/25" : "border-line")}>
+      <header className="flex h-6 items-center gap-2 px-2 text-xs">
+        {/* Violet is the orchestration colour: the one place this block uses it. */}
         <span className={cn("size-1.5 rounded-full", working ? "animate-pulse-dot bg-violet" : failed ? "bg-red" : "bg-green")} style={{ ["--pulse" as string]: "var(--violet)" }} />
         <span className="font-medium text-fg">{items.length === 1 ? "Head" : "Heads"}</span>
-        <span className="font-mono text-[10.5px] text-fg-faint">{summary}</span>
+        <span className="font-mono text-label text-fg-muted">
+          {progress}
+          {failed > 0 && (
+            <>
+              {progress && " · "}
+              <span className="text-red">{failed} failed</span>
+            </>
+          )}
+        </span>
       </header>
-      <div className="relative flex flex-col gap-1.5 ps-3 before:absolute before:inset-y-1 before:left-[5px] before:w-px before:bg-violet/30">
+      <div className="flex flex-col gap-1">
         {items.map((h) => (
           <HeadCard key={h.id} item={h} head={headById.get(h.session)} onOpen={onOpen} onMerge={onMerge} />
         ))}

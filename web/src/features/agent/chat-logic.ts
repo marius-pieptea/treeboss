@@ -220,9 +220,13 @@ export interface ShelfChip {
   label: string;
   engine: string;
   title: string;
+  /** The head's role (the chip tints it the way the heads panel does), null when it has none. */
+  role: string | null;
   state: ChipState;
   /** The lead is blocked in subagent_wait on this head (set only when true). */
   awaited?: boolean;
+  /** Finished with changes that can be merged (set only when true). */
+  ready?: boolean;
 }
 
 export interface Shelf {
@@ -243,7 +247,7 @@ export function shelfFor(session: SessionView | null, children: SessionView[]): 
   const waiting = waitingInfo(session);
   return {
     lead: { engine: session.engine, status: session.status, ...(waiting ? { waiting: { names: waiting.names, sinceMs: waiting.sinceMs } } : {}) },
-    heads: heads.map((h) => ({ id: h.id, label: h.role ?? h.engine, engine: h.engine, title: h.title, state: chipState(h.status), ...(waiting?.ids.includes(h.id) ? { awaited: true } : {}) })),
+    heads: heads.map((h) => ({ id: h.id, label: h.role ?? h.engine, engine: h.engine, title: h.title, role: h.role ?? null, state: chipState(h.status), ...(waiting?.ids.includes(h.id) ? { awaited: true } : {}), ...(isMergeReady(h) ? { ready: true } : {}) })),
   };
 }
 

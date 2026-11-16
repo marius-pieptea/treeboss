@@ -166,6 +166,19 @@ describe("shelfFor", () => {
       ["worker", "done"],
     ]);
   });
+
+  test("chips carry the role, and flag a finished head whose changes can be merged", () => {
+    const s = shelfFor(sv(L), [
+      sv(H1, { role: "worker", status: "idle", changes: { files: 2, insertions: 5, deletions: 1 } }),
+      sv(H2, { role: null, status: "idle", changes: { files: 2, insertions: 5, deletions: 1 }, merged: true }),
+      sv("s_h3", { role: "scout", status: "running", changes: { files: 1, insertions: 1, deletions: 0 } }),
+    ]);
+    expect(s?.heads.map((h) => [h.role, h.ready])).toEqual([
+      ["worker", true],
+      [null, undefined],
+      ["scout", undefined],
+    ]);
+  });
 });
 
 describe("settingsSummary", () => {
