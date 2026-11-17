@@ -64,6 +64,19 @@ describe("plan files", () => {
     expect(fs.readFileSync(planPath("checkout"), "utf-8").replace(/\r\n/g, "")).not.toContain("\n");
   });
 
+  test("a rewrite of the same size inside the file system's timestamp tick is still read", () => {
+    const at = new Date(Math.floor(Date.now() / 1000) * 1000);
+    const write = (text: string) => {
+      fs.writeFileSync(planPath("checkout"), text);
+      fs.utimesSync(planPath("checkout"), at, at);
+    };
+    fs.mkdirSync(path.dirname(planPath("checkout")), { recursive: true });
+    write(CANON.replace("Both items", "blue items"));
+    expect(readPlan(root, id("checkout")).steps[0]!.expected).toContain("blue items");
+    write(CANON.replace("Both items", "pink items"));
+    expect(readPlan(root, id("checkout")).steps[0]!.expected).toContain("pink items");
+  });
+
   test("a source: line from an older plan is ignored", () => {
     put(planPath("checkout"), CANON.replace("title: Checkout with saved card\n", "title: Checkout with saved card\nsource: spec:specs/121-checkout\n"));
     const p = readPlan(root, id("checkout"));
@@ -139,6 +152,29 @@ describe("listPlans", () => {
     const { byFeature, loose } = listPlans(root);
     expect(byFeature.size).toBe(0);
     expect(loose).toEqual([]);
+  });
+
+  test("a second listing sees a plan file that changed, was broken, or was deleted", () => {
+    put(path.join(root, "lab/features.md"), FEATURES);
+    put(planPath("checkout"), CANON);
+    expect(listPlans(root).byFeature.get(id("checkout"))!.steps).toHaveLength(2);
+    expect(listPlans(root).byFeature.get(id("checkout"))!.steps).toHaveLength(2);
+
+    put(planPath("checkout"), CANON + "3. [s-zzzz] More\n");
+    expect(listPlans(root).byFeature.get(id("checkout"))!.steps).toHaveLength(3);
+
+    const sameSize = (CANON + "3. [s-zzzz] More\n").replace("Pay with", "Pay wiht");
+    fs.writeFileSync(planPath("checkout"), sameSize);
+    const later = new Date(Date.now() + 5000);
+    fs.utimesSync(planPath("checkout"), later, later);
+    expect(listPlans(root).byFeature.get(id("checkout"))!.steps[1]!.action).toBe("Pay wiht the saved card");
+
+    put(planPath("checkout"), "junk");
+    expect(listPlans(root).byFeature.get(id("checkout"))!.problem).toContain("front matter");
+
+    fs.rmSync(planPath("checkout"));
+    expect(listPlans(root).byFeature.size).toBe(0);
+    expect(() => readPlan(root, id("checkout"))).toThrow(QaNotFound);
   });
 
   test("a broken feature plan is listed with its problem", () => {

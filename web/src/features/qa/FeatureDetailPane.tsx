@@ -7,7 +7,7 @@ import { useUi } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { useFeatureDetail, useRun } from "./api";
 import type { BoardFeature, Run } from "./api";
-import { BugCard } from "./BugCard";
+import { BugList } from "./BugList";
 import type { RowAction } from "./FeatureRow";
 import { countsLine, isOpenBug, outcomeText, planCell, since, stepCell, testCell } from "./logic";
 import { CellView, LABEL } from "./Status";
@@ -21,6 +21,7 @@ export function FeatureDetailPane({
   onClose,
   onAction,
   onFix,
+  onFixMany,
   onStatus,
 }: {
   root: string;
@@ -31,6 +32,7 @@ export function FeatureDetailPane({
   onClose: () => void;
   onAction: (a: RowAction) => void;
   onFix: (bugId: string) => void;
+  onFixMany: (bugIds: string[]) => void;
   onStatus: (id: string, status: "new" | "dismissed" | "shipped") => void;
 }) {
   const detail = useFeatureDetail(root, feature.id);
@@ -163,9 +165,7 @@ export function FeatureDetailPane({
             <span className="font-mono text-label text-fg-muted">{f.bugs.length}</span>
           </div>
           {f.bugs.length === 0 && <p className="text-xs text-fg-muted">No bugs under this feature.</p>}
-          {f.bugs.map((b) => (
-            <BugCard key={b.id} root={root} bug={b} busy={busy} pending={pending} focused={b.id === focusBug} onFix={onFix} onStatus={onStatus} />
-          ))}
+          <BugList root={root} bugs={f.bugs} busy={busy} pending={pending} focusBug={focusBug} onFix={onFix} onFixMany={onFixMany} onStatus={onStatus} />
         </section>
       </div>
     </div>

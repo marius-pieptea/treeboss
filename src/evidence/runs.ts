@@ -74,7 +74,7 @@ function reaProblem(): string {
   return "This target needs REA, the reverse-engineering server, and it cannot start: npx not found. Install Node, or set rea_command.";
 }
 
-/** How each kind of target is worked. The tool names are REA 6.4.0's. */
+/** How each kind of target is worked. The tool names match the pinned REA release. */
 const METHOD: Record<TargetKind, string[]> = {
   web: [
     "- browser_navigate to the target (add https:// when it has no scheme) and wait until the page has settled.",
@@ -83,11 +83,12 @@ const METHOD: Record<TargetKind, string[]> = {
   ],
   electron: [
     "- The target is a local Electron app: list_electron_targets, then inspect_electron_page on it.",
-    "- analyze_javascript_application on its code, then trace_application_feature for each feature you want to explain.",
+    "- analyze_javascript_application on its code (detail complete when you need the full graph; the default may be a retained summary), then trace_application_feature for each feature you want to explain.",
     "- Save each REA result worth keeping with evidence_save_result, with its evidence and limitations.",
   ],
   binary: [
     "- binary_overview first, then open_binary, list_procedures, and analyze_function on the procedures that carry the features.",
+    "- analyze_function defaults to a retained summary: use detail complete for the full dossier, or inspect_analysis_view on the retained evidence_id for paged facets.",
     "- Native decompilation needs Ghidra, Hopper or IDA installed. If REA reports one missing, say so in a note and work from strings and symbols.",
     "- Save each REA result worth keeping with evidence_save_result, with its evidence and limitations.",
   ],

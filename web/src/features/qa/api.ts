@@ -21,13 +21,14 @@ export type Driver =
 export type Scope =
   | { kind: "all" }
   | { kind: "features"; ids: string[] } // ≥1, each matches FEATURE_ID and exists in features.md (400 otherwise; ids missing at a later stage are dropped)
-  | { kind: "bugs"; ids: string[] }; // ≥1 bug ids; only with stages = { fix } (400 otherwise)
+  | { kind: "bugs"; ids: string[] } // ≥1 bug ids; only with stages = { fix } (400 otherwise)
+  | { kind: "areas"; ids: string[] };
 
 /** Absent key = stage skipped. At least one key (400 otherwise). Order is always STAGES order. */
 export interface StageSettings {
-  map?: Record<string, never>;
+  map?: { survey?: boolean };
   plan?: { batching: Batching; replan?: boolean }; // replan omitted → scope "all": false; scope "features": true
-  test?: { batching: Batching };
+  test?: { batching: Batching; parallel?: number }; // parallel 1..3, default 1, only meaningful with batching "each"
   fix?: { batching: Batching };
 }
 
@@ -44,9 +45,9 @@ export interface PipelineRequest {
 /** The config as the server stored it: defaults resolved (replan is always a boolean). */
 export interface PipelineConfig {
   stages: {
-    map?: Record<string, never>;
+    map?: { survey: boolean };
     plan?: { batching: Batching; replan: boolean };
-    test?: { batching: Batching };
+    test?: { batching: Batching; parallel: number };
     fix?: { batching: Batching };
   };
   scope: Scope;
@@ -129,12 +130,22 @@ export interface BoardBug {
   updatedAt: number;
 }
 
+export interface BoardArea {
+  id: string;
+  title: string;
+  where: string[];
+  features: number;
+  updatedAt: number | null;
+  activity: Activity;
+}
+
 export interface BoardFeature {
   id: string;
   title: string;
   where: string[];
   parent: string | null; // a feature id, one level only
   depth: 0 | 1;
+  area: string | null; // null in the flat layout
   summary: string;
   plan: PlanCell;
   test: TestCell;
@@ -144,7 +155,7 @@ export interface BoardFeature {
 
 export interface QaBoard {
   browser: boolean; // the agent browser is on (map, plan and test need it)
-  map: { exists: boolean; problem: string | null; updatedAt: number | null; activity: Activity };
+  map: { exists: boolean; layout: "flat" | "areas"; problem: string | null; updatedAt: number | null; activity: Activity; areas: BoardArea[] };
   /** features.md order, each child right after its parent; a child whose parent is unknown is shown at depth 0. */
   features: BoardFeature[];
   bugsWithoutFeature: BoardBug[];

@@ -26,13 +26,16 @@ decides every launch and every control move from a snapshot.
 export const STAGES = ["map", "plan", "test", "fix"] as const;          // order is the run order
 export const FEATURE_ID = /^[a-z0-9][a-z0-9-]{0,59}$/;                    // a feature id is also its plan's file name
 export const BUG_ID = /^bug-[a-z0-9][a-z0-9-]*$/;
-export const PARALLEL = { map: 1, plan: 3, test: 1, fix: 1 } as const;  // server only; never on the wire
+export const PARALLEL = { map: 3, plan: 3, fix: 1 } as const;            // server only; test comes from stages.test.parallel (map: area jobs at once)
+export const MAX_TEST_PARALLEL = 3;                                       // the daemon allows 4 agent browsers in all
+export const MAX_ATTEMPTS = 2;                                            // launches per unit in a stage: first try + one retry
+export const TOGETHER_MAX = 10;                                           // units in one "together" job
 export const PAIR_HEAD_CAP = 6;                                           // heads at once = min(6, pair.max_heads ?? 6)
 ```
 
 ### `featureForUrl(features, url)`
 
-It is implemented twice: the server in `src/qa/features.ts`, the web in `web/src/features/qa/logic.ts`. Both
+It is implemented twice: the server in `src/qa/pipeline.ts`, the web in `web/src/features/qa/logic.ts`. Both
 implementations must pass the same test vectors below.
 
 Take `path` = `new URL(url).pathname` with any trailing `/` removed (the root path `/` stays `/`). A feature *matches*
@@ -71,13 +74,14 @@ export type Driver =
 export type Scope =
   | { kind: "all" }
   | { kind: "features"; ids: string[] }   // ≥1, each matches FEATURE_ID and exists in features.md (400 otherwise; ids missing at a later stage are dropped)
+  | { kind: "areas"; ids: string[] }      // ≥1, each an area of features.md (400 `No area "<id>".` otherwise): the features of those areas, children included
   | { kind: "bugs"; ids: string[] };      // ≥1 bug ids; only with stages = { fix } (400 otherwise)
 
 /** Absent key = stage skipped. At least one key (400 otherwise). Order is always STAGES order. */
 export interface StageSettings {
-  map?: Record<string, never>;
+  map?: { survey?: boolean };                        // survey: split the product into areas first; default false
   plan?: { batching: Batching; replan?: boolean };   // replan omitted → scope "all": false; scope "features": true
-  test?: { batching: Batching };
+  test?: { batching: Batching; parallel?: number };   // parallel: whole number 1..3, default 1; used only with batching "each"
   fix?: { batching: Batching };
 }
 
@@ -94,9 +98,9 @@ export interface PipelineRequest {
 /** The config as the server stored it: defaults resolved (replan is always a boolean). */
 export interface PipelineConfig {
   stages: {
-    map?: Record<string, never>;
+    map?: { survey: boolean };                       // a config stored with `map: {}` loads as survey false
     plan?: { batching: Batching; replan: boolean };
-    test?: { batching: Batching };
+    test?: { batching: Batching; parallel: number };
     fix?: { batching: Batching };
   };
   scope: Scope;
@@ -121,7 +125,7 @@ export interface JobView {
   pair: boolean;                       // the session is a Hydra lead
   state: "running" | "merging" | "settled";   // merging: the lead was nudged to merge its heads
   problem: string | null;              // settled without its work, per the artifact check
-  error: string | null;                // the launch threw; never retried
+  error: string | null;                // the launch threw; its units are retried once, like a problem
   startedAt: number;
   settledAt: number | null;
 }
@@ -140,7 +144,7 @@ export interface PipelineView {
 
 export type Activity =
   | { kind: "idle" }
-  | { kind: "queued" }                                           // in the current stage's units, not yet covered by a job
+  | { kind: "queued" }                                           // in the current stage's units, not yet launched
   | { kind: "working"; sessionId: string; pair: boolean }        // covered by an unsettled job
   | { kind: "problem"; text: string; sessionId: string | null }; // latest settled job covering it has a problem or error
 
@@ -179,10 +183,21 @@ export interface BoardBug {
   updatedAt: number;
 }
 
+/** One area of a big product's map (layout "areas"). */
+export interface BoardArea {
+  id: string;
+  title: string;
+  where: string[];
+  features: number;                    // how many features the area holds
+  updatedAt: number | null;            // `at` of the newest qa_map write for area:<id>; null if none
+  activity: Activity;                  // activityOf("map", "area:<id>", ...)
+}
+
 export interface BoardFeature {
   id: string;
   title: string;
   where: string[];
+  area: string | null;                 // null in the flat layout
   parent: string | null;               // a feature id, one level only
   depth: 0 | 1;
   summary: string;
@@ -194,7 +209,8 @@ export interface BoardFeature {
 
 export interface QaBoard {
   browser: boolean;                    // the agent browser is on (map, plan and test need it)
-  map: { exists: boolean; problem: string | null; updatedAt: number | null; activity: Activity };
+  /** activity is mergeActivity over every map unit's: the flat "map", the survey "areas", and each area. areas is [] when the layout is flat. */
+  map: { exists: boolean; layout: "flat" | "areas"; problem: string | null; updatedAt: number | null; activity: Activity; areas: BoardArea[] };
   /** features.md order, each child right after its parent; a child whose parent is unknown is shown at depth 0. */
   features: BoardFeature[];
   bugsWithoutFeature: BoardBug[];
@@ -258,7 +274,15 @@ export type StepId = string & { readonly __brand: "StepId" };
 export type StepPath = string & { readonly __brand: "StepPath" };
 export type NonEmpty<T> = readonly [T, ...T[]];
 
-export type Unit = "map" | FeatureId | BugId;
+export type Unit = MapUnit | FeatureId | BugId;
+export type AreaId = string & { readonly __brand: "AreaId" };
+export type MapUnit = "map" | "areas" | `area:${string}`;   // the flat map, the area survey, one area
+
+export interface Area { id: AreaId; title: string; where: string[]; summary: string }
+export interface MapFeature extends Feature { area: AreaId | null }   // area is null in the flat layout
+
+/** A qa_map_writes row: one accepted qa_map call. `changed` is false when the file already held the same text. */
+export interface MapWrite { job: JobId; unit: MapUnit; changed: boolean; dropped: FeatureId[]; sig: string; at: number }
 
 export interface Feature { id: FeatureId; title: string; where: string[]; parent: FeatureId | null; summary: string }
 export interface PlanStep { id: StepId; action: string; expected: string; path: StepPath | null }
@@ -267,20 +291,28 @@ export interface Plan { feature: FeatureId; title: string; intro: string; steps:
 /** A qa_pipelines row, parsed. `units` are the units of control's stage, fixed when that stage opened (null while held or ended). */
 export interface Pipeline { id: PipelineId; root: string; config: PipelineConfig; control: Control; units: Unit[] | null; createdAt: number }
 
-/** A qa_jobs row, parsed. Written at launch; afterwards only nudged_turns, problem and settled_at change (jobs.ts only). */
+/** A qa_jobs row, parsed. Written at launch; afterwards only nudged_turns, problem, failed_units and settled_at change (jobs.ts only). */
 export interface Job {
   id: JobId; pipeline: PipelineId; root: string; stage: Stage; units: NonEmpty<Unit>;
   session: string | null; error: string | null;
-  /** Artifact signatures at launch: map → { map: sig|null }; plan → { [featureId]: sig|null }; else {}. */
+  /** Artifact signatures at launch: plan → { [featureId]: sig|null }; else {}. */
   sigs: Record<string, string | null>;
   /** lead.turns when the merge nudge was sent; null = not nudged. */
   nudgedTurns: number | null;
-  problem: string | null; startedAt: number; settledAt: number | null;
+  problem: string | null;
+  /**
+   * With a problem: the units that failed their artifact check. null means the whole job failed: a job-level problem
+   * (unmerged heads, a lost session) or a row written before this column existed. Always null without a problem.
+   */
+  failed: readonly Unit[] | null;
+  startedAt: number; settledAt: number | null;
 }
 
 /** What reconcile reads. Built by jobs.ts in one synchronous pass. */
 export interface Snapshot {
-  features: readonly Feature[];
+  features: readonly MapFeature[];
+  areas: readonly Area[];                              // [] in the flat layout
+  layout: "flat" | "areas";
   mapExists: boolean;
   plans: ReadonlyMap<FeatureId, { steps: number; problem: string | null }>;
   /** Open = status new|accepted. feature = stored ?? featureForUrl ?? null (same rule as the board). */
@@ -290,7 +322,7 @@ export interface Snapshot {
 }
 
 export type Launch =
-  | { stage: "map"; units: readonly ["map"] }
+  | { stage: "map"; units: readonly [MapUnit] }
   | { stage: "plan" | "test"; units: NonEmpty<FeatureId> }
   | { stage: "fix"; units: NonEmpty<BugId> };
 
@@ -310,9 +342,19 @@ The first rule that applies wins.
 1. `ended` or `held` → `wait`.
 2. `stopping(st)`: if any job is active → `wait`. Otherwise → `control ended(stopped, now)`, units null.
 3. `running(st)`:
-   - `covered` is the set of units of every job of stage `st`, including jobs with an `error`.
-   - `left` is `p.units` minus `covered`, in `p.units` order.
+   - Each unit of `p.units` has a state derived from the stage's jobs that list it: `{ attempts, ok, active }`.
+     `attempts` is the number of such jobs, `ok` is true when one settled with no `error` and either no `problem` or a
+     `failed` list that does not name the unit, `active` is true when one is active. A job's `error` applies to every
+     unit it lists. Its `problem` applies to the units in `failed`, or to every unit when `failed` is null. So a
+     `together` job over `[a, b, c, d]` that failed only `d` leaves a, b and c `ok`, and the retry lists `[d]`.
+   - `left` is the units of `p.units`, in order, that are not `active`, not `ok` and have `attempts < MAX_ATTEMPTS`. A
+     unit whose job failed is therefore launched once more, in every stage (map included); after two failed attempts it
+     is left alone, and the stage drains without it.
    - `active` is the jobs of stage `st` that are active.
+   0. **Survey re-freeze.** `st === "map"`, `p.units` is `["areas"]`, `left` and `active` are empty, the `areas` unit is `ok`
+      and `s.layout === "areas"` → `control running(map)` with the area units (`unitsFor` as if survey were false). The
+      stage is frozen again exactly once: the second time `p.units` are area units, so this rule cannot match. A survey
+      that failed twice is not `ok`, and the stage drains as in rule 1.
    1. When `left` is empty and `active` is empty, the stage is done. Let `next` be the next stage after `st` present in
       `config.stages`:
       - no `next` → `control ended(done, now)`;
@@ -320,16 +362,21 @@ The first rule that applies wins.
       - otherwise → `control running(next)`, units `unitsFor(next, config, s)`.
    2. `st === "fix"` and `s.fixBusyElsewhere` → `wait`.
    3. `left` is empty → `wait`.
-   4. `st === "map"`, or the stage's batching is `together`: when `active` is empty, `launch` one job with all of `left`;
-      otherwise `wait`.
-   5. `each`: let `room = PARALLEL[st] - active.length`. When `room <= 0`, `wait`. Otherwise `launch` the first `room`
+   4. The stage's batching is `together` (never for `map`): when `active` is empty, `launch` one job with the first
+      `TOGETHER_MAX` units of `left`; otherwise `wait`. The next chunk goes out after that job settles.
+   5. `each`: let `room = limit - active.length`, where `limit` is `PARALLEL[st]`, or `config.stages.test.parallel` for
+      `test` (1 for a pipeline stored without it). When `room <= 0`, `wait`. Otherwise `launch` the first `room`
       units of `left`, one unit per launch.
 
 ### `unitsFor(stage, config, s): Unit[]` (pure, deterministic order)
 
 Order is the order of `s.features` (features.md order) for feature units, and bug id order for bug units.
 
-- `map` → `["map"]`.
+- `map` →
+  - `config.stages.map.survey` → `["areas"]`;
+  - layout `flat` (or no map) → `["map"]`;
+  - layout `areas` → one `area:<id>` per area, in map order: scope `all`, every area; scope `areas`, the named ones;
+    scope `features`, the areas that hold those features.
 - `plan` → each feature in scope where `replan || !plans.has(f) || plan.problem || plan.steps === 0`.
 - `test` → each feature in scope whose plan exists, has no problem and has `steps ≥ 1`.
 - `fix` →
@@ -337,7 +384,9 @@ Order is the order of `s.features` (features.md order) for feature units, and bu
   - scope `all`: every open bug, including ones with no feature;
   - scope `features`: the open bugs whose feature is in scope.
 
-"In scope" means: scope `all`, every feature; scope `features`, the named ids that still exist; scope `bugs`, none.
+"In scope" means: scope `all`, every feature; scope `features`, the named ids that still exist; scope `areas`, the
+features (depth 0 and 1) whose `area` is named; scope `bugs`, none. `fix` with scope `areas` takes the open bugs whose
+feature is in scope, as for `features`.
 
 `startPipeline` computes the first stage the same way: `control running(first)` with `units = unitsFor(first, …)`. A
 first stage with no units is allowed. It advances at the first tick, so "Test" with no plans ends at once as done, and
@@ -348,21 +397,45 @@ the board shows Test as 0/0.
 Both are also pure, in `pipeline.ts`.
 
 - A stage's `total` depends on where it is:
-  - the current stage: `p.units.length`;
-  - a stage already passed: the number of distinct units across its jobs (it drained, so every unit was covered);
+  - the current stage: `p.units.length`, and only those units are counted (after a survey re-freezes the stage, the
+    survey unit is not one of them);
+  - a stage already passed: the number of distinct units across its jobs (it drained, so every unit was launched);
   - a stage not yet opened, or skipped: 0.
-- `done` is the number of covered units whose job is settled.
-- `problems` is the number of settled jobs of the stage with a problem or error.
+- A unit is finished when it is `ok`, or when it is not `active` and no retry is coming. A retry is coming while the
+  pipeline is `running` this stage and the unit has `attempts < MAX_ATTEMPTS`.
+- `done` is the number of finished units.
+- `problems` is the number of finished units that are not `ok`. A unit that failed and then passed is done, not a
+  problem; one that failed twice is one problem; one waiting for its retry is neither.
 
-### `parseConfig(body: unknown, ctx: { features: readonly Feature[]; pairExists: (id: string) => boolean }): PipelineConfig`
+`activityOf(stage, unit, p, jobs, …)`: `working` when a job of the unit is active; `queued` when the pipeline runs
+that stage, the unit is among its frozen units and still retryable (never launched, or failed once and the retry is
+coming); otherwise `problem` when the last covering job settled with an error, or with a problem that applies to this
+unit (the same per-unit rule as `ok`); else `idle`. A unit that passed in a job with a problem for another unit shows
+no problem.
+
+### Map units: survey and areas
+
+A big product's map is too large for one job. `lab/features.md` may be split into areas (`# Title` + `area: id` +
+`where:`, then its `##` features). A map job's unit is a `MapUnit`: `"map"` (the whole flat map), `"areas"` (the survey:
+the list of areas, no features) or `"area:<id>"` (one area). Each job saves with `qa_map` (`submitMap`, the only writer
+of the file) and starts from its unit's text, `sectionOf(readMap(root), unit)`. The server carries feature ids
+(`carryIds`: `was:` for a rename, `drop:` for removed features) and, on a survey, places the existing features by `where`
+(`assignAreas`). Area jobs run `PARALLEL.map` at a time and write the same file, each replacing only its own section.
+
+With `stages.map.survey` the stage first runs the one `areas` job, then re-freezes onto the area units (rule 0 above).
+
+### `parseConfig(body: unknown, ctx: { features: readonly Feature[]; areas: readonly Area[]; pairExists: (id: string) => boolean }): PipelineConfig`
 
 This is the boundary. It throws `UserError`, which the route turns into 400, with these exact messages:
 
 - `"Pick at least one stage."`
 - `"A list of bugs can only be fixed: choose the Fix stage alone."`
 - `"No feature \"<id>\"."`
+- `"No area \"<id>\"."` (scope `areas`; an empty list is `"Pick at least one area."`)
+- `"survey must be true or false."` (`stages.map.survey`, when given; omitted means false)
 - `"No Hydra pair \"<id>\". See \`trb pair list\`."`
 - `"batching must be \"each\" or \"together\"."`
+- `"parallel must be a whole number from 1 to 3."` (`stages.test.parallel`, when given; omitted means 1)
 - `"pace must be \"auto\" or \"step\"."`
 - `"baseUrl must be an http or https address."`
 
@@ -442,11 +515,12 @@ export async function executeQaTool(name: string, args: Record<string, unknown>,
 //     else required and ∈ job.units (plan/test together), map: optional and must exist in features.md. Calls
 //     logBug(root, { …, byAgent: true, feature }) and notes "Found by a QA agent in the <stage> job <jobId> (session <id>)."
 // src/qa/defs.ts (names kept: QA_TOOL_NAMES, QA_TOOL_SET, qaToolDefs, BUG_KIND_LIST): add flow/feature params, drop "unconfirmed" text.
-// src/qa/features.ts
+// src/qa/map.ts (replaces features.ts: it also owns areas, qa_map's submitMap, sectionOf and mapWritesOf, see "Map units" in section 5)
 export function parseFeatures(text: string): { features: Feature[]; problem: string | null };   // keys id|where|parent; `plans:` read and ignored; parent must be an id of a depth-0 feature, else problem + parent null
 export function readFeatures(root: string): { features: Feature[]; problem: string | null; exists: boolean; updatedAt: number | null };
-export function featuresSignature(root: string): string | null;
-export function featureForUrl(features: readonly Pick<Feature, "id" | "where">[], url: string): FeatureId | null;   // §2
+export function readMap(root: string): FeatureMap;   // { areas, features: MapFeature[], layout: "flat" | "areas", exists, problem, updatedAt }
+export function featuresSignature(root: string): string | null;   // no longer used to judge a map job
+// featureForUrl lives in pipeline.ts (§2)
 export const FEATURES_FILE: string;   // "lab/features.md"
 // src/qa/plan.ts
 export const QA_DIR: string;          // "lab/qa"
@@ -553,7 +627,8 @@ Deleted:
 
 ### Launch (in `jobs.ts`, per `Launch`, inside `tickProject`)
 
-1. `pair = config.driver.kind === "pair" && stage !== "test"`. Test under a pair: `createLead` with the pair's
+1. `pair = config.driver.kind === "pair" && stage !== "test" && !(stage === "map" && unit !== "map")`: only the flat map
+   unit splits into heads; a survey or an area job is a plain session, like test. Test under a pair: `createLead` with the pair's
    `lead_engine`, `lead_model`, `lead_effort` and **no `pairId`**.
 2. Map, plan and test: the browser must be on, else the job is recorded with `error`. Test: `startRun` for each
    feature unit before `createLead`, and the run ids go into the prompt. If the launch throws, those runs are removed.
@@ -563,7 +638,7 @@ Deleted:
 4. Fix: after `createLead`, `patchFinding(root, bug, { status: "accepted" })` and set `fix_session = session.id` for
    each bug unit, through `noteFinding`/`patchFinding` as `fixFinding` does today. This is what makes `runningFix` see
    the job.
-5. A throw anywhere in steps 2–4 inserts the job with `session_id NULL` and `error = message`. The job is never retried.
+5. A throw anywhere in steps 2–4 inserts the job with `session_id NULL` and `error = message`. Its units are retried once (§5).
 6. The label is `QA · map|plan|test|fix`. The title is `QA · <stage> · <first unit title>[ +n]`, at most 100 characters.
 
 ### Settle (in `jobs.ts`, called by the driver)
@@ -573,7 +648,8 @@ A job settles when `job.session` is set, `settledAt` is null and `treeIdle(job.s
   `nudgedTurns = lead.turns`, `send({ operator: true }, lead, NUDGE)` and return.
 - If `nudgedTurns !== null` and `lead.turns <= nudgedTurns` and the lead's status is not `failed`/`closed`, return:
   the nudge turn has not ended yet.
-- Otherwise `problem = check(job)`, `settled_at = now`.
+- Otherwise `problem, failed = check(job)`, `settled_at = now`. The check names the units that failed their artifact
+  check in `failed`. A job-level problem (heads not merged, a map job's own check, a lost session) leaves `failed` null.
 
 `NUDGE`, exactly:
 `"Your heads <ids> finished with commits that are not merged. Merge each one with subagent_merge, one at a time, check the result, finish the job you were given, then end your turn."`
@@ -613,7 +689,7 @@ BROWSER
 A feature is one thing a user does, named the way they would say it ("Checkout", "Invite a teammate"). Write the
 high-level journeys first; under each, the specific things a user does inside it, marked with `parent: <journey id>`
 (one level only). Aim for 5 to 40 features in all.
-Write ONLY `lab/features.md`, in exactly this format:
+Write the whole map in exactly this format:
 # Features
 ## Checkout
 id: checkout
@@ -624,8 +700,11 @@ id: apply-discount
 parent: checkout
 where: /cart
 A buyer enters a code and sees the total drop.
-Rules: `id:` lowercase letters, digits and dashes, unique. Keep every existing feature's id exactly. Drop any `plans:`
-line. Check each feature in the browser. BUGS (no feature needed for map) Change no other file.
+Rules: `id:` lowercase letters, digits and dashes, unique. Drop any `plans:` line. Check each feature in the browser.
+SAVE_MAP (call qa_map with the whole text for the unit, never edit the file, `was:` and `drop:`), then the starting text
+(`sectionOf(map, unit)`, or "nothing saved yet: start from scratch"). BUGS (no feature needed for map) Change no other file.
+The survey and area variants differ only in the task: the survey asks for 3 to 15 areas and no features; an area job maps
+only its area (5 to 40 features) and gets one line per other area (title and `where`) for the borders.
 OPEN_BUGS
 NOTE
 ```
@@ -718,10 +797,8 @@ prefixed `<unit>: `.
 
 | Stage | Problem when… | Text |
 |---|---|---|
-| map | `lab/features.md` missing | `The agent did not write lab/features.md.` |
-| | signature equals `sigs.map` (and it was not null) | `The agent did not change lab/features.md.` |
-| | 0 features | `lab/features.md lists no features: each starts with "## ".` |
-| | parse problem | the parse problem |
+| map | `mapWritesOf(job.id)` is empty (`changed: false` counts as saved) | `The agent did not save the map with qa_map.` |
+| | unit `areas`, and the map is not in the areas layout afterwards | `lab/features.md is not organized in areas after the survey.` |
 | plan | file missing | `<X>: no plan written.` |
 | | plan has a problem | `<X>: <problem>` |
 | | 0 steps | `<X>: the plan has no steps.` |
@@ -749,10 +826,11 @@ CREATE TABLE IF NOT EXISTS qa_jobs (
   stage TEXT NOT NULL,                 -- map|plan|test|fix
   units TEXT NOT NULL,                 -- JSON NonEmpty<Unit>
   session_id TEXT UNIQUE,              -- NULL when the launch failed
-  error TEXT,                          -- launch failure; never retried
+  error TEXT,                          -- launch failure; its units are retried once
   sigs TEXT NOT NULL DEFAULT '{}',
   nudged_turns INTEGER,
   problem TEXT,
+  failed_units TEXT,                   -- JSON Unit[]: the units behind `problem`; NULL = the whole job (addColumn)
   started_at INTEGER NOT NULL,
   settled_at INTEGER
 );
@@ -802,18 +880,18 @@ change in another slice's file, it stops and reports it.
 
 - **Touches:**
   - `src/qa/types.ts`, `pipeline.ts` (new), `jobs.ts` (new), `prompts.ts` (new), `registry.ts`, `tools.ts`,
-    `defs.ts`, `plan.ts`, `features.ts`, `runs.ts`
+    `defs.ts`, `plan.ts`, `map.ts`, `runs.ts`
   - Deletes `src/qa/batches.ts` and `src/qa/sessions.ts`.
   - `src/daemon/routes/qa.ts`, `src/db.ts`, `src/sessions/manager.ts` (`treeIdle`, `unmergedHeads` only),
     `src/daemon/lifecycle.ts`
 - **Tests:**
   - New `tests/qa-pipeline.test.ts`: a table-driven test of `reconcile` over every `Control` × batching × PARALLEL ×
-    `fixBusyElsewhere` × failed launches; `unitsFor` with replan defaults; `parseConfig` messages; `featureForUrl` with
+    `fixBusyElsewhere` × failed launches and retries, `together` chunks, test parallelism; `unitsFor` with replan defaults; `parseConfig` messages; `featureForUrl` with
     the §2 vectors.
   - New `tests/qa-jobs.test.ts`, with a fake turn runner:
     - start, then 409 on a second start; a held pipeline is superseded;
     - continue and stop;
-    - a restart resumes without relaunching covered units;
+    - a restart resumes without relaunching units that already passed;
     - two racing ticks launch once;
     - the nudge is sent once and settle waits for the nudge turn;
     - a crashed head does not stall settling;

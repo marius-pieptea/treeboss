@@ -7,7 +7,7 @@ import { createBugFinding } from "../src/lab/findings";
 import { realOf } from "../src/lab/tables";
 import { readPlan, removePlan } from "../src/qa/plan";
 import { qaContext, usesQaTools } from "../src/qa/registry";
-import { currentStep, getRun, lastOutcomes, listRuns, parseOutcome, removeRun, runRoot, runsOfSession, setOutcome, setRunSession, startRun, summarize } from "../src/qa/runs";
+import { currentStep, getRun, lastOutcomes, latestRuns, listRuns, parseOutcome, removeRun, runRoot, runsOfSession, setOutcome, setRunSession, startRun, summarize } from "../src/qa/runs";
 import { executeQaTool } from "../src/qa/tools";
 import type { FeatureId, RunId, StepId } from "../src/qa/types";
 import { createLead, interruptAll, setTurnRunner } from "../src/sessions/manager";
@@ -123,6 +123,39 @@ describe("runs", () => {
     expect<unknown>(listRuns(root, "cart").map((r) => r.id)).toEqual([second.id, first.id]);
   });
 
+  test("latestRuns gives each plan its newest run, and only this project's", () => {
+    put("cart", CART);
+    put("invite", INVITE);
+    startRun(root, plan(), null);
+    const newest = startRun(root, plan(), null);
+    const invite = startRun(root, plan("invite"), null);
+    const other = makeDir();
+    fs.mkdirSync(path.join(other, "lab/qa"), { recursive: true });
+    fs.writeFileSync(path.join(other, "lab/qa/cart.md"), CART);
+    startRun(other, readPlan(other, "cart" as FeatureId), null);
+    const latest = latestRuns(root);
+    expect<unknown>([...latest.keys()].sort()).toEqual(["cart", "invite"]);
+    expect<unknown>(latest.get("cart" as FeatureId)).toEqual(listRuns(root, "cart", 1)[0]);
+    expect(latest.get("cart" as FeatureId)!.id).toBe(newest.id);
+    expect(latest.get("invite" as FeatureId)!.id).toBe(invite.id);
+  });
+
+  test("latestRuns matches listRuns(…, 1) for every feature with many runs, ties on started_at included", () => {
+    const FEATURES = ["cart", "invite", "pay", "solo"];
+    for (const f of FEATURES) put(f, CART);
+    const stamp = db().prepare("UPDATE qa_runs SET started_at = ? WHERE id = ?");
+    const times: Record<string, number[]> = { cart: [5, 9, 9, 9, 2], invite: [4, 4, 4], pay: [1, 2, 3, 3], solo: [7] };
+    for (const f of FEATURES) for (const t of times[f]!) stamp.run(t, startRun(root, plan(f), null).id);
+    const other = makeDir();
+    fs.mkdirSync(path.join(other, "lab/qa"), { recursive: true });
+    fs.writeFileSync(path.join(other, "lab/qa/cart.md"), CART);
+    stamp.run(99, startRun(other, readPlan(other, "cart" as FeatureId), null).id);
+    const latest = latestRuns(root);
+    expect<unknown>([...latest.keys()].sort()).toEqual([...FEATURES].sort());
+    for (const f of FEATURES) expect<unknown>(latest.get(f as FeatureId)).toEqual(listRuns(root, f, 1)[0]);
+    expect(latestRuns(makeDir()).size).toBe(0);
+  });
+
   test("lastOutcomes gives each step its newest recorded state, across runs", () => {
     put("cart", CART);
     const a = startRun(root, plan(), null);
@@ -206,5 +239,47 @@ describe("qa_record routes a step to its flow", () => {
     db().prepare("UPDATE qa_jobs SET stage = 'fix'").run();
     expect(usesQaTools(lead)).toBe(false);
     expect(usesQaTools("s_nobody")).toBe(false);
+  });
+});
+
+describe("qa_map writes the feature map for a map job only", () => {
+  async function job(stage: string, unit: string) {
+    const lead = (await settled(createLead({ prompt: "go", cwd: root }).id)).id;
+    const now = Date.now();
+    db().prepare("INSERT INTO qa_pipelines (id, root_dir, config, control, units, created_at) VALUES ('qap_m', ?, '{}', '{\"kind\":\"running\",\"stage\":\"map\"}', NULL, ?)").run(realOf(root), now);
+    db().prepare("INSERT INTO qa_jobs (id, pipeline_id, root_dir, stage, units, session_id, sigs, started_at) VALUES ('qaj_m', 'qap_m', ?, ?, ?, ?, '{}', ?)").run(realOf(root), stage, JSON.stringify([unit]), lead, now);
+    return lead;
+  }
+  const features = () => fs.readFileSync(path.join(root, "lab/features.md"), "utf-8");
+
+  test("a map job's session and its head save the map; the reply and the file show the carried ids", async () => {
+    const lead = await job("map", "map");
+    const first = await executeQaTool("qa_map", { text: "## Checkout\nwhere: /cart\nPays.\n" }, lead);
+    expect(first.text).toBe("Saved: 1 feature (1 new: checkout).");
+    expect(features()).toBe("# Features\n\n## Checkout\nid: checkout\nwhere: /cart\nPays.\n");
+
+    db().prepare("INSERT INTO sessions (id, title, parent_id, root_id, depth, engine, status, cwd, base_cwd, isolation) SELECT 's_head', 'h', id, id, 1, engine, 'idle', cwd, base_cwd, 'none' FROM sessions WHERE id = ?").run(lead);
+    expect((await executeQaTool("qa_map", { text: "## Pay\nid: pay\nwas: checkout\nwhere: /cart\nPays.\n" }, "s_head")).text).toBe("Saved: 1 feature. Kept ids for 1 retitled.");
+    expect(features()).toContain("## Pay\nid: checkout\n");
+  });
+
+  test("a rejected text comes back as an Error that says what to fix, with the file untouched", async () => {
+    const lead = await job("map", "map");
+    await executeQaTool("qa_map", { text: "## Checkout\nid: checkout\n\n## Invite\nid: invite\n" }, lead);
+    const before = features();
+    const r = await executeQaTool("qa_map", { text: "## Checkout\nid: checkout\n" }, lead);
+    expect(r.text).toMatch(/^Error: Nothing was saved/);
+    expect(r.text).toContain("drop: invite");
+    expect(features()).toBe(before);
+    expect((await executeQaTool("qa_map", {}, lead)).text).toBe("Error: text is required: the feature map to save.");
+  });
+
+  test("a plan job, a test job and a stranger are refused", async () => {
+    expect((await executeQaTool("qa_map", { text: "## A\n" }, "s_nobody")).text).toContain("is for a QA map job");
+    const lead = await job("plan", "cart");
+    expect((await executeQaTool("qa_map", { text: "## A\n" }, lead)).text).toContain("is for a QA map job");
+    db().prepare("UPDATE qa_jobs SET stage = 'test'").run();
+    expect((await executeQaTool("qa_map", { text: "## A\n" }, lead)).text).toContain("is for a QA map job");
+    expect(fs.existsSync(path.join(root, "lab/features.md"))).toBe(false);
   });
 });

@@ -16,6 +16,7 @@ export interface JobRow {
   sigs: string;
   nudged_turns: number | null;
   problem: string | null;
+  failed_units: string | null;
   started_at: number;
   settled_at: number | null;
 }
@@ -31,6 +32,7 @@ export const toJob = (r: JobRow): Job => ({
   sigs: JSON.parse(r.sigs) as Job["sigs"],
   nudgedTurns: r.nudged_turns,
   problem: r.problem,
+  failed: r.failed_units === null ? null : (JSON.parse(r.failed_units) as Unit[]),
   startedAt: r.started_at,
   settledAt: r.settled_at,
 });

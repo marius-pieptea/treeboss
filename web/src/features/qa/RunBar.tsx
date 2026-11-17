@@ -5,7 +5,7 @@ import { SegTabs, Spinner } from "@/components/ui/misc";
 import { Popover } from "@/components/ui/overlay";
 import type { Driver, Pace, PipelineView, Scope } from "./api";
 import { DriverPicker } from "./DriverPicker";
-import { NOTE_MAX, since, statusLine, type RunForm, type RunPhase } from "./logic";
+import { NOTE_MAX, PARALLEL, since, statusLine, type Parallel, type RunForm, type RunPhase } from "./logic";
 import { LABEL } from "./Status";
 
 const PACE: Array<{ value: Pace; label: string }> = [
@@ -33,7 +33,10 @@ export function RunBar(p: {
   const editable = p.phase === "idle" || p.phase === "ended";
   const ended = p.pipeline?.control.kind === "ended" ? p.pipeline.control : null;
   const replan = p.form.replan ?? p.scope.kind === "features";
-  const optionsSet = p.form.note.trim() !== "" || p.form.baseUrl.trim() !== "" || p.form.replan !== null;
+  const mapOn = p.form.stages.includes("map");
+  // Parallel tests only exist for batching "each": with "together" there is one job.
+  const parallel = p.form.stages.includes("test") && p.form.batching.test === "each";
+  const optionsSet = p.form.note.trim() !== "" || p.form.baseUrl.trim() !== "" || p.form.replan !== null || (mapOn && p.form.survey) || (parallel && p.form.parallel > 1);
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2" data-run-bar data-phase={p.phase}>
       {editable ? (
@@ -84,6 +87,15 @@ export function RunBar(p: {
               <Field label="Note for the agent">
                 <Textarea value={p.form.note} maxLength={NOTE_MAX} onChange={(e) => p.setForm({ ...p.form, note: e.target.value })} placeholder="What to focus on, test data, logins…" />
               </Field>
+              {mapOn && (
+                <label className="flex items-center justify-between gap-2">
+                  <span>
+                    Split into areas
+                    <span className="block text-label text-fg-muted">For big apps: decides the areas first, then maps each area in parallel.</span>
+                  </span>
+                  <Switch checked={p.form.survey} onChange={(v) => p.setForm({ ...p.form, survey: v })} label="Split into areas" />
+                </label>
+              )}
               {p.form.stages.includes("plan") && (
                 <label className="flex items-center justify-between gap-2">
                   <span>
@@ -92,6 +104,15 @@ export function RunBar(p: {
                   </span>
                   <Switch checked={replan} onChange={(v) => p.setForm({ ...p.form, replan: v })} label="Write plans again" />
                 </label>
+              )}
+              {parallel && (
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span>Run at once</span>
+                    <SegTabs value={String(p.form.parallel) as `${Parallel}`} onChange={(v) => p.setForm({ ...p.form, parallel: Number(v) as Parallel })} items={PARALLEL.map((n) => ({ value: String(n) as `${Parallel}`, label: String(n) }))} className="w-24" />
+                  </div>
+                  <span className="text-label text-fg-muted">Tests at once share the app's logins and data.</span>
+                </div>
               )}
             </div>
           </Popover>

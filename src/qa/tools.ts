@@ -1,5 +1,5 @@
 /**
- * Executors for qa_record and bug_log. They run in the daemon for the session the MCP shim speaks for: the project, the
+ * Executors for qa_record, bug_log and qa_map. They run in the daemon for the session the MCP shim speaks for: the project, the
  * job and its runs come from that session's lead (registry.ts), never from the arguments, so an agent cannot write into
  * another project or another job's run. A head of the lead calls them for the lead's job. The result is always text:
  * `Error: ...` for a call the agent can fix.
@@ -10,7 +10,7 @@ import { logBug, MAX_BUG_NOTE, MAX_BUG_STEP, MAX_BUG_STEPS, MAX_BUG_TITLE } from
 import { BUG_KINDS, listFindings, noteFinding, readFinding, type BugKind, type Finding } from "../lab/findings";
 import { UserError } from "../util";
 import { QA_TOOL_SET } from "./defs";
-import { FEATURES_FILE, readFeatures } from "./features";
+import { FEATURES_FILE, readMap, submitMap } from "./map";
 import { stepId } from "./plan";
 import { qaContext } from "./registry";
 import { currentStep, parseOutcome, runsOfSession, setOutcome } from "./runs";
@@ -95,7 +95,7 @@ async function record(sessionId: string, args: Record<string, unknown>): Promise
 function featureOfBug(job: Job, raw: string): { feature: string | null } | { error: string } {
   if (job.stage === "map") {
     if (!raw) return { feature: null };
-    return readFeatures(job.root).features.some((f) => f.id === raw) ? { feature: raw } : { error: `Error: no feature "${raw}" in ${FEATURES_FILE}.` };
+    return readMap(job.root).features.some((f) => f.id === raw) ? { feature: raw } : { error: `Error: no feature "${raw}" in ${FEATURES_FILE}.` };
   }
   const units = job.units as readonly string[];
   if (raw) return units.includes(raw) ? { feature: raw } : { error: `Error: feature must be one of ${units.join(", ")}.` };
@@ -159,9 +159,18 @@ async function log(sessionId: string, args: Record<string, unknown>): Promise<st
   return `Logged ${out.finding.id} "${out.finding.title}".${out.capture ? ` Evidence ${out.capture.id}.` : ""}${shoot && !page.png ? " The screenshot could not be taken." : ""}${out.shotNote ? ` ${out.shotNote}` : ""}${job.stage === "test" ? ` Pass bug: "${out.finding.id}" to qa_record.` : ""}`;
 }
 
+function saveMap(sessionId: string, args: Record<string, unknown>): string {
+  const ctx = qaContext(sessionId);
+  if (!ctx || ctx.job.stage !== "map") return "Error: qa_map is for a QA map job. Plan and test jobs read the map; they do not write it.";
+  const text = typeof args.text === "string" ? args.text : "";
+  if (!text.trim()) return "Error: text is required: the feature map to save.";
+  return submitMap(ctx.job.root, ctx.job, text).text;
+}
+
 export async function executeQaTool(name: string, args: Record<string, unknown>, sessionId: string): Promise<{ text: string }> {
   try {
     if (!QA_TOOL_SET.has(name)) return { text: `Error: unknown tool "${name}".` };
+    if (name === "qa_map") return { text: saveMap(sessionId, args) };
     return { text: name === "qa_record" ? await record(sessionId, args) : await log(sessionId, args) };
   } catch (err: any) {
     if (err instanceof UserError || err instanceof BrowserError) return { text: `Error: ${err.message}` };

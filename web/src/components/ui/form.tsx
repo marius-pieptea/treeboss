@@ -3,7 +3,7 @@ import { Select as S, Switch as SW, Checkbox as CB } from "radix-ui";
 import { Check, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const field = "w-full rounded-md border border-line bg-raised px-2.5 text-[13px] text-fg outline-none transition-colors placeholder:text-fg-faint hover:border-line-strong focus:border-accent/70 focus:bg-panel disabled:opacity-50";
+export const field = "w-full rounded-md border border-line bg-raised px-2.5 text-[13px] text-fg outline-none transition-colors placeholder:text-fg-faint hover:border-line-strong focus:border-accent/70 focus:bg-panel disabled:opacity-50";
 
 export function Input({ className, ...props }: React.ComponentProps<"input">) {
   return <input className={cn(field, "h-8", className)} {...props} />;

@@ -1,9 +1,9 @@
 /**
  * The QA tools' definitions, apart from their executors so the MCP shim can list them without loading the browser
  * machinery. The trb MCP server offers them when the run carries TRB_QA (mcp/store.ts), which the session manager sets
- * for a session that works for a map, plan or test job (registry.ts). Descriptions are the agent's only manual.
+ * for a session that works for a map, plan or test job (registry.ts); qa_map refuses all but a map job. Descriptions are the agent's only manual.
  */
-export const QA_TOOL_NAMES = ["qa_record", "bug_log"] as const;
+export const QA_TOOL_NAMES = ["qa_record", "bug_log", "qa_map"] as const;
 export const QA_TOOL_SET: ReadonlySet<string> = new Set(QA_TOOL_NAMES);
 
 export const BUG_KIND_LIST = ["functional", "visual", "logic", "content", "performance"] as const;
@@ -49,6 +49,22 @@ export function qaToolDefs() {
           new: { type: "boolean", description: "Log it even though it looks like an open bug: you checked and it is a different problem." },
         },
         required: ["title", "steps", "actual"],
+      },
+    },
+    {
+      name: "qa_map" as const,
+      description:
+        "Save the feature map for this map job. Pass the whole text for your unit; the server writes lab/features.md and is the only thing that does, so do not edit that file yourself. " +
+        "Write each feature as a '## Title' section with key lines first (id:, parent:, where:) and a sentence on what it is. " +
+        "Start from the text you were given and keep each feature's id: ids tie plans, test runs and bugs to a feature, and the server restores the old id of any feature it recognises (same was:, same title, or same pages), whatever id: you write. " +
+        "If you rename a feature so it is no longer recognisable, put was: <old-id> on it. A feature you remove must be listed on a line 'drop: id1, id2'; a text that silently loses a feature is rejected and nothing is saved. " +
+        "You cannot choose which area you write for. Saving the same text again is fine (reply: No changes.).",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          text: { type: "string", description: "The whole text for your unit: the ## feature sections (and any drop: line)." },
+        },
+        required: ["text"],
       },
     },
   ];

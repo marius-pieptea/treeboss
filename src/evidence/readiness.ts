@@ -1,7 +1,7 @@
 /**
  * What REA can and cannot do on this computer: its launcher, the native engine it needs for binaries (Ghidra, Hopper
  * or IDA) and the JDK that engine runs on, the APK tools (apktool, the jadx headless jar), adb, and firmware inspection
- * (Linux only in REA 6.4.0). Deep, it also runs REA's own `doctor`. Never "fail": REA is optional, so every gap is a
+ * (Linux only in REA 6.9.0). Deep, it also runs REA's own `doctor`. Never "fail": REA is optional, so every gap is a
  * warning or an info line with the command that closes it.
  *
  * `reaEnv()` is what the REA server is started with: the absolute paths of what was found, for the variables REA reads
@@ -53,12 +53,12 @@ export interface Probe {
   apktoolVersion: (bin: string) => string | null;
 }
 
-/** Ghidra 12.1 runs on JDK 21; jadx needs 17. REA 6.4.0 audits: GhidraInstallationPolicy.js, JadxConfiguration.js. */
+/** Ghidra 12.1 runs on JDK 21; jadx needs 17. REA 6.9.0 audits: GhidraInstallationPolicy.js, JadxConfiguration.js. */
 const GHIDRA_JDK = 21;
 const JADX_JDK = 17;
-/** REA 6.4.0 wants at least this apktool (apktool/ApktoolConfiguration.js). */
+/** REA 6.9.0 wants at least this apktool (apktool/ApktoolConfiguration.js). */
 const APKTOOL_MIN = "2.7.0";
-/** The jadx headless bridge REA 6.4.0 pins, from dist/android/JadxRelease.js. REA does not download it. */
+/** The jadx headless bridge REA 6.9.0 pins, from dist/android/JadxRelease.js. REA does not download it. */
 const JADX = {
   version: "0.7.1",
   url: "https://github.com/1013503897/jadx-headless-mcp/releases/download/v0.7.1/jadx-headless-mcp-0.7.1-all.jar",
@@ -391,13 +391,13 @@ export async function checkReadiness(probe: Probe, deep: boolean): Promise<Readi
 
   const jar = jadxJar(probe);
   if (!jar) checks.push({ id: "jadx", level: "warn", text: `jadx-headless-mcp ${JADX.version} missing: REA's APK analysis needs it (REA_JADX_MCP_JAR), REA does not install it`, fix: JADX_FIX });
-  else if (!jar.pinned) checks.push({ id: "jadx", level: "warn", text: `jadx-headless-mcp found at ${jar.path}, but REA 6.4.0 pins ${JADX.version}`, fix: JADX_FIX });
+  else if (!jar.pinned) checks.push({ id: "jadx", level: "warn", text: `jadx-headless-mcp found at ${jar.path}, but REA ${REA_VERSION} pins ${JADX.version}`, fix: JADX_FIX });
   else checks.push({ id: "jadx", level: "ok", text: `jadx-headless-mcp ${JADX.version} found` });
 
   if (probe.which("adb")) checks.push({ id: "adb", level: "ok", text: "adb found" });
   else checks.push({ id: "adb", level: "info", text: "adb not found: only needed for a connected device", fix: "brew install --cask android-platform-tools" });
 
-  if (probe.platform !== "linux") checks.push({ id: "firmware", level: "info", text: "Firmware inspection is Linux-only in REA 6.4.0" });
+  if (probe.platform !== "linux") checks.push({ id: "firmware", level: "info", text: `Firmware inspection is Linux-only in REA ${REA_VERSION}` });
   else if (probe.which("binwalk")) checks.push({ id: "binwalk", level: "ok", text: "binwalk found" });
   else checks.push({ id: "binwalk", level: "info", text: "binwalk not found: firmware inspection needs it", fix: "brew install binwalk" });
 

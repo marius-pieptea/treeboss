@@ -6,6 +6,7 @@ import { UserError } from "../util";
 import {
   STAGES,
   type Activity,
+  type Area,
   type Batching,
   type Control,
   type Decision,
@@ -14,6 +15,7 @@ import {
   type FeatureId,
   type Job,
   type Launch,
+  type MapUnit,
   type NonEmpty,
   type Pace,
   type Pipeline,
@@ -29,9 +31,14 @@ import {
 export { STAGES };
 
 export const BUG_ID = /^bug-[a-z0-9][a-z0-9-]*$/;
-/** How many jobs of a stage run at once. Server only. */
-export const PARALLEL = { map: 1, plan: 3, test: 1, fix: 1 } as const;
+/** How many jobs of a stage run at once. Server only. Test is set per pipeline (`stages.test.parallel`). */
+export const PARALLEL = { map: 3, plan: 3, fix: 1 } as const;
+/** The daemon allows four agent browsers in all (src/browser/manager.ts MAX_CONTEXTS), so test runs get at most three. */
+export const MAX_TEST_PARALLEL = 3;
 export const PAIR_HEAD_CAP = 6;
+export const MAX_ATTEMPTS = 2;
+/** Most units in one `together` job: the prompt inlines every unit, so a bigger batch overflows the model's context. */
+export const TOGETHER_MAX = 10;
 const MAX_NOTE = 4000;
 
 const WAIT: Decision = { kind: "wait" };
@@ -84,14 +91,31 @@ function inScope(c: PipelineConfig, s: Snapshot): Feature[] {
     const ids = new Set(c.scope.ids);
     return s.features.filter((f) => ids.has(f.id));
   }
+  if (c.scope.kind === "areas") {
+    const ids = new Set<string>(c.scope.ids);
+    return s.features.filter((f) => f.area !== null && ids.has(f.area));
+  }
   return [];
+}
+
+function mapUnits(c: PipelineConfig, s: Snapshot): MapUnit[] {
+  if (s.layout === "flat") return ["map"];
+  const wanted = (a: Snapshot["areas"][number]): boolean => {
+    if (c.scope.kind === "areas") return c.scope.ids.includes(a.id);
+    if (c.scope.kind === "features") {
+      const ids = new Set<string>(c.scope.ids);
+      return s.features.some((f) => f.area === a.id && ids.has(f.id));
+    }
+    return true;
+  };
+  return s.areas.filter(wanted).map((a): MapUnit => `area:${a.id}`);
 }
 
 /** The units a stage works on, in the order they run. Frozen into the pipeline when the stage opens. */
 export function unitsFor(stage: Stage, c: PipelineConfig, s: Snapshot): Unit[] {
   switch (stage) {
     case "map":
-      return ["map"];
+      return c.stages.map?.survey ? ["areas"] : mapUnits(c, s);
     case "plan": {
       const replan = c.stages.plan?.replan ?? false;
       return inScope(c, s)
@@ -137,13 +161,41 @@ export function reconcile(p: Pipeline, s: Snapshot, now: number): Decision {
   }
 }
 
+/** A job's error counts against every unit it listed; its problem against the units in `failed`, or all when that is null. */
+export interface UnitState { attempts: number; ok: boolean; active: boolean }
+
+const isActive = (j: Job): boolean => j.settledAt === null && j.session !== null;
+
+/** The job settled and this unit was not among the ones that failed. */
+const passedIn = (j: Job, u: Unit): boolean => j.settledAt !== null && j.error === null && (j.problem === null || (j.failed !== null && !j.failed.includes(u)));
+
+export function unitStates(jobs: readonly Job[]): Map<Unit, UnitState> {
+  const states = new Map<Unit, UnitState>();
+  for (const j of jobs) {
+    for (const u of j.units) {
+      const st = states.get(u) ?? { attempts: 0, ok: false, active: false };
+      states.set(u, { attempts: st.attempts + 1, ok: st.ok || passedIn(j, u), active: st.active || isActive(j) });
+    }
+  }
+  return states;
+}
+
+const retryable = (st: UnitState | undefined): boolean => !st || (!st.active && !st.ok && st.attempts < MAX_ATTEMPTS);
+
+// A stored pipeline can lack `parallel`: it ran one test at a time.
+const roomOf = (st: Stage, c: PipelineConfig): number => (st === "test" ? (c.stages.test?.parallel ?? 1) : PARALLEL[st]);
+
 function running(p: Pipeline, st: Stage, s: Snapshot, now: number): Decision {
   const jobs = s.jobs.filter((j) => j.stage === st);
-  const covered = new Set<Unit>(jobs.flatMap((j) => j.units));
-  const left = (p.units ?? []).filter((u) => !covered.has(u));
+  const states = unitStates(jobs);
+  const left = (p.units ?? []).filter((u) => retryable(states.get(u)));
   const active = jobs.filter((j) => j.active);
 
   if (!left.length && !active.length) {
+    // The survey made the areas: re-freeze the stage onto them.
+    if (st === "map" && p.units?.length === 1 && p.units[0] === "areas" && states.get("areas")?.ok && s.layout === "areas") {
+      return { kind: "control", control: { kind: "running", stage: "map" }, units: mapUnits(p.config, s) };
+    }
     const next = nextStage(st, p.config);
     if (!next) return { kind: "control", control: { kind: "ended", reason: "done", at: now }, units: null };
     if (p.config.pace === "step") return { kind: "control", control: { kind: "held", after: st, next }, units: null };
@@ -152,10 +204,10 @@ function running(p: Pipeline, st: Stage, s: Snapshot, now: number): Decision {
   if (st === "fix" && s.fixBusyElsewhere) return WAIT;
   if (!left.length) return WAIT;
 
-  const together = st === "map" || p.config.stages[st]?.batching === "together";
-  if (together) return active.length ? WAIT : { kind: "launch", launches: [launchOf(st, left)] };
+  const together = st !== "map" && p.config.stages[st]?.batching === "together";
+  if (together) return active.length ? WAIT : { kind: "launch", launches: [launchOf(st, left.slice(0, TOGETHER_MAX))] };
 
-  const room = PARALLEL[st] - active.length;
+  const room = roomOf(st, p.config) - active.length;
   if (room <= 0) return WAIT;
   const launches = left.slice(0, room).map((u) => launchOf(st, [u]));
   return { kind: "launch", launches: launches as unknown as NonEmpty<Launch> };
@@ -167,11 +219,14 @@ export function pipelineView(p: Pipeline, jobs: readonly Job[], _s?: Snapshot): 
   const c = p.control;
   const current = c.kind === "running" || c.kind === "stopping" ? c.stage : null;
   const stages = STAGES.map((stage) => {
-    const own = jobs.filter((j) => j.stage === stage);
-    const units = new Set<Unit>(own.flatMap((j) => j.units));
-    const done = new Set<Unit>(own.filter(settled).flatMap((j) => j.units)).size;
-    const total = stage === current ? (p.units?.length ?? 0) : units.size;
-    const problems = own.filter((j) => settled(j) && (j.problem !== null || j.error !== null)).length;
+    const frozen = stage === current && p.units ? new Set<Unit>(p.units) : null;
+    // After a survey re-freezes the stage, the survey unit is no longer one of its units.
+    const states = new Map([...unitStates(jobs.filter((j) => j.stage === stage))].filter(([u]) => !frozen || frozen.has(u)));
+    const retrying = (st: UnitState): boolean => p.control.kind === "running" && p.control.stage === stage && retryable(st);
+    const finished = [...states.values()].filter((st) => st.ok || (!st.active && !retrying(st)));
+    const done = finished.length;
+    const problems = finished.filter((st) => !st.ok).length;
+    const total = stage === current ? (p.units?.length ?? 0) : states.size;
     return { stage, state: stateOf(p, stage, total, done), done, total, problems };
   });
   return { id: p.id, config: p.config, control: p.control, stages, jobs: jobs.map((j) => jobViewOf(j)), createdAt: p.createdAt };
@@ -208,15 +263,15 @@ export function jobViewOf(j: Job, pair = false): PipelineView["jobs"][number] {
   };
 }
 
-const isActive = (j: Job): boolean => j.settledAt === null && j.session !== null;
-
 export function activityOf(stage: Stage, unit: Unit, p: Pipeline | null, jobs: readonly Job[], leadIsPair: (session: string) => boolean): Activity {
   const covering = jobs.filter((j) => j.stage === stage && (j.units as readonly Unit[]).includes(unit));
   const live = covering.find(isActive);
   if (live) return { kind: "working", sessionId: live.session!, pair: leadIsPair(live.session!) };
-  if (covering.length === 0 && p?.control.kind === "running" && p.control.stage === stage && (p.units ?? []).includes(unit)) return { kind: "queued" };
+  // A unit that failed once will be launched again while the stage runs: it is waiting, not a problem yet.
+  const frozen = p?.control.kind === "running" && p.control.stage === stage && (p.units ?? []).includes(unit);
+  if (frozen && retryable(unitStates(covering).get(unit))) return { kind: "queued" };
   const last = covering[covering.length - 1];
-  if (last && settled(last) && (last.error !== null || last.problem !== null)) return { kind: "problem", text: last.error ?? last.problem ?? "", sessionId: last.session };
+  if (last && settled(last) && !passedIn(last, unit)) return { kind: "problem", text: last.error ?? last.problem ?? "", sessionId: last.session };
   return { kind: "idle" };
 }
 
@@ -238,14 +293,16 @@ function batchingOf(v: unknown): Batching {
   return b;
 }
 
-function idsOf(v: unknown, what: string): string[] {
+const SINGULAR = { features: "feature", areas: "area", bugs: "bug" } as const;
+
+function idsOf(v: unknown, what: keyof typeof SINGULAR): string[] {
   if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) throw new UserError(`${what} must be a list of ids.`);
   const ids = [...new Set((v as string[]).map((x) => x.trim()))].filter(Boolean);
-  if (!ids.length) throw new UserError(`Pick at least one ${what === "features" ? "feature" : "bug"}.`);
+  if (!ids.length) throw new UserError(`Pick at least one ${SINGULAR[what]}.`);
   return ids;
 }
 
-function scopeOf(v: unknown, ctx: { features: readonly Feature[] }, stages: PipelineConfig["stages"]): Scope {
+function scopeOf(v: unknown, ctx: { features: readonly Feature[]; areas: readonly Area[] }, stages: PipelineConfig["stages"]): Scope {
   const o = obj(v);
   const kind = o.kind ?? "all";
   if (kind === "all") return { kind: "all" };
@@ -255,6 +312,12 @@ function scopeOf(v: unknown, ctx: { features: readonly Feature[] }, stages: Pipe
     for (const id of ids) if (!known.has(id)) throw new UserError(`No feature "${id}".`);
     return { kind: "features", ids };
   }
+  if (kind === "areas") {
+    const ids = idsOf(o.ids, "areas");
+    const known = new Set(ctx.areas.map((a) => a.id as string));
+    for (const id of ids) if (!known.has(id)) throw new UserError(`No area "${id}".`);
+    return { kind: "areas", ids };
+  }
   if (kind === "bugs") {
     if (Object.keys(stages).length !== 1 || !stages.fix) throw new UserError("A list of bugs can only be fixed: choose the Fix stage alone.");
     const ids = idsOf(o.ids, "bugs");
@@ -262,7 +325,7 @@ function scopeOf(v: unknown, ctx: { features: readonly Feature[] }, stages: Pipe
     if (bad !== undefined) throw new UserError(`"${bad}" is not a bug id.`);
     return { kind: "bugs", ids };
   }
-  throw new UserError('scope must be "all", "features" or "bugs".');
+  throw new UserError('scope must be "all", "features", "areas" or "bugs".');
 }
 
 function driverOf(v: unknown, ctx: { pairExists: (id: string) => boolean }): Driver {
@@ -274,6 +337,13 @@ function driverOf(v: unknown, ctx: { pairExists: (id: string) => boolean }): Dri
   }
   if (o.kind !== undefined && o.kind !== "agent") throw new UserError('driver must be an agent or a pair: kind "agent" or "pair".');
   return { kind: "agent", engine: text(o.engine), model: text(o.model), effort: text(o.effort), agent: text(o.agent) };
+}
+
+function parallelOf(v: unknown): number {
+  const n = obj(v).parallel;
+  if (n === undefined) return 1;
+  if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > MAX_TEST_PARALLEL) throw new UserError(`parallel must be a whole number from 1 to ${MAX_TEST_PARALLEL}.`);
+  return n;
 }
 
 function baseUrlOf(v: unknown): string | null {
@@ -290,7 +360,7 @@ function baseUrlOf(v: unknown): string | null {
 }
 
 /** A request body as a stored config: validated, defaults resolved. Throws UserError with the message the route answers 400 with. */
-export function parseConfig(body: unknown, ctx: { features: readonly Feature[]; pairExists: (id: string) => boolean }): PipelineConfig {
+export function parseConfig(body: unknown, ctx: { features: readonly Feature[]; areas: readonly Area[]; pairExists: (id: string) => boolean }): PipelineConfig {
   const b = obj(body);
   const raw = obj(b.stages);
   const unknown = Object.keys(raw).find((k) => !(STAGES as readonly string[]).includes(k));
@@ -299,13 +369,17 @@ export function parseConfig(body: unknown, ctx: { features: readonly Feature[]; 
 
   const scopeKind = obj(b.scope).kind ?? "all";
   const stages: PipelineConfig["stages"] = {};
-  if (raw.map !== undefined) stages.map = {};
+  if (raw.map !== undefined) {
+    const survey = obj(raw.map).survey;
+    if (survey !== undefined && typeof survey !== "boolean") throw new UserError("survey must be true or false.");
+    stages.map = { survey: survey ?? false };
+  }
   if (raw.plan !== undefined) {
     const replan = obj(raw.plan).replan;
     if (replan !== undefined && typeof replan !== "boolean") throw new UserError("replan must be true or false.");
     stages.plan = { batching: batchingOf(raw.plan), replan: replan ?? scopeKind === "features" };
   }
-  if (raw.test !== undefined) stages.test = { batching: batchingOf(raw.test) };
+  if (raw.test !== undefined) stages.test = { batching: batchingOf(raw.test), parallel: parallelOf(raw.test) };
   if (raw.fix !== undefined) stages.fix = { batching: batchingOf(raw.fix) };
 
   const scope = scopeOf(b.scope, ctx, stages);

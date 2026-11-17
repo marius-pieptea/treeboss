@@ -18,9 +18,9 @@ import fs from "fs";
 import path from "path";
 import { UserError } from "../util";
 import { LAB_DIR } from "../lab/findings";
-import { readFeatures } from "./features";
+import { readFeatures } from "./map";
 import { removeRuns } from "./runs";
-import type { FeatureId, Plan, PlanStep, QaBoard, StepId, StepPath } from "./types";
+import type { Feature, FeatureId, Plan, PlanStep, QaBoard, StepId, StepPath } from "./types";
 
 export const QA_DIR = `${LAB_DIR}/qa`;
 const MAX_BYTES = 512 * 1024;
@@ -151,14 +151,6 @@ function readText(file: string): string | null {
   return fs.readFileSync(file, "utf-8");
 }
 
-const mtime = (file: string): number => {
-  try {
-    return Math.floor(fs.statSync(file).mtimeMs);
-  } catch {
-    return 0;
-  }
-};
-
 const ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 function freshId(taken: Set<string>): string {
   for (;;) {
@@ -170,7 +162,15 @@ function freshId(taken: Set<string>): string {
   }
 }
 
-function load(root: string, slug: string): Plan {
+/**
+ * Parsed plans by absolute path. A poll stats the files and reads only what changed. An entry is trusted only once its
+ * file's mtime is older than the parse by SETTLE_MS: a rewrite of the same size inside one timestamp tick keeps the same
+ * mtime (git's racy-clean rule). 2 s is the coarsest tick we meet (FAT); until then the file is simply parsed again.
+ */
+const SETTLE_MS = 2000;
+const parsed = new Map<string, { mtimeMs: number; size: number; parsedAt: number; plan: Plan }>();
+
+function parse(root: string, slug: string): Plan {
   const file = planFile(root, slug);
   const id = slug as FeatureId;
   let text: string | null;
@@ -180,25 +180,45 @@ function load(root: string, slug: string): Plan {
     return { feature: id, title: slug, intro: "", steps: [], problem: (e as Error).message };
   }
   if (text === null) throw new QaNotFound(`No plan "${slug}".`);
-  let parsed: PlanFile;
+  let parsedFile: PlanFile;
   try {
-    parsed = parsePlanFile(text);
+    parsedFile = parsePlanFile(text);
   } catch (e) {
     return { feature: id, title: slug, intro: "", steps: [], problem: (e as Error).message };
   }
-  const taken = new Set<string>(parsed.steps.flatMap((s) => (s.id ? [s.id] : [])));
+  const taken = new Set<string>(parsedFile.steps.flatMap((s) => (s.id ? [s.id] : [])));
   let changed = false;
-  for (const s of parsed.steps) {
+  for (const s of parsedFile.steps) {
     if (s.id) continue;
     s.id = freshId(taken);
     changed = true;
   }
   if (changed) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, serializePlanFile({ ...parsed, steps: parsed.steps as Ided[] }, eolOf(text)));
+    fs.writeFileSync(file, serializePlanFile({ ...parsedFile, steps: parsedFile.steps as Ided[] }, eolOf(text)));
   }
-  const steps: PlanStep[] = (parsed.steps as Ided[]).map((s) => ({ id: s.id as StepId, action: s.action, expected: s.expected, path: s.path }));
-  return { feature: id, title: parsed.title, intro: parsed.intro, steps, problem: null };
+  const steps: PlanStep[] = (parsedFile.steps as Ided[]).map((s) => ({ id: s.id as StepId, action: s.action, expected: s.expected, path: s.path }));
+  return { feature: id, title: parsedFile.title, intro: parsedFile.intro, steps, problem: null };
+}
+
+/** A file the id backfill rewrote is stat'ed again, so its entry matches the written file once it settles. */
+function load(root: string, slug: string): { plan: Plan; mtimeMs: number } {
+  const file = planFile(root, slug);
+  let st: fs.Stats;
+  try {
+    st = fs.statSync(file);
+  } catch {
+    parsed.delete(file);
+    throw new QaNotFound(`No plan "${slug}".`);
+  }
+  const hit = parsed.get(file);
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size && hit.parsedAt - hit.mtimeMs > SETTLE_MS) return hit;
+  const parsedAt = Date.now();
+  const plan = parse(root, slug);
+  const after = fs.statSync(file);
+  const entry = { mtimeMs: after.mtimeMs, size: after.size, parsedAt, plan };
+  parsed.set(file, entry);
+  return entry;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -207,7 +227,7 @@ function load(root: string, slug: string): Plan {
 
 /** Reads a plan. Steps without an id get one, and the file is written back only when that changed it. */
 export function readPlan(root: string, id: FeatureId): Plan {
-  return load(root, id);
+  return load(root, id).plan;
 }
 
 export function planText(root: string, id: FeatureId): string | null {
@@ -218,8 +238,19 @@ export function planText(root: string, id: FeatureId): string | null {
   }
 }
 
+export function featurePlan(root: string, id: FeatureId): (Plan & { updatedAt: number }) | null {
+  if (!SLUG.test(id)) return null;
+  try {
+    const { plan, mtimeMs } = load(root, id);
+    return { ...plan, updatedAt: Math.floor(mtimeMs) };
+  } catch (e) {
+    if (e instanceof QaNotFound) return null;
+    throw e;
+  }
+}
+
 /** The plan of each feature in features.md that has one, and the plan files that belong to no feature. `*.proposals.md` is never read. */
-export function listPlans(root: string): { byFeature: Map<FeatureId, Plan & { updatedAt: number }>; loose: QaBoard["plansWithoutFeature"] } {
+export function listPlans(root: string, features: readonly Feature[] = readFeatures(root).features): { byFeature: Map<FeatureId, Plan & { updatedAt: number }>; loose: QaBoard["plansWithoutFeature"] } {
   const byFeature = new Map<FeatureId, Plan & { updatedAt: number }>();
   const loose: QaBoard["plansWithoutFeature"] = [];
   let names: string[];
@@ -228,7 +259,9 @@ export function listPlans(root: string): { byFeature: Map<FeatureId, Plan & { up
   } catch {
     return { byFeature, loose };
   }
-  const known = new Set(readFeatures(root).features.map((f) => f.id as string));
+  const known = new Set(features.map((f) => f.id as string));
+  const dir = path.join(root, QA_DIR);
+  const seen = new Set<string>();
   for (const n of names.sort()) {
     const m = /^(.+)\.md$/.exec(n);
     if (!m || m[1]!.endsWith(".proposals")) continue;
@@ -238,10 +271,12 @@ export function listPlans(root: string): { byFeature: Map<FeatureId, Plan & { up
       loose.push({ slug, title: slug, steps: 0, problem: "the file name is not a plan name: use lowercase letters, digits and dashes", path: rel });
       continue;
     }
-    const plan = load(root, slug);
-    if (known.has(slug)) byFeature.set(slug as FeatureId, { ...plan, updatedAt: mtime(planFile(root, slug)) });
+    seen.add(planFile(root, slug));
+    const { plan, mtimeMs } = load(root, slug);
+    if (known.has(slug)) byFeature.set(slug as FeatureId, { ...plan, updatedAt: Math.floor(mtimeMs) });
     else loose.push({ slug, title: plan.title, steps: plan.steps.length, problem: plan.problem, path: rel });
   }
+  for (const k of [...parsed.keys()]) if (path.dirname(k) === dir && !seen.has(k)) parsed.delete(k);
   return { byFeature, loose };
 }
 

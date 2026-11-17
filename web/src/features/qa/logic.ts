@@ -1,9 +1,9 @@
 import { STAGES } from "./api";
-import type { Activity, BoardBug, BoardFeature, Batching, BugState, Driver, JobView, Outcome, OutcomeState, Pace, PipelineRequest, PipelineView, QaBoard, Scope, Stage, StageSettings } from "./api";
+import type { Activity, BoardArea, BoardBug, BoardFeature, Batching, BugState, Driver, JobView, Outcome, OutcomeState, Pace, PipelineRequest, PipelineView, QaBoard, Scope, Stage, StageSettings } from "./api";
 
-const trimSlash = (p: string): string => p.replace(/\/+$/, "") || "/";
+const trimSlash = (p: string): string => (p.length > 1 ? p.replace(/\/+$/, "") || "/" : p);
 
-/** The feature a page belongs to: the one whose `where` path is the longest prefix of the URL's path. Null on no match, a tie, or a URL that does not parse. */
+/** Mirrors `featureForUrl` in src/qa/pipeline.ts, including its quirk: a `where` entry counts only when it starts with "/" as written (no trimming). */
 export function featureForUrl(features: readonly { id: string; where: string[] }[], url: string): string | null {
   let path: string;
   try {
@@ -11,24 +11,22 @@ export function featureForUrl(features: readonly { id: string; where: string[] }
   } catch {
     return null;
   }
-  let best = -1;
-  let bestId: string | null = null;
-  let tie = false;
+  let best = 0;
+  let winners: string[] = [];
   for (const f of features) {
-    let score = -1;
+    let score = 0;
     for (const raw of f.where) {
-      if (!raw.trim()) continue;
-      const w = trimSlash(raw.trim());
-      if (path === w || path.startsWith(w === "/" ? "/" : `${w}/`)) score = Math.max(score, w.length);
+      if (!raw.startsWith("/")) continue;
+      const w = trimSlash(raw);
+      if ((path === w || path.startsWith(w === "/" ? "/" : `${w}/`)) && w.length > score) score = w.length;
     }
-    if (score < 0) continue;
+    if (!score) continue;
     if (score > best) {
       best = score;
-      bestId = f.id;
-      tie = false;
-    } else if (score === best) tie = true;
+      winners = [f.id];
+    } else if (score === best) winners.push(f.id);
   }
-  return tie ? null : bestId;
+  return winners.length === 1 ? winners[0]! : null;
 }
 
 export const STAGE_LABEL: Record<Stage, string> = { map: "Map", plan: "Plan", test: "Test", fix: "Fix" };
@@ -38,16 +36,24 @@ export interface RunForm {
   batching: Record<"plan" | "test" | "fix", Batching>;
   /** Null: leave it to the server (scope "all" keeps plans, picked features redo them). */
   replan: boolean | null;
+  /** Map stage: decide the areas first, then map each one. Off by default. */
+  survey: boolean;
+  /** Test stage, batching "each" only: how many jobs run at once. */
+  parallel: Parallel;
   pace: Pace;
   baseUrl: string;
   note: string;
 }
 
+export type Parallel = 1 | 2 | 3;
+
+export const PARALLEL: readonly Parallel[] = [1, 2, 3];
+
 export const NOTE_MAX = 4000;
 
 export const defaultStages = (mapExists: boolean): Stage[] => (mapExists ? ["plan", "test", "fix"] : [...STAGES]);
 
-export const defaultForm = (mapExists: boolean): RunForm => ({ stages: defaultStages(mapExists), batching: { plan: "each", test: "each", fix: "each" }, replan: null, pace: "auto", baseUrl: "", note: "" });
+export const defaultForm = (mapExists: boolean): RunForm => ({ stages: defaultStages(mapExists), batching: { plan: "each", test: "each", fix: "each" }, replan: null, survey: false, parallel: 1, pace: "auto", baseUrl: "", note: "" });
 
 /** `stages` with `stage` switched on or off, always in run order. */
 export const toggleStage = (stages: readonly Stage[], stage: Stage): Stage[] => STAGES.filter((s) => (s === stage ? !stages.includes(s) : stages.includes(s)));
@@ -60,12 +66,14 @@ export function driverBody(d: Driver): Driver {
   return out;
 }
 
-function settings(stages: readonly Stage[], batching: (s: "plan" | "test" | "fix") => Batching, replan: boolean | null): StageSettings {
+function settings(stages: readonly Stage[], batching: (s: "plan" | "test" | "fix") => Batching, form: Pick<RunForm, "replan" | "survey" | "parallel">): StageSettings {
   const out: StageSettings = {};
   for (const s of STAGES) {
     if (!stages.includes(s)) continue;
-    if (s === "map") out.map = {};
-    else if (s === "plan") out.plan = { batching: batching("plan"), ...(replan !== null ? { replan } : {}) };
+    if (s === "map") out.map = form.survey ? { survey: true } : {};
+    else if (s === "plan") out.plan = { batching: batching("plan"), ...(form.replan !== null ? { replan: form.replan } : {}) };
+    // The server reads a missing parallel as 1, and rejects one beside "together".
+    else if (s === "test") out.test = { batching: batching("test"), ...(batching("test") === "each" && form.parallel > 1 ? { parallel: form.parallel } : {}) };
     else out[s] = { batching: batching(s) };
   }
   return out;
@@ -78,7 +86,7 @@ function extras(form: RunForm): Pick<PipelineRequest, "note" | "baseUrl"> {
 }
 
 export function pipelineRequest(form: RunForm, scope: Scope, driver: Driver): PipelineRequest {
-  return { stages: settings(form.stages, (s) => form.batching[s], form.replan), scope, pace: form.pace, driver: driverBody(driver), ...extras(form) };
+  return { stages: settings(form.stages, (s) => form.batching[s], form), scope, pace: form.pace, driver: driverBody(driver), ...extras(form) };
 }
 
 export function rowRequest(action: "plan" | "test" | "fix" | "stages", featureId: string, form: RunForm, driver: Driver): PipelineRequest {
@@ -89,15 +97,30 @@ export function rowRequest(action: "plan" | "test" | "fix" | "stages", featureId
   return { stages, scope, pace: "auto", driver: driverBody(driver), ...extras(form) };
 }
 
-export const bugFixRequest = (bugId: string, driver: Driver): PipelineRequest => ({ stages: { fix: { batching: "each" } }, scope: { kind: "bugs", ids: [bugId] }, pace: "auto", driver: driverBody(driver) });
+export function areaRemapRequest(areaId: string, form: RunForm, driver: Driver): PipelineRequest {
+  return { stages: { map: {} }, scope: { kind: "areas", ids: [areaId] }, pace: "auto", driver: driverBody(driver), ...extras(form) };
+}
 
-/** All of the features, or the picked ones in the order the map lists them. */
-export const scopeOf = (picked: readonly string[], features: readonly { id: string }[]): Scope => {
+export const bugsFixRequest = (ids: readonly string[], driver: Driver): PipelineRequest => ({ stages: { fix: { batching: "each" } }, scope: { kind: "bugs", ids: [...ids] }, pace: "auto", driver: driverBody(driver) });
+
+export const bugFixRequest = (bugId: string, driver: Driver): PipelineRequest => bugsFixRequest([bugId], driver);
+
+/** The picked features in the order the map lists them; with none picked, the area filtered to, if any; else all of the features. */
+export const scopeOf = (picked: readonly string[], features: readonly { id: string }[], area?: string | null): Scope => {
   const ids = features.map((f) => f.id).filter((id) => picked.includes(id));
-  return ids.length ? { kind: "features", ids } : { kind: "all" };
+  if (ids.length) return { kind: "features", ids };
+  return area ? { kind: "areas", ids: [area] } : { kind: "all" };
 };
 
-export const scopeLabel = (scope: Scope, total: number): string => (total === 0 ? "No features yet" : scope.kind === "all" ? `All ${total} ${total === 1 ? "feature" : "features"}` : `${scope.ids.length} of ${total} picked`);
+export function scopeLabel(scope: Scope, total: number, areas: readonly Pick<BoardArea, "id" | "title" | "features">[] = []): string {
+  if (total === 0) return "No features yet";
+  if (scope.kind === "all") return `All ${total} ${total === 1 ? "feature" : "features"}`;
+  if (scope.kind === "areas") {
+    const a = areas.find((x) => x.id === scope.ids[0]);
+    return a ? `Area ${a.title} · ${a.features} ${a.features === 1 ? "feature" : "features"}` : `${scope.ids.length} ${scope.ids.length === 1 ? "area" : "areas"}`;
+  }
+  return `${scope.ids.length} of ${total} picked`;
+}
 
 export function runBlock(i: { stages: readonly Stage[]; browser: boolean; featureCount: number; driverMissing: boolean }): string | null {
   if (i.stages.length === 0) return "Pick at least one stage.";
@@ -219,6 +242,13 @@ export function mapCell(map: QaBoard["map"], features: number): Cell {
   return { tone: "ok", word: "mapped", count: `${features} ${features === 1 ? "feature" : "features"}` };
 }
 
+export function areaCell(a: Pick<BoardArea, "features" | "updatedAt" | "activity">): Cell {
+  const count = `${a.features} ${a.features === 1 ? "feature" : "features"}`;
+  const act = activityCell(a.activity, "mapping");
+  if (act) return { ...act, count };
+  return a.updatedAt === null ? { tone: "idle", word: "not mapped", count } : { tone: "ok", word: "mapped", count };
+}
+
 export const BUG_TONE: Record<BugState, Tone> = { open: "bad", fixing: "run", "needs-check": "warn", fixed: "ok", dismissed: "idle" };
 export const BUG_WORD: Record<BugState, string> = { open: "open", fixing: "fixing", "needs-check": "needs check", fixed: "fixed", dismissed: "dismissed" };
 
@@ -249,6 +279,101 @@ export function since(at: number, now: number): string {
   if (s < 86_400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86_400)}d ago`;
 }
+
+export type FeatureFilter = "needs-plan" | "never-tested" | "failing" | "open-bugs" | "working";
+
+export const FEATURE_FILTERS: ReadonlyArray<{ id: FeatureFilter; label: string; hint: string }> = [
+  { id: "needs-plan", label: "Needs a plan", hint: "No plan yet, or the plan file is broken" },
+  { id: "never-tested", label: "Never tested", hint: "No test run recorded" },
+  { id: "failing", label: "Failing", hint: "The last run has failed steps" },
+  { id: "open-bugs", label: "Open bugs", hint: "Has a bug that is not fixed or dismissed" },
+  { id: "working", label: "Working", hint: "A plan, test or fix job is queued or running on it" },
+];
+
+const busyActivity = (a: Activity): boolean => a.kind === "queued" || a.kind === "working";
+
+export function matchesFilter(f: BoardFeature, filter: FeatureFilter): boolean {
+  switch (filter) {
+    case "needs-plan":
+      return f.plan.kind !== "ready";
+    case "never-tested":
+      return f.test.kind === "never";
+    case "failing":
+      return f.test.kind === "ran" && f.test.run.counts.fail > 0;
+    case "open-bugs":
+      return f.bugs.some(isOpenBug);
+    case "working":
+      return busyActivity(f.activity.plan) || busyActivity(f.activity.test) || busyActivity(f.activity.fix);
+  }
+}
+
+export interface FeatureQuery {
+  text: string;
+  filters: readonly FeatureFilter[];
+  /** An area id: only that area's features. Unset or null: all areas (and always so in the flat layout). */
+  area?: string | null;
+}
+
+export const NO_QUERY: FeatureQuery = { text: "", filters: [] };
+
+export const isFiltering = (q: FeatureQuery): boolean => q.text.trim() !== "" || q.filters.length > 0 || !!q.area;
+
+/** The query with an area that is no longer on the map dropped, so a remap that renamed it cannot leave the list empty with no chip to clear. */
+export const liveQuery = (q: FeatureQuery, areas: readonly { id: string }[]): FeatureQuery => (q.area && !areas.some((a) => a.id === q.area) ? { ...q, area: null } : q);
+
+export function matchesQuery(f: BoardFeature, q: FeatureQuery): boolean {
+  if (q.area && f.area !== q.area) return false;
+  if (!q.filters.every((k) => matchesFilter(f, k))) return false;
+  const words = q.text.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return true;
+  const hay = [f.title, f.id, ...f.where, f.summary].join(" ").toLowerCase();
+  return words.every((w) => hay.includes(w));
+}
+
+export interface FeatureRowModel {
+  feature: BoardFeature;
+  /** Shown only because a child matches: it gives the child its journey, it is not part of "shown". */
+  context: boolean;
+  /** How many depth-1 features sit under it (0 for a child or a lone feature). */
+  children: number;
+  collapsed: boolean;
+}
+
+/** While a query is active nothing is collapsed, so a hit is never hidden. */
+export function featureRows(features: readonly BoardFeature[], q: FeatureQuery, collapsed: ReadonlySet<string>): { rows: FeatureRowModel[]; matched: string[] } {
+  const active = isFiltering(q);
+  const ids = new Set(features.map((f) => f.id));
+  const isChild = (f: BoardFeature) => f.depth === 1 && f.parent !== null && ids.has(f.parent);
+  const hit = new Set(features.filter((f) => matchesQuery(f, q)).map((f) => f.id));
+  const kids = new Map<string, number>();
+  const hitParents = new Set<string>();
+  for (const f of features) {
+    if (!isChild(f)) continue;
+    kids.set(f.parent!, (kids.get(f.parent!) ?? 0) + 1);
+    if (hit.has(f.id)) hitParents.add(f.parent!);
+  }
+  const rows: FeatureRowModel[] = [];
+  for (const f of features) {
+    if (isChild(f)) {
+      if (hit.has(f.id) && (active || !collapsed.has(f.parent!))) rows.push({ feature: f, context: false, children: 0, collapsed: false });
+    } else if (hit.has(f.id) || hitParents.has(f.id)) {
+      rows.push({ feature: f, context: !hit.has(f.id), children: kids.get(f.id) ?? 0, collapsed: !active && collapsed.has(f.id) });
+    }
+  }
+  return { rows, matched: features.filter((f) => hit.has(f.id)).map((f) => f.id) };
+}
+
+export const shownLine = (shown: number, total: number, active: boolean): string => `${active ? `${shown} of ${total}` : total} ${total === 1 ? "feature" : "features"}`;
+
+export const pickShown = (matched: readonly string[]): string[] => [...matched];
+
+/** The header box: pick the shown features, or, when they are all picked already, drop just those. */
+export const toggleShown = (picked: readonly string[], matched: readonly string[]): string[] => (matched.length > 0 && matched.every((id) => picked.includes(id)) ? picked.filter((id) => !matched.includes(id)) : pickShown(matched));
+
+/** Fix offers itself on open and needs-check bugs, so only those can be ticked. */
+export const selectableBugs = (bugs: readonly BoardBug[]): BoardBug[] => bugs.filter((b) => bugOffers(b.state).fix);
+
+export const prunePickedBugs = (picked: readonly string[], bugs: readonly BoardBug[]): string[] => selectableBugs(bugs).map((b) => b.id).filter((id) => picked.includes(id));
 
 export const prunePicked = (picked: readonly string[], features: readonly { id: string }[]): string[] => picked.filter((id) => features.some((f) => f.id === id));
 

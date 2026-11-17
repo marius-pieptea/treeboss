@@ -353,7 +353,12 @@ export function migrate(conn: Database): void {
     started_at INTEGER NOT NULL, settled_at INTEGER
   )`);
   conn.exec("CREATE INDEX IF NOT EXISTS idx_qa_jobs_pipeline ON qa_jobs(pipeline_id)");
+  conn.exec(`CREATE TABLE IF NOT EXISTS qa_map_writes (
+    job_id TEXT NOT NULL, unit TEXT NOT NULL, changed INTEGER NOT NULL, dropped TEXT NOT NULL, sig TEXT NOT NULL, at INTEGER NOT NULL
+  )`);
+  conn.exec("CREATE INDEX IF NOT EXISTS idx_qa_map_writes_job ON qa_map_writes(job_id, at)");
   addColumn(conn, "qa_runs", "session_id", "TEXT");
+  addColumn(conn, "qa_jobs", "failed_units", "TEXT");
   if ((conn.prepare("PRAGMA table_info(qa_sessions)").all() as Array<{ name: string }>).some((c) => c.name === "run_id")) {
     conn.exec("UPDATE qa_runs SET session_id = (SELECT session_id FROM qa_sessions WHERE qa_sessions.run_id = qa_runs.id) WHERE session_id IS NULL");
   }

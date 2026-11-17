@@ -1,17 +1,17 @@
-import { MoreHorizontal } from "lucide-react";
+import { ChevronDown, ChevronRight, MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/form";
 import { DropdownMenu } from "@/components/ui/overlay";
 import { cn } from "@/lib/utils";
-import type { BoardFeature } from "./api";
-import { bugsCell, isOpenBug, planCell, testCell } from "./logic";
+import { bugsCell, isOpenBug, planCell, testCell, type FeatureRowModel } from "./logic";
 import { CellView } from "./Status";
 
 export type RowAction = "plan" | "test" | "fix" | "stages";
 
 export const COLS = { plan: "w-28 shrink-0", test: "w-32 shrink-0", bugs: "w-24 shrink-0" } as const;
 
-export function FeatureRow({ f, selected, picked, busy, onOpen, onPick, onAction }: { f: BoardFeature; selected: boolean; picked: boolean; busy: boolean; onOpen: () => void; onPick: (on: boolean) => void; onAction: (a: RowAction) => void }) {
+export function FeatureRow({ model, selected, picked, busy, locked, onOpen, onPick, onToggle, onAction }: { model: FeatureRowModel; selected: boolean; picked: boolean; busy: boolean; /** A query is active: groups stay open so no hit is hidden. */ locked: boolean; onOpen: () => void; onPick: (on: boolean) => void; onToggle: () => void; onAction: (a: RowAction) => void }) {
+  const { feature: f, context } = model;
   const openBugs = f.bugs.filter(isOpenBug).length;
   const why = busy ? "A pipeline is running" : undefined;
   return (
@@ -32,8 +32,29 @@ export function FeatureRow({ f, selected, picked, busy, onOpen, onPick, onAction
       <span onClick={(e) => e.stopPropagation()} className="flex shrink-0 items-center">
         <Checkbox checked={picked} onChange={onPick} label={`Pick ${f.title} for the run`} />
       </span>
-      <span className={cn("flex min-w-0 flex-1 items-baseline gap-2", f.depth === 1 && "pl-4")}>
-        <span className="truncate text-fg">{f.title}</span>
+      <span className={cn("flex min-w-0 flex-1 items-center gap-2", f.depth === 1 && "pl-4")}>
+        {f.depth === 0 && (
+          <span onClick={(e) => e.stopPropagation()} className="flex size-4 shrink-0 items-center justify-center">
+            {model.children > 0 && (
+              <button
+                type="button"
+                aria-expanded={!model.collapsed}
+                aria-label={`${model.collapsed ? "Expand" : "Collapse"} ${f.title}`}
+                disabled={locked}
+                onClick={onToggle}
+                className="flex size-4 items-center justify-center rounded-sm text-fg-muted outline-none hover:bg-active hover:text-fg focus-visible:ring-1 focus-visible:ring-accent/60 disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-3"
+              >
+                {model.collapsed ? <ChevronRight /> : <ChevronDown />}
+              </button>
+            )}
+          </span>
+        )}
+        <span className={cn("truncate", context ? "text-fg-muted" : "text-fg")}>{f.title}</span>
+        {model.children > 0 && (
+          <span className="shrink-0 font-mono text-label text-fg-muted" title={`${model.children} sub-features`}>
+            {model.children}
+          </span>
+        )}
         {f.where[0] && <span className="hidden min-w-0 truncate font-mono text-label text-fg-muted @[720px]:inline">{f.where.join(" ")}</span>}
       </span>
       <CellView cell={planCell(f)} className={COLS.plan} />

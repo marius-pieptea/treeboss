@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import { ArrowUpRight, Check, Hammer, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Select } from "@/components/ui/form";
+import { Combobox } from "@/components/ui/combobox";
+import { Checkbox } from "@/components/ui/form";
 import { Badge } from "@/components/ui/misc";
 import { openSession } from "@/features/agent/agent-commands";
 import { partUrl } from "@/features/evidence/data";
@@ -23,6 +24,7 @@ export function BugCard({
   onFix,
   onStatus,
   onFeature,
+  pick,
 }: {
   root: string;
   bug: BoardBug;
@@ -35,6 +37,8 @@ export function BugCard({
   onFix: (id: string) => void;
   onStatus: (id: string, status: "new" | "dismissed" | "shipped") => void;
   onFeature?: (id: string, feature: string | null) => void;
+  /** Given, the card carries a tick box for a multi-bug Fix. */
+  pick?: { checked: boolean; onChange: (on: boolean) => void };
 }) {
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -46,6 +50,11 @@ export function BugCard({
   const shot = bug.capture && bug.shot !== "none" ? partUrl(root, bug.capture, "screenshot.png") : null;
   return (
     <article ref={ref} data-bug={bug.id} data-bug-state={bug.state} className={cn("flex gap-3 rounded-lg border border-line bg-raised p-3", closed && "opacity-60", focused && "border-line-strong bg-accent-soft")}>
+      {pick && (
+        <span className="flex shrink-0 pt-0.5">
+          <Checkbox checked={pick.checked} onChange={pick.onChange} label={`Pick ${bug.title} for Fix`} />
+        </span>
+      )}
       {shot && <img src={shot} alt={`Screenshot for ${bug.title}`} loading="lazy" className="h-16 w-24 shrink-0 rounded-md border border-line bg-panel object-cover object-top" />}
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <header className="flex items-start gap-2">
@@ -79,14 +88,16 @@ export function BugCard({
             </Button>
           )}
           {features && onFeature && (
-            <Select
+            <Combobox
               size="sm"
               className="h-6 w-40"
               aria-label="Feature of this bug"
               value={bug.feature ?? ""}
               onChange={(v) => onFeature(bug.id, v || null)}
               placeholder="No feature"
-              options={[{ value: "", label: "No feature" }, ...features.map((f) => ({ value: f.id, label: f.title }))]}
+              searchPlaceholder="Find a feature"
+              emptyText="No feature matches"
+              options={[{ value: "", label: "No feature" }, ...features.map((f) => ({ value: f.id, label: f.title, hint: f.id }))]}
             />
           )}
           <div className="flex-1" />

@@ -7,7 +7,7 @@ import { db } from "../db";
 import { newId, UserError } from "../util";
 import { readFinding } from "../lab/findings";
 import { realOf } from "../lab/tables";
-import type { Outcome, OutcomeState, Plan, Run, RunId, RunSummary, StepId } from "./types";
+import type { FeatureId, Outcome, OutcomeState, Plan, Run, RunId, RunSummary, StepId } from "./types";
 
 const STATES: readonly OutcomeState[] = ["pending", "pass", "fail", "skip", "blocked"];
 
@@ -108,6 +108,24 @@ export const currentStep = (run: Run): Run["steps"][number] | null => run.steps.
 export function listRuns(root: string, feature: string, limit = 20): RunSummary[] {
   const rows = db().prepare("SELECT * FROM qa_runs WHERE root_dir = ? AND plan = ? ORDER BY started_at DESC, rowid DESC LIMIT ?").all(realOf(root), feature, limit) as Row[];
   return rows.map((r) => summarize(toRun(r)));
+}
+
+/**
+ * The newest run of every plan in the project, in one query. It hops from plan to plan through idx_qa_runs_plan and takes
+ * each plan's last index entry (the listRuns order), so the cost follows the number of plans, not of runs, and only the
+ * newest rows' steps are read.
+ */
+const LATEST_RUNS = `WITH RECURSIVE plans(plan) AS (
+  SELECT MIN(plan) FROM qa_runs WHERE root_dir = ?1
+  UNION ALL
+  SELECT (SELECT MIN(plan) FROM qa_runs WHERE root_dir = ?1 AND plan > plans.plan) FROM plans WHERE plan IS NOT NULL
+)
+SELECT r.* FROM plans JOIN qa_runs r ON r.rowid = (SELECT rowid FROM qa_runs WHERE root_dir = ?1 AND plan = plans.plan ORDER BY started_at DESC, rowid DESC LIMIT 1)
+WHERE plans.plan IS NOT NULL`;
+
+export function latestRuns(root: string): Map<FeatureId, RunSummary> {
+  const rows = db().prepare(LATEST_RUNS).all(realOf(root)) as Row[];
+  return new Map(rows.map((r) => [r.plan as FeatureId, summarize(toRun(r))]));
 }
 
 /** Drops one run: a test job that could not start. */

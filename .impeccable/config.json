@@ -1,0 +1,26 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "gradient-text",
+        "value": "*",
+        "files": [
+          "web/src/styles.css"
+        ],
+        "createdAt": "2026-11-15T11:49:29.914Z",
+        "reason": "DESIGN.md (Motion, The one flourish) sanctions .shimmer-text as the in-progress text shimmer; rule predates this session, not changed by it"
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "web/src/styles.css"
+        ],
+        "createdAt": "2026-11-15T11:51:02.044Z",
+        "reason": "web/src/styles.css:670 is the markdown blockquote's 2px neutral --line-strong rule, not a coloured card side-tab; predates this session (file unchanged in it)"
+      }
+    ]
+  }
+}

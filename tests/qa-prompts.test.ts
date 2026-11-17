@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { withInstructions } from "../src/design/sessions";
 import { jobPrompt, qaLabel, type PromptInputs } from "../src/qa/prompts";
-import type { Batching, BugId, Driver, Feature, FeatureId, Launch, Plan, Run, StepId } from "../src/qa/types";
+import type { Area, AreaId, Batching, BugId, Driver, Feature, FeatureId, Launch, MapUnit, Plan, Run, StepId } from "../src/qa/types";
 
 const fid = (s: string) => s as FeatureId;
 const FEATURES: Feature[] = [
@@ -22,6 +22,8 @@ function inputs(launch: Launch, o: Partial<PromptInputs> = {}): PromptInputs {
     note: "",
     baseUrl: "http://localhost:3000",
     features: FEATURES,
+    mapText: "",
+    areas: [],
     plans: new Map(ids.filter((u) => u !== "map" && launch.stage !== "fix").map((u) => [fid(u), PLAN(u)])),
     runs: new Map(ids.filter((u) => launch.stage === "test").map((u, n) => [fid(u), RUN(u, n)])),
     bugs: new Map([[BUG.id, BUG]]),
@@ -31,7 +33,8 @@ function inputs(launch: Launch, o: Partial<PromptInputs> = {}): PromptInputs {
 }
 
 const text = (i: PromptInputs) => jobPrompt(i).instructions;
-const flat = (s: string) => s.replace(/\s+/g, " ");
+const flat_ = (s: string) => s.replace(/\s+/g, " ");
+const mapLaunch = (unit: MapUnit): Launch => ({ stage: "map", units: [unit] });
 
 const launches: Record<string, { each: Launch; together: Launch }> = {
   map: { each: { stage: "map", units: ["map"] }, together: { stage: "map", units: ["map"] } },
@@ -63,21 +66,89 @@ describe("every stage's prompt shares its blocks", () => {
 });
 
 describe("map", () => {
-  test("writes only features.md in the documented format", () => {
-    const t = text(inputs(launches.map!.each));
-    expect(t).toContain("Map the user-facing features of this product into `lab/features.md`");
+  const FLAT_TEXT = "# Features\n\n## Checkout\nid: checkout\nwhere: /cart\nA buyer pays.\n";
+  const flatPrompt = (o: Partial<PromptInputs> = {}) => text(inputs(launches.map!.each, { mapText: FLAT_TEXT, ...o }));
+
+  test("the flat map is saved with qa_map, from its starting text, in the documented format", () => {
+    const t = flatPrompt();
+    expect(t).toContain("Map the user-facing features of this product");
+    expect(t).toContain("Aim for 5 to 40 features in all.");
     expect(t).toContain("parent: checkout");
     expect(t).toContain("Drop any `plans:`");
     expect(t).toContain("Change no other file.");
+    expect(t).toContain("calling qa_map with the WHOLE text for your unit");
+    expect(t).toContain("Never edit `lab/features.md` yourself");
+    expect(t).toContain("was: <old-id>");
+    expect(t).toContain("drop: id-1, id-2");
+    expect(t).toContain('"No changes." is a fine outcome');
+    expect(t).toContain(`Starting text:\n\`\`\`\n${FLAT_TEXT.trim()}\n\`\`\``);
     expect(t).not.toContain("You lead a Hydra pair");
   });
-  test("a pair splits the areas, fills the cap and writes the file alone", () => {
-    const t = text(inputs(launches.map!.each, { driver: { kind: "pair", pairId: "p" }, pairCap: 4 }));
+  test("no prompt tells the agent to keep ids by hand or to write the file", () => {
+    const areas = areasFixture();
+    for (const [launch, o] of [[launches.map!.each, {}], [mapLaunch("areas"), {}], [mapLaunch("area:shop"), { areas }]] as const) {
+      const t = text(inputs(launch, { mapText: "x", ...o }));
+      expect(t).not.toContain("Keep every existing feature's id exactly");
+      expect(t).not.toContain("Write ONLY `lab/features.md`");
+      expect(t).toContain("qa_map");
+    }
+  });
+  test("with nothing saved the agent starts from scratch", () => {
+    expect(flatPrompt({ mapText: "# Features\n" })).toContain("There is nothing saved yet: start from scratch.");
+  });
+  test("a pair splits the areas, fills the cap, and the lead saves the merged text with qa_map", () => {
+    const t = flatPrompt({ driver: { kind: "pair", pairId: "p" }, pairCap: 4 });
     expect(t).toContain("You lead a Hydra pair.");
     expect(t).toContain("at most 4");
     expect(t).not.toContain("{cap}");
-    expect(flat(t)).toContain("Do NOT write any file");
-    expect(t).toContain("Then YOU write lab/features.md alone");
+    expect(flat_(t)).toContain("Do NOT write any file and do NOT call qa_map");
+    expect(flat_(t)).toContain("Then YOU call qa_map once with the merged text");
+  });
+
+  const SHOP = "# Shop\narea: shop\nwhere: /cart, /checkout\nBuying things.\n\n## Checkout\nid: checkout\nwhere: /cart\nA buyer pays.\n";
+  function areasFixture(): Area[] {
+    return [
+      { id: "shop" as AreaId, title: "Shop", where: ["/cart", "/checkout"], summary: "Buying things." },
+      { id: "team" as AreaId, title: "Team", where: ["/team"], summary: "People." },
+      { id: "admin" as AreaId, title: "Admin console", where: [], summary: "Staff." },
+    ];
+  }
+  const areaPrompt = (o: Partial<PromptInputs> = {}) => text(inputs(mapLaunch("area:shop"), { mapText: SHOP, areas: areasFixture(), ...o }));
+
+  test("an area job embeds only its own section and one line per other area", () => {
+    const t = areaPrompt();
+    expect(t).toContain('Map the area "Shop" of this product (/cart, /checkout)');
+    expect(t).toContain("Map only this area.");
+    expect(t).toContain("Aim for 5 to 40 features in this area.");
+    expect(t).toContain(`Starting text:\n\`\`\`\n${SHOP.trim()}\n\`\`\``);
+    expect(t).toContain("- Team (/team)\n- Admin console (no paths)");
+    expect(t).not.toContain("- Shop (");
+    expect(t.match(/^- (Team|Admin console|Shop) \(/gm)).toHaveLength(2);
+    expect(t).not.toContain("People.");
+    expect(t).toContain("calling qa_map with the WHOLE text for your unit");
+    expect(t).toContain("was: <old-id>");
+  });
+  test("an area job and the survey never get the pair text, even when a head cap is passed", () => {
+    expect(areaPrompt({ pairCap: 3 })).not.toContain("Hydra pair");
+    expect(text(inputs(mapLaunch("areas"), { pairCap: 3 }))).not.toContain("Hydra pair");
+  });
+  test("an area job with no other area has no borders line", () => {
+    expect(areaPrompt({ areas: areasFixture().slice(0, 1) })).not.toContain("The other areas");
+  });
+
+  test("the survey asks for 3 to 15 areas with no features, and embeds the areas as they are", () => {
+    const t = text(inputs(mapLaunch("areas"), { mapText: "# Shop\narea: shop\nwhere: /cart\nBuying.\n" }));
+    expect(t).toContain("split it into 3 to 15 areas a user would recognise");
+    expect(t).toContain("# Shop\narea: shop\nwhere: /cart, /checkout\nOne line on what the area covers.");
+    expect(t).toContain("Write NO features");
+    expect(t).toContain("calling qa_map with the WHOLE text for your unit");
+    expect(t).toContain("Starting text:\n```\n# Shop\narea: shop");
+    expect(t).not.toContain("Hydra pair");
+    expect(t).not.toContain("Aim for 5 to 40");
+  });
+  test("the title names the area, the survey, or the flat map", () => {
+    expect(jobPrompt(inputs(mapLaunch("area:shop"), { areas: areasFixture() })).title).toBe("QA · map · Shop");
+    expect(jobPrompt(inputs(mapLaunch("areas"))).title).toBe("QA · map · Areas");
   });
 });
 
@@ -159,7 +230,7 @@ describe("fix", () => {
     expect(t).toContain("Open one head per bug with subagent_create (its own worktree; at most 2 open");
     expect(t).toContain("Do NOT edit lab/findings/.");
     expect(t).toContain("subagent_merge it, one at a time");
-    expect(flat(t)).toContain("Do not end your turn while a head is open or unmerged.");
+    expect(flat_(t)).toContain("Do not end your turn while a head is open or unmerged.");
     expect(t).not.toContain("{cap}");
   });
 });

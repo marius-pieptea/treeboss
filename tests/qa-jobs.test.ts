@@ -10,11 +10,14 @@ import { HydraPairs } from "../src/hydra/pairs";
 import { createBugFinding, patchFinding, readFinding } from "../src/lab/findings";
 import { runningFix } from "../src/lab/sessions";
 import { continuePipeline, deletePlan, featureDetail, qaBoard, runReply, startPipeline, startQaDriver, stopPipeline, stopQaDriver, tickProject } from "../src/qa/jobs";
+import { readMap, sectionOf } from "../src/qa/map";
 import { QaConflict, QaNotFound } from "../src/qa/plan";
-import { jobOfSession } from "../src/qa/registry";
+import { jobOfSession, jobsOfPipeline } from "../src/qa/registry";
 import { runsOfSession, setOutcome } from "../src/qa/runs";
+import { executeQaTool } from "../src/qa/tools";
 import type { Job, PipelineRequest, PipelineView, StageSettings } from "../src/qa/types";
 import { createLead, getSession, interruptAll, setTurnRunner } from "../src/sessions/manager";
+import { releasePark, schedulePark } from "../src/sessions/parks";
 import { resetSetting, setSetting } from "../src/settings";
 import { makeDir, makeRepo, resetState } from "./helpers";
 
@@ -33,13 +36,14 @@ async function until(pred: () => boolean, what = "condition", ms = 15_000): Prom
 interface Turn { session: string; prompt: string; cwd: string }
 let dir: string;
 let turns: Turn[];
-let work: (t: Turn) => void | Promise<void>;
+let work: (t: Turn) => void | Promise<unknown>;
 let hold: Set<string> | "all" | null;
 const gates = new Map<string, () => void>();
 const opened = new Set<string>();
 
 const planText = (title: string) => `---\ntitle: ${title}\n---\nIntro.\n## Steps\n1. Open it\n   path: /x\n   expect: It opens\n2. Do it\n   expect: It is done\n`;
 const FEATURES = "# Features\n## Alpha\nid: a\nwhere: /a\nThe A.\n## Beta\nid: b\nwhere: /b\nThe B.\n## Gamma\nid: c\nwhere: /c\nThe C.\n";
+const AREAS_FIXTURE = "# Features\n\n# Front\narea: front\nwhere: /a, /b\nThe front.\n\n## Alpha\nid: a\nwhere: /a\nThe A.\n\n## Beta\nid: b\nwhere: /b\nThe B.\n\n# Back\narea: back\nwhere: /c\nThe back.\n\n## Gamma\nid: c\nwhere: /c\nThe C.\n";
 const putFeatures = (text = FEATURES) => {
   fs.mkdirSync(path.join(dir, "lab"), { recursive: true });
   fs.writeFileSync(path.join(dir, "lab/features.md"), text);
@@ -51,10 +55,15 @@ const putPlan = (id: string, text = planText(id)) => {
 const bug = (title: string, o: { url?: string; feature?: string | null } = {}) =>
   createBugFinding(dir, { title, body: "Steps to reproduce\n1. Do it", bug: { url: o.url ?? "http://localhost:3000/a", capture: null, shot: "none", kind: "functional", feature: o.feature ?? null }, impact: "medium", effort: "s" });
 
-function goodWork(t: Turn): void {
+const DELTA = "## Delta\nid: delta\nwhere: /d\nThe D.\n";
+const saveMap = (t: Turn, text: string) => executeQaTool("qa_map", { text }, t.session);
+/** What an agent would pass to qa_map for its unit: the flat map and one new feature, or its section as it stands. */
+const mapWork = (t: Turn, unit: string) => saveMap(t, unit === "map" ? `${FEATURES}${DELTA}` : sectionOf(readMap(dir), unit as never));
+
+async function goodWork(t: Turn): Promise<void> {
   const j = jobOfSession(t.session);
   if (!j) return;
-  if (j.stage === "map") fs.appendFileSync(path.join(dir, "lab/features.md"), "\n## Delta\nid: delta\nwhere: /d\nThe D.\n");
+  if (j.stage === "map") await mapWork(t, j.units[0]!);
   if (j.stage === "plan") for (const u of j.units) putPlan(u);
   if (j.stage === "test") for (const r of runsOfSession(t.session)) for (const s of r.steps) setOutcome(r.id as never, s.id as never, { state: "pass", at: 1, note: "ok" });
   if (j.stage === "fix") for (const u of j.units) patchFinding(dir, u, { status: "shipped" });
@@ -266,7 +275,7 @@ describe("scheduling", () => {
     expect(v.stages.find((s) => s.stage === "plan")).toMatchObject({ done: 3, total: 3 });
   });
 
-  test("a launch that throws is recorded on its job, removes its runs and is never retried; the pipeline goes on", async () => {
+  test("a launch that throws is recorded on its job, removes its runs and is retried once; the pipeline goes on", async () => {
     putPlan("a");
     putPlan("b");
     const pair = pairOf();
@@ -275,12 +284,12 @@ describe("scheduling", () => {
     HydraPairs.remove(pair.id);
     await until(ended);
     const jobs = view().jobs;
-    expect(jobs.map((j) => [j.units[0], j.state, j.error])).toEqual([["a", "settled", null], ["b", "settled", expect.stringContaining("No Hydra pair")]]);
+    expect(jobs.map((j) => [j.units[0], j.state, j.error])).toEqual([["a", "settled", null], ["b", "settled", expect.stringContaining("No Hydra pair")], ["b", "settled", expect.stringContaining("No Hydra pair")]]);
     expect(jobs[1]).toMatchObject({ sessionId: null, pair: false });
     expect(view().stages.find((s) => s.stage === "test")).toMatchObject({ done: 2, total: 2, problems: 1 });
     expect(db().prepare("SELECT COUNT(*) AS n FROM qa_runs WHERE plan = 'b'").get()).toEqual({ n: 0 });
     tickProject(dir);
-    expect(view().jobs).toHaveLength(2);
+    expect(view().jobs).toHaveLength(3);
   });
 
   test("turning the browser off between jobs makes the next launch an error job, not a crash", async () => {
@@ -296,37 +305,103 @@ describe("scheduling", () => {
 });
 
 describe("the artifact check", () => {
-  type Case = { name: string; stages: StageSettings; scope?: PipelineRequest["scope"]; before?: () => void; work?: (t: Turn) => void; problem: string | null };
+  type Case = { name: string; stages: StageSettings; scope?: PipelineRequest["scope"]; before?: () => void; work?: (t: Turn) => void | Promise<unknown>; problem: string | null; again?: string; problems?: number };
   const clean = (t: Turn) => goodWork(t);
   const cases: Case[] = [
-    { name: "map: no file", stages: { map: {} }, before: () => fs.rmSync(path.join(dir, "lab/features.md")), work: () => {}, problem: "The agent did not write lab/features.md." },
-    { name: "map: unchanged", stages: { map: {} }, work: () => {}, problem: "The agent did not change lab/features.md." },
-    { name: "map: no features", stages: { map: {} }, work: () => putFeatures("# Features\nnothing\n"), problem: 'lab/features.md lists no features: each starts with "## ".' },
-    { name: "map: a parse problem", stages: { map: {} }, work: () => putFeatures("## X\nid: Not Valid\n"), problem: '"X" has the id "Not Valid": use lowercase letters, digits and dashes.' },
-    { name: "map: written", stages: { map: {} }, work: clean, problem: null },
+    { name: "map: no file and no qa_map call", stages: { map: {} }, before: () => fs.rmSync(path.join(dir, "lab/features.md")), work: () => {}, problem: "The agent did not save the map with qa_map." },
+    { name: "map: no qa_map call", stages: { map: {} }, work: () => {}, problem: "The agent did not save the map with qa_map." },
+    { name: "map: the file edited by hand does not count", stages: { map: {} }, work: () => putFeatures(`${FEATURES}${DELTA}`), problem: "The agent did not save the map with qa_map." },
+    { name: "map: a rejected qa_map call saved nothing", stages: { map: {} }, work: (t) => saveMap(t, "# Features\nnothing\n"), problem: "The agent did not save the map with qa_map." },
+    { name: "map: saved with no change to the text is still a success", stages: { map: {} }, work: (t) => saveMap(t, FEATURES), problem: null },
+    { name: "map: saved with a new feature", stages: { map: {} }, work: clean, problem: null },
     { name: "plan: no file", stages: { plan: { batching: "each" } }, scope: { kind: "features", ids: ["a"] }, work: () => {}, problem: "a: no plan written." },
     { name: "plan: unreadable", stages: { plan: { batching: "each" } }, scope: { kind: "features", ids: ["a"] }, work: () => putPlan("a", "junk"), problem: "a: the file must start with a --- front matter block" },
     { name: "plan: no steps", stages: { plan: { batching: "each" } }, scope: { kind: "features", ids: ["a"] }, work: () => putPlan("a", "---\ntitle: A\n---\n## Steps\n"), problem: "a: the plan has no steps." },
     { name: "plan: unchanged", stages: { plan: { batching: "each" } }, scope: { kind: "features", ids: ["a"] }, before: () => putPlan("a"), work: () => {}, problem: "a: the plan was not changed." },
     { name: "plan: revised", stages: { plan: { batching: "each" } }, scope: { kind: "features", ids: ["a"] }, before: () => putPlan("a"), work: () => putPlan("a", planText("A, revised")), problem: null },
-    { name: "plan together: a problem per unit", stages: { plan: { batching: "together" } }, work: () => putPlan("b"), problem: "a: no plan written.; c: no plan written." },
+    { name: "plan together: a problem per unit", stages: { plan: { batching: "together" } }, work: () => putPlan("b"), problem: "a: no plan written.; c: no plan written.", problems: 2 },
     { name: "test: steps left", stages: { test: { batching: "each" } }, scope: { kind: "features", ids: ["a"] }, before: () => putPlan("a"), work: (t) => { const r = runsOfSession(t.session)[0]!; setOutcome(r.id as never, r.steps[0]!.id as never, { state: "pass", at: 1, note: "" }); }, problem: "a: 1 of 2 steps not recorded." },
     { name: "test: all recorded", stages: { test: { batching: "each" } }, scope: { kind: "features", ids: ["a"] }, before: () => putPlan("a"), work: clean, problem: null },
-    { name: "test together: the unrecorded flow is named", stages: { test: { batching: "together" } }, scope: { kind: "features", ids: ["a", "b"] }, before: () => { putPlan("a"); putPlan("b"); }, work: (t) => { for (const r of runsOfSession(t.session).filter((x) => x.feature === "a")) for (const s of r.steps) setOutcome(r.id as never, s.id as never, { state: "skip", at: 1, note: "n/a" }); }, problem: "b: 2 of 2 steps not recorded." },
+    { name: "test together: the unrecorded flow is named", stages: { test: { batching: "together" } }, scope: { kind: "features", ids: ["a", "b"] }, before: () => { putPlan("a"); putPlan("b"); }, work: (t) => { for (const r of runsOfSession(t.session).filter((x) => x.feature === "a")) for (const s of r.steps) setOutcome(r.id as never, s.id as never, { state: "skip", at: 1, note: "n/a" }); }, problem: "b: 2 of 2 steps not recorded.", problems: 1 },
     { name: "fix: still open", stages: { fix: { batching: "each" } }, before: () => bug("Open one"), work: () => {}, problem: "bug-open-one: still open." },
     { name: "fix: shipped", stages: { fix: { batching: "each" } }, before: () => bug("Open one"), work: clean, problem: null },
     { name: "fix: dismissed", stages: { fix: { batching: "each" } }, before: () => bug("Open one"), work: (t) => { for (const u of jobOfSession(t.session)!.units) patchFinding(dir, u, { status: "dismissed" }); }, problem: null },
   ];
+  test("plan together: only the unit that failed is retried, and the ones that passed are not called unchanged", async () => {
+    putFeatures(`${FEATURES}## Delta
+id: d
+where: /d
+The D.
+`);
+    work = (t) => {
+      const j = jobOfSession(t.session)!;
+      for (const u of j.units) if (u !== "d") putPlan(u);
+    };
+    const v = await run(request({ plan: { batching: "together" } }));
+    expect(v.jobs.map((j) => j.units)).toEqual([["a", "b", "c", "d"], ["d"]]);
+    expect(v.jobs.map((j) => j.problem)).toEqual(["d: no plan written.", "d: no plan written."]);
+    expect<unknown>(jobsOfPipeline(v.id).map((j) => j.failed)).toEqual([["d"], ["d"]]);
+    expect(v.stages.find((s) => s.stage === "plan")).toMatchObject({ done: 4, total: 4, problems: 1 });
+    const plan = (id: string) => qaBoard(dir).features.find((f) => f.id === id)!.activity.plan;
+    expect(plan("a")).toEqual({ kind: "idle" });
+    expect(plan("d")).toMatchObject({ kind: "problem", text: "d: no plan written." });
+  });
+
   for (const c of cases) {
     test(c.name, async () => {
       c.before?.();
       work = c.work ?? goodWork;
       const v = await run(request(c.stages, c.scope ? { scope: c.scope } : {}));
-      expect(v.jobs).toHaveLength(1);
-      expect(v.jobs[0]!.problem).toBe(c.problem);
-      expect(v.stages.find((s) => s.stage === (Object.keys(c.stages)[0] as never))!.problems).toBe(c.problem ? 1 : 0);
+      expect(v.jobs.map((j) => j.problem)).toEqual(c.problem ? [c.problem, c.again ?? c.problem] : [null]);
+      expect(v.stages.find((s) => s.stage === (Object.keys(c.stages)[0] as never))!.problems).toBe(c.problem ? (c.problems ?? v.jobs[0]!.units.length) : 0);
     });
   }
+});
+
+describe("the map stage", () => {
+  const SURVEY = "# Front\narea: front\nwhere: /a, /b\nThe front.\n\n# Back\narea: back\nwhere: /c\nThe back.\n";
+  const unitOf = (t: Turn): string => jobOfSession(t.session)!.units[0]!;
+  const ids = (): Array<[string, string | null]> => readMap(dir).features.map((f) => [f.id, f.area]);
+
+  test("two area jobs write the same file in turn and both settle clean", async () => {
+    putFeatures(AREAS_FIXTURE);
+    hold = "all";
+    work = (t) => {
+      const unit = unitOf(t);
+      return saveMap(t, `${sectionOf(readMap(dir), unit as never)}\n## New in ${unit}\nid: new-${unit.slice(5)}\nwhere: /n\nAdded.\n`);
+    };
+    const v = startPipeline(dir, request({ map: {} }));
+    expect(v.jobs.map((j) => j.units)).toEqual([["area:front"], ["area:back"]]);
+    release(v.jobs[0]!.sessionId!);
+    await until(() => view().jobs[0]!.state === "settled", "the first area job");
+    release(v.jobs[1]!.sessionId!);
+    await until(ended);
+    expect(view().jobs.map((j) => j.problem)).toEqual([null, null]);
+    expect(ids()).toEqual([["a", "front"], ["b", "front"], ["new-front", "front"], ["c", "back"], ["new-back", "back"]]);
+    expect(view().stages.find((s) => s.stage === "map")).toMatchObject({ done: 2, total: 2, problems: 0 });
+  });
+
+  test("a survey flips the stage onto the area units and launches them, then the pipeline ends", async () => {
+    work = (t) => saveMap(t, unitOf(t) === "areas" ? SURVEY : sectionOf(readMap(dir), unitOf(t) as never));
+    const v = await run(request({ map: { survey: true } }));
+    expect(v.jobs.map((j) => [j.units, j.problem])).toEqual([[["areas"], null], [["area:front"], null], [["area:back"], null]]);
+    expect(ids()).toEqual([["a", "front"], ["b", "front"], ["c", "back"]]);
+    expect(v.control).toMatchObject({ kind: "ended", reason: "done" });
+    expect(v.stages.find((s) => s.stage === "map")).toMatchObject({ done: 3, total: 3, problems: 0 });
+  });
+
+  test("a survey that never saved is retried once, then the stage ends with it as a problem", async () => {
+    work = () => {};
+    const v = await run(request({ map: { survey: true } }));
+    expect(v.jobs.map((j) => [j.units, j.problem])).toEqual([[["areas"], "The agent did not save the map with qa_map."], [["areas"], "The agent did not save the map with qa_map."]]);
+    expect(v.control).toMatchObject({ kind: "ended", reason: "done" });
+  });
+
+  test("scope areas maps only those areas", async () => {
+    putFeatures(AREAS_FIXTURE);
+    const v = await run(request({ map: {} }, { scope: { kind: "areas", ids: ["back"] } }));
+    expect(v.jobs.map((j) => j.units)).toEqual([["area:back"]]);
+  });
 });
 
 describe("pairs", () => {
@@ -348,6 +423,21 @@ describe("pairs", () => {
     expect([lead.engine, lead.model, lead.effort]).toEqual(["claude", "pair-model", "high"]);
     expect(test.jobs[0]!.pair).toBe(false);
     expect(turns.find((t) => t.session === lead.id)!.prompt).not.toContain("Hydra pair");
+  });
+
+  test("a survey and an area job are plain sessions on the pair's lead settings, never a pair", async () => {
+    const pair = pairOf({ max: 3 });
+    putFeatures(AREAS_FIXTURE);
+    const v = await run(request({ map: {} }, { driver: { kind: "pair", pairId: pair.id } }));
+    expect(v.jobs.map((j) => j.units)).toEqual([["area:front"], ["area:back"]]);
+    for (const j of v.jobs) {
+      const lead = getSession(j.sessionId!)!;
+      expect([lead.pair_id, j.pair, lead.model]).toEqual([null, false, "pair-model"]);
+      expect(turns.find((t) => t.session === lead.id)!.prompt).not.toContain("Hydra pair");
+    }
+    const surveyed = await run(request({ map: { survey: true } }, { driver: { kind: "pair", pairId: pair.id } }));
+    expect(surveyed.jobs[0]).toMatchObject({ units: ["areas"], pair: false });
+    expect(getSession(surveyed.jobs[0]!.sessionId!)!.pair_id).toBeNull();
   });
 
   test("an agent driver's engine, model and effort are used for the lead", async () => {
@@ -475,6 +565,7 @@ describe("merging heads", () => {
     await run(request({ fix: { batching: "each" } }, { driver: { kind: "pair", pairId: pair.id } }));
     expect(nudges()).toHaveLength(1);
     expect(view().jobs[0]!.problem).toMatch(/^heads not merged: s_head\w+\.$/);
+    expect(jobsOfPipeline(view().id)[0]!.failed).toBeNull();
   });
 
   test("a crashed head does not stall settling and is not nudged", async () => {
@@ -498,14 +589,17 @@ describe("merging heads", () => {
     const pair = pairOf();
     let first = true;
     work = async (t) => {
+      const mine = jobOfSession(t.session)!.id;
+      if (t.prompt.includes("finished with commits")) {
+        hold = null;
+        await until(() => view().jobs.find((j) => j.id === mine)!.state === "merging", "the job to show merging");
+        return;
+      }
       if (first) {
         first = false;
         head(t.session);
-        for (const u of jobOfSession(t.session)!.units) patchFinding(dir, u, { status: "shipped" });
-        return;
       }
-      hold = null;
-      await until(() => view().jobs[0]!.state === "merging", "the job to show merging");
+      for (const u of jobOfSession(t.session)!.units) patchFinding(dir, u, { status: "shipped" });
     };
     await run(request({ fix: { batching: "each" } }, { driver: { kind: "pair", pairId: pair.id } }));
     expect(nudges()).toHaveLength(1);
@@ -526,10 +620,45 @@ describe("the board", () => {
     expect(board0.features[0]!.plan).toMatchObject({ kind: "ready", steps: 2 });
     expect(board0.features[2]!.plan).toMatchObject({ kind: "broken", problem: expect.stringContaining("front matter") });
     expect(board0.plansWithoutFeature).toEqual([{ slug: "old-flow", title: "old-flow", steps: 2, problem: null, path: "lab/qa/old-flow.md" }]);
-    expect(board0.map).toMatchObject({ exists: true, problem: null, activity: { kind: "idle" } });
+    expect(board0.map).toMatchObject({ exists: true, layout: "flat", problem: null, activity: { kind: "idle" }, areas: [] });
+    expect(board0.features.every((f) => f.area === null)).toBe(true);
     expect(board0.browser).toBe(true);
     expect(board0.pipeline).toBeNull();
     expect(board0.features.every((f) => f.test.kind === "never")).toBe(true);
+  });
+
+  test("an areas map: its layout, each area with its feature count, own writes and own activity, and each feature's area", async () => {
+    putFeatures(AREAS_FIXTURE);
+    const b0 = qaBoard(dir);
+    expect(b0.map).toMatchObject({
+      exists: true,
+      layout: "areas",
+      problem: null,
+      activity: { kind: "idle" },
+      areas: [
+        { id: "front", title: "Front", where: ["/a", "/b"], features: 2, updatedAt: null, activity: { kind: "idle" } },
+        { id: "back", title: "Back", where: ["/c"], features: 1, updatedAt: null, activity: { kind: "idle" } },
+      ],
+    });
+    expect(b0.features.map((f) => [f.id, f.area])).toEqual([["a", "front"], ["b", "front"], ["c", "back"]]);
+
+    hold = "all";
+    startPipeline(dir, request({ map: {} }, { scope: { kind: "areas", ids: ["front"] } }));
+    const running = qaBoard(dir).map;
+    expect(running.areas.map((a) => a.activity.kind)).toEqual(["working", "idle"]);
+    expect(running.activity.kind).toBe("working");
+    releaseAll();
+    await until(ended);
+    const done = qaBoard(dir).map;
+    expect(done.areas[0]!.updatedAt).toBeGreaterThan(0);
+    expect(done.areas[1]!.updatedAt).toBeNull();
+    expect(done.activity.kind).toBe("idle");
+  });
+
+  test("a failed survey shows as a problem on the map row", async () => {
+    work = () => {};
+    await run(request({ map: { survey: true } }));
+    expect(qaBoard(dir).map.activity).toMatchObject({ kind: "problem", text: "The agent did not save the map with qa_map." });
   });
 
   test("bugs sit under their stored feature, else the feature their page matches, else with the unsorted; their state is derived", () => {
@@ -560,13 +689,29 @@ describe("the board", () => {
     expect(b.features.map((f) => f.activity.plan.kind)).toEqual(["working", "working", "working", "queued"]);
     expect(b.features[0]!.activity.plan).toMatchObject({ kind: "working", sessionId: view().jobs[0]!.sessionId, pair: false });
     expect(b.features[0]!.activity.test.kind).toBe("idle");
-    releaseAll();
+    release(view().jobs[0]!.sessionId!);
     await until(() => view().jobs.length === 4);
     releaseAll();
     await until(ended);
     const done = qaBoard(dir);
     expect(done.features.map((f) => f.activity.plan)).toEqual(["a", "b", "c", "d"].map((id) => ({ kind: "problem", text: `${id}: no plan written.`, sessionId: expect.any(String) })));
     expect(done.pipeline!.stages.find((s) => s.stage === "plan")).toMatchObject({ done: 4, total: 4, problems: 4 });
+  });
+
+  test("a job whose session is parked on a usage limit shows why, and goes back to working when the park ends", () => {
+    putFeatures(FEATURES);
+    hold = "all";
+    work = () => {};
+    startPipeline(dir, request({ plan: { batching: "each" } }));
+    const working = qaBoard(dir).features[0]!.activity.plan;
+    expect(working.kind).toBe("working");
+    const session = (working as { sessionId: string }).sessionId;
+    schedulePark({ session_id: session, turn_id: "t1", resume_at: Date.now() + 3_600_000, prompt: "p", resume: true, reason: "usage limit" });
+    const parked = qaBoard(dir).features[0]!;
+    expect(parked.activity.plan).toEqual({ kind: "problem", text: expect.stringMatching(/^Paused by the usage limit until \S/), sessionId: session });
+    expect(qaBoard(dir).features[1]!.activity.plan.kind).toBe("working");
+    releasePark(session, "cancelled");
+    expect(qaBoard(dir).features[0]!.activity.plan.kind).toBe("working");
   });
 
   test("a feature's detail has its plan with each step's last result, its runs and its last run", async () => {
@@ -577,6 +722,7 @@ describe("the board", () => {
     expect(d.plan).toMatchObject({ title: "a", intro: "Intro.", path: "lab/qa/a.md", problem: null });
     expect(d.plan!.steps.map((s) => [s.action, s.path, s.last])).toEqual([["Open it", "/x", "pass"], ["Do it", null, "pass"]]);
     expect(d.runs).toHaveLength(1);
+    expect(d.feature).toEqual(qaBoard(dir).features.find((f) => f.id === "a")!);
     expect(d.lastRun!.id).toBe(d.runs[0]!.id);
     expect(featureDetail(dir, "b")).toMatchObject({ plan: null, runs: [], lastRun: null });
     expect(() => featureDetail(dir, "nope")).toThrow('No feature "nope"');
@@ -635,6 +781,7 @@ describe("the database migration", () => {
     expect(tables).toEqual(expect.arrayContaining(["qa_runs", "qa_pipelines", "qa_jobs"]));
     expect(tables).not.toContain("qa_sessions");
     expect(tables).not.toContain("qa_batches");
+    expect((conn.prepare("PRAGMA table_info(qa_jobs)").all() as Array<{ name: string }>).map((c) => c.name)).toContain("failed_units");
     expect(conn.prepare("SELECT id, session_id FROM qa_runs ORDER BY id").all()).toEqual([{ id: "qa_1", session_id: "s_walker" }, { id: "qa_2", session_id: null }]);
     conn.close();
   });

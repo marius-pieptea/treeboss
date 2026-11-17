@@ -11,16 +11,18 @@ import { runningFix } from "../lab/sessions";
 import { realOf } from "../lab/tables";
 import { Hub } from "../sessions/hub";
 import { createLead, getSession, send, treeIdle, unmergedHeads } from "../sessions/manager";
+import { formatResumeAt, parkOf, type ParkRow } from "../sessions/parks";
 import { newId, UserError } from "../util";
-import { FEATURES_FILE, featuresSignature, readFeatures } from "./features";
+import { FEATURES_FILE, lastMapWrites, mapWritesOf, readMap, sectionOf } from "./map";
 import { activityOf, bugFeature, jobViewOf, mergeActivity, PAIR_HEAD_CAP, parseConfig, pipelineView, reconcile, unitsFor } from "./pipeline";
-import { listPlans, planSignature, QA_DIR, QaConflict, QaNotFound, readPlan, removePlan } from "./plan";
+import { featurePlan, listPlans, planSignature, QA_DIR, QaConflict, QaNotFound, readPlan, removePlan } from "./plan";
 import { jobOfSession, jobsOfPipeline, type JobRow } from "./registry";
 import { jobPrompt, qaLabel } from "./prompts";
-import { getRun, lastOutcomes, listRuns, removeRun, runId, runRoot, runsOfSession, setRunSession, startRun, summarize } from "./runs";
+import { getRun, lastOutcomes, latestRuns, listRuns, removeRun, runId, runRoot, runsOfSession, setRunSession, startRun, summarize } from "./runs";
 import {
   STAGES,
   type Activity,
+  type BoardArea,
   type BoardBug,
   type BoardFeature,
   type BugId,
@@ -32,6 +34,8 @@ import {
   type Job,
   type JobId,
   type Launch,
+  type MapFeature,
+  type MapUnit,
   type Pipeline,
   type PipelineConfig,
   type PipelineId,
@@ -41,6 +45,7 @@ import {
   type Run,
   type RunId,
   type RunReply,
+  type RunSummary,
   type Snapshot,
   type Stage,
   type Unit,
@@ -101,16 +106,16 @@ const isBug = (f: Finding): f is Finding & { bug: NonNullable<Finding["bug"]> } 
 const isOpen = (f: Finding): boolean => f.status === "new" || f.status === "accepted";
 
 function snapshotOf(root: string, p: Pipeline | null): Snapshot {
-  const map = readFeatures(root);
+  const map = readMap(root);
   const plans = new Map<FeatureId, { steps: number; problem: string | null }>();
-  for (const [id, plan] of listPlans(root).byFeature) plans.set(id, { steps: plan.steps.length, problem: plan.problem });
+  for (const [id, plan] of listPlans(root, map.features).byFeature) plans.set(id, { steps: plan.steps.length, problem: plan.problem });
   const openBugs = listFindings(root)
     .filter((f) => isBug(f) && !f.problem && isOpen(f))
     .map((f) => ({ id: f.id as BugId, feature: bugFeature(f.bug?.feature, f.bug?.url ?? "", map.features).feature }));
   const jobs = (p ? jobsOfPipeline(p.id) : []).map((j) => ({ ...j, active: j.settledAt === null && j.session !== null }));
   const fix = runningFix(root);
   const ours = new Set(jobs.map((j) => j.session));
-  return { features: map.features, mapExists: map.exists, plans, openBugs, jobs, fixBusyElsewhere: !!fix && !ours.has(fix.sessionId) };
+  return { features: map.features, areas: map.areas, layout: map.layout, mapExists: map.exists, plans, openBugs, jobs, fixBusyElsewhere: !!fix && !ours.has(fix.sessionId) };
 }
 
 function needBrowser(): void {
@@ -124,7 +129,6 @@ const insertJob = (j: { id: JobId; p: Pipeline; stage: Stage; units: readonly Un
 };
 
 function signaturesOf(root: string, l: Launch): Job["sigs"] {
-  if (l.stage === "map") return { map: featuresSignature(root) };
   if (l.stage === "plan") return Object.fromEntries(l.units.map((u) => [u, planSignature(root, u)]));
   return {};
 }
@@ -137,7 +141,8 @@ function launchJob(p: Pipeline, l: Launch, now: number): void {
   let session: ReturnType<typeof createLead>;
   try {
     if (l.stage !== "fix") needBrowser();
-    const features = readFeatures(root).features;
+    const map = readMap(root);
+    const features = map.features;
     const plans = new Map<FeatureId, Plan>();
     if (l.stage === "plan" || l.stage === "test") {
       for (const u of l.units) {
@@ -165,7 +170,8 @@ function launchJob(p: Pipeline, l: Launch, now: number): void {
     const driver = p.config.driver;
     const pair = driver.kind === "pair" ? HydraPairs.find(driver.pairId) : null;
     if (driver.kind === "pair" && !pair) throw new UserError(`No Hydra pair "${driver.pairId}". See \`trb pair list\`.`);
-    const asPair = !!pair && l.stage !== "test";
+    // Only the flat map splits into area heads. A survey or an area job already is the split, and a test drives one browser.
+    const asPair = !!pair && l.stage !== "test" && !(l.stage === "map" && l.units[0] !== "map");
     const open = listFindings(root).filter((f) => isBug(f) && !f.problem && isOpen(f)).map((f) => ({ id: f.id, title: f.title, url: f.bug?.url ?? "" }));
     const text = jobPrompt({
       launch: l,
@@ -175,6 +181,8 @@ function launchJob(p: Pipeline, l: Launch, now: number): void {
       note: p.config.note,
       baseUrl: p.config.baseUrl,
       features,
+      mapText: l.stage === "map" ? sectionOf(map, l.units[0]) : "",
+      areas: map.areas,
       plans,
       runs,
       bugs,
@@ -230,7 +238,7 @@ export function tickProject(root: string): void {
     for (let round = 0; round < MAX_ROUNDS; round++) {
       rerun.delete(key);
       const p = openPipeline(key);
-      if (!p) return;
+      if (!p || p.control.kind === "held" || p.control.kind === "ended") return;
       const now = Date.now();
       const d = reconcile(p, snapshotOf(key, p), now);
       if (d.kind === "wait") {
@@ -248,8 +256,8 @@ export function tickProject(root: string): void {
 
 export function startPipeline(root: string, body: unknown): PipelineView {
   const key = realOf(root);
-  const features = readFeatures(key).features;
-  const config = parseConfig(body, { features, pairExists: (id) => HydraPairs.find(id) !== null });
+  const map = readMap(key);
+  const config = parseConfig(body, { features: map.features, areas: map.areas, pairExists: (id) => HydraPairs.find(id) !== null });
   if (config.stages.map || config.stages.plan || config.stages.test) needBrowser();
   const open = openPipeline(key);
   if (open && open.control.kind !== "held") throw new QaConflict("A QA pipeline is already running in this project. Stop it or wait for it.");
@@ -281,43 +289,48 @@ export function stopPipeline(root: string, id: string): PipelineView {
   return viewOf(pipelineOf(key, id));
 }
 
-const join = (problems: string[]): string | null => (problems.length ? problems.join("; ") : null);
+/** What the artifact check found: the problem text and the units behind it (Job.failed: null = the job as a whole). */
+interface Verdict { problem: string | null; failed: Unit[] | null }
 
-function checkJob(job: Job): string | null {
+function checkJob(job: Job): Verdict {
   const root = job.root;
   const problems: string[] = [];
+  const failed: Unit[] = [];
+  let wholeJob = false;
   const units = job.units as readonly Unit[];
+  const bad = (u: Unit, text: string): void => {
+    problems.push(`${u}: ${text}`);
+    failed.push(u);
+  };
   switch (job.stage) {
-    case "map": {
-      const map = readFeatures(root);
-      if (!map.exists) problems.push(`The agent did not write ${FEATURES_FILE}.`);
-      else if (job.sigs.map !== null && job.sigs.map !== undefined && featuresSignature(root) === job.sigs.map) problems.push(`The agent did not change ${FEATURES_FILE}.`);
-      else if (!map.features.length) problems.push(`${FEATURES_FILE} lists no features: each starts with "## ".`);
-      else if (map.problem) problems.push(map.problem);
+    // Judged by qa_map's own record: parallel area jobs write the same file, so its hash says nothing about one job.
+    case "map":
+      if (!mapWritesOf(job.id).length) problems.push("The agent did not save the map with qa_map.");
+      else if (units[0] === "areas" && readMap(root).layout !== "areas") problems.push(`${FEATURES_FILE} is not organized in areas after the survey.`);
+      wholeJob = problems.length > 0;
       break;
-    }
     case "plan":
       for (const u of units as readonly FeatureId[]) {
         let plan: Plan;
         try {
           plan = readPlan(root, u);
         } catch {
-          problems.push(`${u}: no plan written.`);
+          bad(u, "no plan written.");
           continue;
         }
-        if (plan.problem) problems.push(`${u}: ${plan.problem}`);
-        else if (!plan.steps.length) problems.push(`${u}: the plan has no steps.`);
-        else if (job.sigs[u] !== null && job.sigs[u] !== undefined && planSignature(root, u) === job.sigs[u]) problems.push(`${u}: the plan was not changed.`);
+        if (plan.problem) bad(u, plan.problem);
+        else if (!plan.steps.length) bad(u, "the plan has no steps.");
+        else if (job.sigs[u] !== null && job.sigs[u] !== undefined && planSignature(root, u) === job.sigs[u]) bad(u, "the plan was not changed.");
       }
       break;
     case "test": {
       const runs = job.session ? runsOfSession(job.session) : [];
       for (const u of units) {
         const run = runs.find((r) => r.feature === u);
-        if (!run) problems.push(`${u}: the run is gone.`);
+        if (!run) bad(u, "the run is gone.");
         else {
           const left = run.steps.filter((s) => s.outcome.state === "pending").length;
-          if (left) problems.push(`${u}: ${left} of ${run.steps.length} steps not recorded.`);
+          if (left) bad(u, `${left} of ${run.steps.length} steps not recorded.`);
         }
       }
       break;
@@ -326,22 +339,26 @@ function checkJob(job: Job): string | null {
       for (const u of units) {
         try {
           const status = readFinding(root, u).status;
-          if (status !== "shipped" && status !== "dismissed") problems.push(`${u}: still open.`);
+          if (status !== "shipped" && status !== "dismissed") bad(u, "still open.");
         } catch {
-          problems.push(`${u}: the bug file is gone.`);
+          bad(u, "the bug file is gone.");
         }
       }
       if (job.session && getSession(job.session)?.pair_id) {
         const heads = unmergedHeads(job.session);
-        if (heads.length) problems.push(`heads not merged: ${heads.map((h) => h.id).join(", ")}.`);
+        if (heads.length) {
+          problems.push(`heads not merged: ${heads.map((h) => h.id).join(", ")}.`);
+          wholeJob = true;
+        }
       }
       break;
   }
-  return join(problems);
+  if (!problems.length) return { problem: null, failed: null };
+  return { problem: problems.join("; "), failed: wholeJob ? null : failed };
 }
 
-const settle = (id: JobId, problem: string | null): void => {
-  db().prepare("UPDATE qa_jobs SET problem = ?, settled_at = ? WHERE id = ? AND settled_at IS NULL").run(problem, Date.now(), id);
+const settle = (id: JobId, v: Verdict): void => {
+  db().prepare("UPDATE qa_jobs SET problem = ?, failed_units = ?, settled_at = ? WHERE id = ? AND settled_at IS NULL").run(v.problem, v.failed && JSON.stringify(v.failed), Date.now(), id);
 };
 
 /**
@@ -352,7 +369,7 @@ export function settleJob(session: string): void {
   const job = jobOfSession(session);
   if (!job || job.settledAt !== null || !job.session) return;
   const lead = getSession(job.session);
-  if (!lead) return settle(job.id, "The session is gone.");
+  if (!lead) return settle(job.id, { problem: "The session is gone.", failed: null });
   if (!treeIdle(job.session)) return;
   if (job.nudgedTurns === null) {
     const heads = lead.status === "failed" || lead.status === "closed" ? [] : unmergedHeads(lead.id);
@@ -448,63 +465,92 @@ function boardBugs(root: string, features: readonly Feature[]): BoardBug[] {
 const closed = (b: BoardBug): number => (b.state === "fixed" || b.state === "dismissed" ? 1 : 0);
 const bugOrder = (a: BoardBug, b: BoardBug): number => closed(a) - closed(b) || b.updatedAt - a.updatedAt || a.id.localeCompare(b.id);
 
-function boardData(root: string) {
-  const key = realOf(root);
-  const map = readFeatures(key);
-  const { byFeature, loose } = listPlans(key);
-  const bugs = boardBugs(key, map.features);
+interface BoardCtx {
+  bugs: readonly BoardBug[];
+  activity: (stage: Stage, unit: Unit) => Activity;
+}
+
+function boardContext(key: string, features: readonly Feature[]): BoardCtx {
   const shown = newest(key);
   const jobs: Job[] = shown ? jobsOfPipeline(shown.id) : [];
-  const pair = (s: string): boolean => isPair(s);
-
-  const feature = (f: Feature): BoardFeature => {
-    const plan = byFeature.get(f.id);
-    const run = listRuns(key, f.id, 1)[0];
-    const own = bugs.filter((b) => b.feature === f.id).sort(bugOrder);
-    return {
-      id: f.id,
-      title: f.title,
-      where: f.where,
-      parent: f.parent,
-      depth: f.parent ? 1 : 0,
-      summary: f.summary,
-      plan: !plan ? { kind: "missing" } : plan.problem ? { kind: "broken", problem: plan.problem } : { kind: "ready", steps: plan.steps.length, updatedAt: plan.updatedAt },
-      test: run ? { kind: "ran", run } : { kind: "never" },
-      bugs: own,
-      activity: {
-        plan: activityOf("plan", f.id, shown, jobs, pair),
-        test: activityOf("test", f.id, shown, jobs, pair),
-        fix: mergeActivity(own.map((b): Activity => activityOf("fix", b.id as BugId, shown, jobs, pair))),
-      },
-    };
+  const parks = new Map<string, ParkRow | null>();
+  const parkOfLead = (session: string): ParkRow | null => {
+    if (!parks.has(session)) parks.set(session, parkOf(session));
+    return parks.get(session)!;
   };
+  return {
+    bugs: boardBugs(key, features),
+    activity: (stage, unit) => {
+      const a = activityOf(stage, unit, shown, jobs, isPair);
+      // A parked session keeps its turn, so the job never goes idle: say why it is not moving.
+      if (a.kind !== "working") return a;
+      const park = parkOfLead(a.sessionId);
+      return park ? { kind: "problem", text: `Paused by the usage limit until ${formatResumeAt(park.resume_at)}`, sessionId: a.sessionId } : a;
+    },
+  };
+}
 
-  const roots = map.features.filter((f) => !f.parent);
-  const ordered = roots.flatMap((r) => [r, ...map.features.filter((c) => c.parent === r.id)]);
-  return { key, map, byFeature, loose, bugs, shown, jobs, pair, feature, ordered };
+function boardFeature(f: MapFeature, plan: (Plan & { updatedAt: number }) | undefined, run: RunSummary | undefined, c: BoardCtx): BoardFeature {
+  const own = c.bugs.filter((b) => b.feature === f.id).sort(bugOrder);
+  return {
+    id: f.id,
+    title: f.title,
+    where: f.where,
+    area: f.area,
+    parent: f.parent,
+    depth: f.parent ? 1 : 0,
+    summary: f.summary,
+    plan: !plan ? { kind: "missing" } : plan.problem ? { kind: "broken", problem: plan.problem } : { kind: "ready", steps: plan.steps.length, updatedAt: plan.updatedAt },
+    test: run ? { kind: "ran", run } : { kind: "never" },
+    bugs: own,
+    activity: {
+      plan: c.activity("plan", f.id),
+      test: c.activity("test", f.id),
+      fix: mergeActivity(own.map((b): Activity => c.activity("fix", b.id as BugId))),
+    },
+  };
+}
+
+function boardMap(key: string, map: ReturnType<typeof readMap>, c: BoardCtx): QaBoard["map"] {
+  const wrote = lastMapWrites(key);
+  const areas = map.areas.map((a): BoardArea => {
+    const unit: MapUnit = `area:${a.id}`;
+    return { id: a.id, title: a.title, where: a.where, features: map.features.filter((f) => f.area === a.id).length, updatedAt: wrote.get(unit) ?? null, activity: c.activity("map", unit) };
+  });
+  // The survey and the flat job show on the row too: the layout is still flat while the survey runs.
+  const activity = mergeActivity([c.activity("map", "map"), c.activity("map", "areas"), ...areas.map((a) => a.activity)]);
+  return { exists: map.exists, layout: map.layout, problem: map.problem, updatedAt: map.updatedAt, activity, areas };
 }
 
 export function qaBoard(root: string): QaBoard {
-  const d = boardData(root);
+  const key = realOf(root);
+  const map = readMap(key);
+  const { byFeature, loose } = listPlans(key, map.features);
+  const latest = latestRuns(key);
+  const c = boardContext(key, map.features);
+  const roots = map.features.filter((f) => !f.parent);
+  const ordered = roots.flatMap((r) => [r, ...map.features.filter((x) => x.parent === r.id)]);
+  const shown = newest(key);
   return {
     browser: browserEnabled(),
-    map: { exists: d.map.exists, problem: d.map.problem, updatedAt: d.map.updatedAt, activity: activityOf("map", "map", d.shown, d.jobs, d.pair) },
-    features: d.ordered.map(d.feature),
-    bugsWithoutFeature: d.bugs.filter((b) => b.feature === null).sort(bugOrder),
-    plansWithoutFeature: d.loose,
-    pipeline: d.shown ? viewOf(d.shown) : null,
+    map: boardMap(key, map, c),
+    features: ordered.map((f) => boardFeature(f, byFeature.get(f.id), latest.get(f.id), c)),
+    bugsWithoutFeature: c.bugs.filter((b) => b.feature === null).sort(bugOrder),
+    plansWithoutFeature: loose,
+    pipeline: shown ? viewOf(shown) : null,
   };
 }
 
 export function featureDetail(root: string, id: string): FeatureDetail {
-  const d = boardData(root);
-  const f = d.map.features.find((x) => x.id === id);
+  const key = realOf(root);
+  const map = readMap(key);
+  const f = map.features.find((x) => x.id === id);
   if (!f) throw new QaNotFound(`No feature "${id}".`);
-  const plan = d.byFeature.get(f.id);
-  const last = lastOutcomes(d.key, f.id);
-  const runs = listRuns(d.key, f.id, 20);
+  const plan = featurePlan(key, f.id);
+  const last = lastOutcomes(key, f.id);
+  const runs = listRuns(key, f.id, 20);
   return {
-    feature: d.feature(f),
+    feature: boardFeature(f, plan ?? undefined, runs[0], boardContext(key, map.features)),
     plan: plan
       ? { title: plan.title, intro: plan.intro, path: `${QA_DIR}/${f.id}.md`, steps: plan.steps.map((s) => ({ id: s.id, action: s.action, expected: s.expected, path: s.path, last: last[s.id] ?? null })), problem: plan.problem }
       : null,

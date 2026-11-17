@@ -71,7 +71,7 @@ The desktop app, launched from the Dock, may not have Homebrew on its PATH. When
 - What happens when only a JDK newer than the one Ghidra was verified on is installed? It is accepted (21 or newer); a JDK of exactly 21 is preferred when both exist.
 - What happens when `JAVA_HOME` is set to a JDK too old for the engine? The check warns that it is not a JDK 21 or newer (or 17 or newer for jadx) and gives the path of a suitable one when it finds one.
 - What happens when apktool is older than 2.7.0? The check warns and gives `brew upgrade apktool`.
-- What happens when a jadx-headless-mcp jar of another version is under `~/.local/share/rea/jadx/`? It is passed as `REA_JADX_MCP_JAR`, and the check warns that REA 6.4.0 pins 0.7.1 and gives the pinned download.
+- What happens when a jadx-headless-mcp jar of another version is under `~/.local/share/rea/jadx/`? It is passed as `REA_JADX_MCP_JAR`, and the check warns that REA 6.9.0 pins 0.7.1 and gives the pinned download.
 - What happens when REA's own doctor takes longer than 90 seconds, prints no JSON, or does not start? The deep check adds one info line saying REA's own check could not run, with the reason. The other checks still show.
 - What happens when REA's doctor reports more failures than fit? The first 12 are shown and the rest are counted in one line with the command to see them.
 - What happens when `npx` is only in a version manager (nvm, Volta, asdf)? It is not found by the Homebrew fallback. The operator puts it on PATH or sets `rea_command` to an absolute command (see Assumptions).
@@ -102,13 +102,13 @@ The desktop app, launched from the Dock, may not have Homebrew on its PATH. When
 ### Readiness
 
 - **FR-008**: The readiness checks MUST cover, in this order:
-  - the launcher: `npx` (with `rea-agents@6.4.0`), or `rea_command` when set (FR-017 for the Homebrew fallback);
+  - the launcher: `npx` (with `rea-agents@6.9.0`), or `rea_command` when set (FR-017 for the Homebrew fallback);
   - the native engine: Ghidra, Hopper or IDA. When none is found the fix is `brew install ghidra`. Hopper, when found, adds an info line that its free demo needs one manual first launch;
   - the JDK, for the engine that needs it: a JDK 21 or newer for Ghidra, preferring exactly 21; a JDK 17 or newer for jadx when Ghidra is not found. A `JAVA_HOME` set to a JDK too old for the engine is a warning of its own;
   - apktool, at 2.7.0 or newer;
   - the jadx-headless-mcp jar, at the pinned 0.7.1 (its fix line downloads that release from GitHub and checks its SHA-256);
   - adb, an info line (it is needed only for a connected device);
-  - on Linux only, binwalk (REA 6.4.0 inspects firmware on Linux only; on macOS no firmware check is shown).
+  - on Linux only, binwalk (REA 6.9.0 inspects firmware on Linux only; on macOS no firmware check is shown).
 - **FR-009**: No readiness check MUST fail the run or raise an error. Each check is `ok`, `info` or `warn`. A `warn` MUST carry the command or setting that closes the gap. treeboss MUST NOT run a fix command for the operator.
 - **FR-010**: The shallow check MUST only look at this machine (PATH, the Homebrew prefixes, `/Applications`, the environment, `~/.local/share/rea/jadx/`). It MUST NOT start REA or download anything. The Engines page runs only this check.
 - **FR-011**: The deep check MUST also run REA's own `rea doctor --json`, started the way its MCP server is started, with a 90-second limit. Its failures MUST be shown as warnings prefixed "REA:", one line per distinct message, at most 12 lines. REA's client-registration and skill checks MUST be ignored, because treeboss does not own them. Only `trb doctor` and **Check again** run the deep check.

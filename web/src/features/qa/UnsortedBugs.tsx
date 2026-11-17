@@ -1,5 +1,5 @@
 import type { BoardBug } from "./api";
-import { BugCard } from "./BugCard";
+import { BugList } from "./BugList";
 import { LABEL } from "./Status";
 
 export function UnsortedBugs({
@@ -10,6 +10,7 @@ export function UnsortedBugs({
   pending,
   focusBug,
   onFix,
+  onFixMany,
   onStatus,
   onFeature,
 }: {
@@ -20,6 +21,7 @@ export function UnsortedBugs({
   pending: boolean;
   focusBug: string | null;
   onFix: (id: string) => void;
+  onFixMany: (ids: string[]) => void;
   onStatus: (id: string, status: "new" | "dismissed" | "shipped") => void;
   onFeature: (id: string, feature: string | null) => void;
 }) {
@@ -30,9 +32,7 @@ export function UnsortedBugs({
         <h2 className={LABEL}>Bugs without a feature</h2>
         <span className="font-mono text-label text-fg-muted">{bugs.length}</span>
       </div>
-      {bugs.map((b) => (
-        <BugCard key={b.id} root={root} bug={b} busy={busy} pending={pending} focused={b.id === focusBug} features={features} onFix={onFix} onStatus={onStatus} onFeature={onFeature} />
-      ))}
+      <BugList root={root} bugs={bugs} busy={busy} pending={pending} focusBug={focusBug} features={features} onFix={onFix} onFixMany={onFixMany} onStatus={onStatus} onFeature={onFeature} />
     </section>
   );
 }

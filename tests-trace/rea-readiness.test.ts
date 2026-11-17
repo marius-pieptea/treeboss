@@ -9,7 +9,7 @@ import path from "path";
 import { startServer } from "../src/daemon/server";
 import { runDoctor } from "../src/doctor";
 import { checkReadiness, detectEnv, findGhidra, findJdk, reaEnv, reaEnvFor, reaReadiness, type Probe, type ReadinessCheck } from "../src/evidence/readiness";
-import { reaLaunch } from "../src/evidence/rea";
+import { REA_VERSION, reaLaunch } from "../src/evidence/rea";
 import { resetSetting, setSetting } from "../src/settings";
 import { makeDir, resetState } from "./helpers";
 
@@ -62,7 +62,7 @@ function jdkAt(dir: string, version: string): string {
 /** The keg-only openjdk home under a Homebrew prefix, as `opt/openjdk@<v>` points at it. */
 const kegJdk = (prefix: string, formula: string) => path.join(prefix, "opt", formula, "libexec", "openjdk.jdk", "Contents", "Home");
 
-/** The jadx jar REA 6.4.0 pins, under the given home. */
+/** The jadx jar the pinned REA release wants, under the given home. */
 function pinnedJar(home: string, version = "0.7.1"): string {
   const dir = path.join(home, ".local", "share", "rea", "jadx", version);
   fs.mkdirSync(dir, { recursive: true });
@@ -117,7 +117,7 @@ describe("shallow readiness", () => {
     expect(c.android).toEqual({ id: "android", level: "ok", text: "apktool 2.9.3 found" });
     expect(c.jadx).toEqual({ id: "jadx", level: "ok", text: "jadx-headless-mcp 0.7.1 found" });
     expect(c.adb).toEqual({ id: "adb", level: "ok", text: "adb found" });
-    expect(c.firmware).toEqual({ id: "firmware", level: "info", text: "Firmware inspection is Linux-only in REA 6.4.0" });
+    expect(c.firmware).toEqual({ id: "firmware", level: "info", text: `Firmware inspection is Linux-only in REA ${REA_VERSION}` });
     expect(c.binwalk).toBeUndefined();
     expect(r.checks.some((x) => x.level === "warn")).toBe(false);
   });
@@ -197,7 +197,7 @@ describe("npx outside the daemon's PATH", () => {
   test("reaLaunch uses npx from a Homebrew prefix when PATH has none, and none when there is no prefix either", () => {
     const prefix = makeDir();
     const npx = exe(path.join(prefix, "bin"), "npx");
-    expect(reaLaunch(() => null, [prefix])).toEqual({ command: npx, args: ["-y", "rea-agents@6.4.0", "mcp"], source: "npx" });
+    expect(reaLaunch(() => null, [prefix])).toEqual({ command: npx, args: ["-y", `rea-agents@${REA_VERSION}`, "mcp"], source: "npx" });
     expect(reaLaunch(() => null, [])).toBeNull();
     expect(reaLaunch(() => "/usr/bin/npx", [prefix])?.command).toBe("/usr/bin/npx");
   });
@@ -206,9 +206,9 @@ describe("npx outside the daemon's PATH", () => {
     const prefix = makeDir();
     const npx = exe(path.join(prefix, "bin"), "npx");
     const c = byId((await checkReadiness(probe({ brewPrefixes: [prefix] }), false)).checks);
-    expect(c.launcher).toEqual({ id: "launcher", level: "ok", text: `REA starts through npx (rea-agents@6.4.0) via ${npx} (not on the daemon's PATH)` });
+    expect(c.launcher).toEqual({ id: "launcher", level: "ok", text: `REA starts through npx (rea-agents@${REA_VERSION}) via ${npx} (not on the daemon's PATH)` });
     const onPath = byId((await checkReadiness(probe({ bins: ["npx"] }), false)).checks);
-    expect(onPath.launcher.text).toBe("REA starts through npx (rea-agents@6.4.0)");
+    expect(onPath.launcher.text).toBe(`REA starts through npx (rea-agents@${REA_VERSION})`);
   });
 
   test("the REA env appends the npx and node folders to PATH when missing, keeping the PATH it has", () => {

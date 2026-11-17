@@ -114,6 +114,6 @@ Dependencies are installed from npm and are not vendored, except where [NOTICE](
 - **Apache-2.0:** [Playwright](https://github.com/microsoft/playwright) (`playwright-core`), class-variance-authority.
 - **ISC:** lucide-react.
 - **SIL Open Font License 1.1:** the bundled fonts Geist, Geist Mono, Press Start 2P, Silkscreen and VT323 (via `@fontsource`).
-- **[REA](https://github.com/morluto/rea), MIT:** not bundled. trb starts it with `npx` at a pinned version (6.4.0) when REA is on in Settings.
+- **[REA](https://github.com/morluto/rea), MIT:** not bundled. trb starts it with `npx` at a pinned version (6.9.0) when REA is on in Settings.
 
 Adapted material from open-design (Apache-2.0) and pstack (MIT) is listed in [NOTICE](NOTICE).

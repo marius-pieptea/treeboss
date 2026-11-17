@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import fs from "fs";
 import path from "path";
 import { createBugFinding } from "../src/lab/findings";
-import { featuresSignature, FEATURES_FILE, parseFeatures, readFeatures } from "../src/qa/features";
+import { FEATURES_FILE, parseFeatures, readFeatures } from "../src/qa/map";
 import { similarBug } from "../src/qa/tools";
 import { QA_TOOL_SET, qaToolDefs } from "../src/qa/defs";
 import { executeQaTool } from "../src/qa/tools";
@@ -53,19 +53,8 @@ describe("feature map", () => {
     expect(r.exists).toBe(true);
     expect(r.updatedAt).toBeGreaterThan(0);
     expect(r.features).toHaveLength(4);
-    fs.writeFileSync(path.join(root, FEATURES_FILE), "x".repeat(300 * 1024));
+    fs.writeFileSync(path.join(root, FEATURES_FILE), "x".repeat(1100 * 1024));
     expect(readFeatures(root)).toMatchObject({ features: [], exists: true, problem: expect.stringContaining("KB") });
-  });
-
-  test("the signature tells whether the file changed", () => {
-    expect(featuresSignature(root)).toBeNull();
-    fs.mkdirSync(path.join(root, "lab"), { recursive: true });
-    fs.writeFileSync(path.join(root, FEATURES_FILE), MAP);
-    const a = featuresSignature(root);
-    expect(a).toMatch(/^[0-9a-f]{40}$/);
-    expect(featuresSignature(root)).toBe(a);
-    fs.appendFileSync(path.join(root, FEATURES_FILE), "\n## New\n");
-    expect(featuresSignature(root)).not.toBe(a);
   });
 });
 
@@ -81,7 +70,7 @@ describe("bug_log helpers", () => {
 
 describe("the QA tools", () => {
   test("their names are stable and bug_log and qa_record take the flow and feature arguments", () => {
-    expect([...QA_TOOL_SET].sort()).toEqual(["bug_log", "qa_record"]);
+    expect([...QA_TOOL_SET].sort()).toEqual(["bug_log", "qa_map", "qa_record"]);
     const defs = Object.fromEntries(qaToolDefs().map((d) => [d.name, d.inputSchema.properties as Record<string, unknown>]));
     expect(Object.keys(defs.qa_record!)).toContain("flow");
     expect(Object.keys(defs.bug_log!)).toContain("feature");

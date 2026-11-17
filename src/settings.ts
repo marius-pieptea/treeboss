@@ -43,7 +43,7 @@ export const SETTING_DEFS = {
   emulator: { type: "string", def: "on", help: "on: the emulator_* tools appear once the Android emulator is installed from the Emulator tab. off: no emulator tools." },
   evidence: { type: "string", def: "on", help: "on: sessions get evidence_* tools to capture the page open in the agent browser (DOM, styles, assets, network, screenshot) and to save cited findings, kept per project. On by default: a capture can contain whatever a signed-in page showed, and it is stored in the trb home on this computer. off: no evidence tools." },
   rea_mcp: { type: "string", def: "on", help: "on: sessions also get REA, a third-party reverse-engineering MCP server (binaries, Electron apps, APKs, websites), started with npx on demand. On by default: sessions download and run that npm package through npx. off: not offered (`trb config set rea_mcp off`)." },
-  rea_command: { type: "string", def: "", help: "Command that starts REA's MCP server, split on spaces (e.g. `rea mcp` for a global install). Empty: `npx -y rea-agents@6.4.0 mcp`." },
+  rea_command: { type: "string", def: "", help: "Command that starts REA's MCP server, split on spaces (e.g. `rea mcp` for a global install). Empty: `npx -y rea-agents@6.9.0 mcp`." },
   codegraph: { type: "string", def: "auto", help: "auto: sessions in a project that already has a .codegraph/ index get the codegraph MCP tools. off: never." },
   codegraph_bin: { type: "string", def: "", help: "Path to a codegraph executable to use instead of the one bundled with the app. Empty: bundled, then PATH." },
   codegraph_timeout_min: { type: "number", def: 30, help: "Stop a CodeGraph init/re-index that runs longer than this many minutes. 0: no limit." },

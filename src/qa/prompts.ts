@@ -1,7 +1,7 @@
 /**
  * What each QA job is told. Pure: text in, text out (docs/design/qa-pipeline.md §8).
  */
-import type { Batching, BugId, Driver, Feature, FeatureId, Launch, Plan, Run, Stage } from "./types";
+import type { Area, Batching, BugId, Driver, Feature, FeatureId, Launch, MapUnit, Plan, Run, Stage } from "./types";
 
 export interface PromptInputs {
   launch: Launch;
@@ -11,6 +11,9 @@ export interface PromptInputs {
   note: string;
   baseUrl: string | null;
   features: readonly Feature[];
+  /** A map job's unit as it stands in the map (sectionOf) and every area, for the borders. Empty for the other stages. */
+  mapText: string;
+  areas: readonly Area[];
   plans: ReadonlyMap<FeatureId, Plan>;
   runs: ReadonlyMap<FeatureId, Run>;
   bugs: ReadonlyMap<BugId, { id: BugId; path: string; title: string; url: string; kind: string; capture: string | null; body: string }>;
@@ -74,16 +77,7 @@ const HOW_TO_RECORD = `How to record: pass (say what you saw in note); fail (bug
 
 const pairText = (cap: number, body: string): string => `\nYou lead a Hydra pair. ${body.replaceAll("{cap}", String(cap))}\n`;
 
-function mapPrompt(i: PromptInputs): string {
-  const agent = `Map the user-facing features of this product into \`${FEATURES_FILE}\`, so a test flow can be written and run per feature.
-${APP(i.baseUrl)}
-${BROWSER}
-A feature is one thing a user does, named the way they would say it ("Checkout", "Invite a teammate"). Write the
-high-level journeys first; under each, the specific things a user does inside it, marked with \`parent: <journey id>\`
-(one level only). Aim for 5 to 40 features in all.
-Write ONLY \`${FEATURES_FILE}\`, in exactly this format:
-# Features
-## Checkout
+const MAP_FORMAT = `## Checkout
 id: checkout
 where: /cart, /checkout
 A buyer pays for the cart with a saved or a new card.
@@ -91,12 +85,64 @@ A buyer pays for the cart with a saved or a new card.
 id: apply-discount
 parent: checkout
 where: /cart
-A buyer enters a code and sees the total drop.
-Rules: \`id:\` lowercase letters, digits and dashes, unique. Keep every existing feature's id exactly. Drop any \`plans:\`
+A buyer enters a code and sees the total drop.`;
+
+const SAVE_MAP = `Save your work by calling qa_map with the WHOLE text for your unit; the text below is its starting point. Never edit \`${FEATURES_FILE}\` yourself: the server writes it from what you pass and keeps every feature's id. A feature you rename keeps its id when its title or its \`where:\` still matches; when it would not be recognised, write \`was: <old-id>\` on the renamed entry. A feature that no longer exists is not left out silently: add a line \`drop: id-1, id-2\`. The reply says what was saved, or why nothing was and what to fix, so call it again. "No changes." is a fine outcome when the starting text is already right.`;
+
+const startOf = (text: string): string => {
+  const t = text.trim();
+  return !t || t === "# Features" ? "There is nothing saved yet: start from scratch." : `Starting text:\n\`\`\`\n${t}\n\`\`\``;
+};
+
+const whereOf = (a: Area): string => (a.where.length ? a.where.join(", ") : "no paths");
+
+function mapPrompt(i: PromptInputs, unit: MapUnit): string {
+  const common = `${APP(i.baseUrl)}\n${BROWSER}`;
+  const tail = `${BUGS}\nNo feature is needed for bug_log in this job. Change no other file.\n${openBugs(i.openBugs)}`;
+
+  if (unit === "areas") {
+    return `Survey this product and split it into 3 to 15 areas a user would recognise: its main sections or big workflows, each reachable from a page or a group of pages.
+${common}
+Write each area as:
+# Shop
+area: shop
+where: /cart, /checkout
+One line on what the area covers.
+Rules: \`area:\` lowercase letters, digits and dashes, unique. \`where:\` lists the path prefixes the area lives on. Write NO features: the server places the existing features in the area whose \`where:\` fits them, and each area is mapped by its own job afterwards. Open the app and read its navigation before you write.
+${SAVE_MAP}
+${startOf(i.mapText)}
+${tail}`;
+  }
+
+  if (unit !== "map") {
+    const here = i.areas.find((a) => `area:${a.id}` === unit);
+    const others = i.areas.filter((a) => a !== here);
+    const borders = others.length ? `The other areas have their own jobs, so do not map them. Their borders, so you know where yours ends:\n${others.map((a) => `- ${a.title} (${whereOf(a)})`).join("\n")}` : "";
+    return `Map the area "${here?.title ?? unit.slice(5)}" of this product (${here ? whereOf(here) : "see the starting text"}): the features a user finds in it, so a test flow can be written and run per feature.
+${common}
+Map only this area. A feature is one thing a user does, named the way they would say it. Write the high-level journeys first; under each, the specific things a user does inside it, marked with \`parent: <journey id>\` (one level only). Aim for 5 to 40 features in this area.
+${borders}
+Your text is the area heading as it stands (keep its \`# \` line and \`area:\` line; you may sharpen the title, \`where:\` and summary), then its features, each in this format:
+${MAP_FORMAT}
+Rules: \`id:\` lowercase letters, digits and dashes. Drop any \`plans:\` line. Check each feature in the browser.
+${SAVE_MAP}
+${startOf(i.mapText)}
+${tail}`;
+  }
+
+  const agent = `Map the user-facing features of this product, so a test flow can be written and run per feature.
+${common}
+A feature is one thing a user does, named the way they would say it ("Checkout", "Invite a teammate"). Write the
+high-level journeys first; under each, the specific things a user does inside it, marked with \`parent: <journey id>\`
+(one level only). Aim for 5 to 40 features in all.
+Write the whole map in exactly this format:
+# Features
+${MAP_FORMAT}
+Rules: \`id:\` lowercase letters, digits and dashes, unique. Drop any \`plans:\`
 line. Check each feature in the browser.
-${BUGS}
-No feature is needed for bug_log in this job. Change no other file.
-${openBugs(i.openBugs)}`;
+${SAVE_MAP}
+${startOf(i.mapText)}
+${tail}`;
   if (i.pairCap === null) return agent;
   return (
     agent +
@@ -105,8 +151,8 @@ ${openBugs(i.openBugs)}`;
       `Split the product into its top-level areas (navigation sections; at most {cap}). Open one head per
 area with subagent_create, isolate: false. Brief each head: "Map the area <name> (<paths>) in the browser: every journey
 and every specific thing a user does in it, in the features.md section format above, with parent: lines. Do NOT write
-any file. Log broken things with bug_log. Return the sections as text in your final message." Wait for all heads with
-subagent_wait. Then YOU write ${FEATURES_FILE} alone: merge the sections, dedupe ids, keep existing ids. Close the heads.`,
+any file and do NOT call qa_map. Log broken things with bug_log. Return the sections as text in your final message." Wait for all heads with
+subagent_wait. Then YOU call qa_map once with the merged text: merge the sections, dedupe ids, keep the existing features of the starting text (and their \`was:\`/\`drop:\` lines when they changed). Close the heads.`,
     )
   );
 }
@@ -206,10 +252,12 @@ export function jobPrompt(i: PromptInputs): { visible: string; title: string; in
   let instructions: string;
   let first: string;
   switch (l.stage) {
-    case "map":
-      instructions = mapPrompt(i);
-      first = "Features";
+    case "map": {
+      const unit = l.units[0];
+      instructions = mapPrompt(i, unit);
+      first = unit === "map" ? "Features" : unit === "areas" ? "Areas" : (i.areas.find((a) => `area:${a.id}` === unit)?.title ?? unit.slice(5));
       break;
+    }
     case "plan":
       instructions = planPrompt(i, l.units);
       first = titleOf(i, l.units[0]);

@@ -19,13 +19,14 @@ export type Driver =
 export type Scope =
   | { kind: "all" }
   | { kind: "features"; ids: string[] }
+  | { kind: "areas"; ids: string[] }
   | { kind: "bugs"; ids: string[] };
 
 /** Absent key = stage skipped. At least one key (400 otherwise). Order is always STAGES order. */
 export interface StageSettings {
-  map?: Record<string, never>;
+  map?: { survey?: boolean };                          // survey: split the product into areas first; default false
   plan?: { batching: Batching; replan?: boolean };
-  test?: { batching: Batching };
+  test?: { batching: Batching; parallel?: number };   // parallel: 1..3, default 1; only with batching "each"
   fix?: { batching: Batching };
 }
 
@@ -39,12 +40,12 @@ export interface PipelineRequest {
   baseUrl?: string | null;
 }
 
-/** The config as the server stored it: defaults resolved (replan is always a boolean). */
+/** The config as the server stored it: defaults resolved (replan is always a boolean, test.parallel a number). */
 export interface PipelineConfig {
   stages: {
-    map?: Record<string, never>;
+    map?: { survey: boolean };
     plan?: { batching: Batching; replan: boolean };
-    test?: { batching: Batching };
+    test?: { batching: Batching; parallel: number };
     fix?: { batching: Batching };
   };
   scope: Scope;
@@ -124,10 +125,21 @@ export interface BoardBug {
   updatedAt: number;
 }
 
+/** One area of a big product's map. `updatedAt` is the newest qa_map write for the area (null if none yet). */
+export interface BoardArea {
+  id: string;
+  title: string;
+  where: string[];
+  features: number;
+  updatedAt: number | null;
+  activity: Activity;
+}
+
 export interface BoardFeature {
   id: string;
   title: string;
   where: string[];
+  area: string | null;                // null in the flat layout
   parent: string | null;
   depth: 0 | 1;
   summary: string;
@@ -139,7 +151,7 @@ export interface BoardFeature {
 
 export interface QaBoard {
   browser: boolean;
-  map: { exists: boolean; problem: string | null; updatedAt: number | null; activity: Activity };
+  map: { exists: boolean; layout: "flat" | "areas"; problem: string | null; updatedAt: number | null; activity: Activity; areas: BoardArea[] };
   features: BoardFeature[];
   bugsWithoutFeature: BoardBug[];
   plansWithoutFeature: Array<{ slug: string; title: string; steps: number; problem: string | null; path: string }>;
@@ -185,7 +197,7 @@ export type StepId = string & { readonly __brand: "StepId" };
 export type StepPath = string & { readonly __brand: "StepPath" };
 export type NonEmpty<T> = readonly [T, ...T[]];
 
-export type Unit = "map" | FeatureId | BugId;
+export type Unit = MapUnit | FeatureId | BugId;
 
 export interface Feature { id: FeatureId; title: string; where: string[]; parent: FeatureId | null; summary: string }
 export interface PlanStep { id: StepId; action: string; expected: string; path: StepPath | null }
@@ -194,19 +206,27 @@ export interface Plan { feature: FeatureId; title: string; intro: string; steps:
 /** A qa_pipelines row, parsed. `units` are the units of control's stage, fixed when that stage opened (null while held or ended). */
 export interface Pipeline { id: PipelineId; root: string; config: PipelineConfig; control: Control; units: Unit[] | null; createdAt: number }
 
-/** A qa_jobs row, parsed. Written at launch; afterwards only nudged_turns, problem and settled_at change (jobs.ts only). */
+/** A qa_jobs row, parsed. Written at launch; afterwards only nudged_turns, problem, failed_units and settled_at change (jobs.ts only). */
 export interface Job {
   id: JobId; pipeline: PipelineId; root: string; stage: Stage; units: NonEmpty<Unit>;
   session: string | null; error: string | null;
-  /** Artifact signatures at launch: map → { map: sig|null }; plan → { [featureId]: sig|null }; else {}. */
+  /** Artifact signatures at launch: plan → { [featureId]: sig|null }; else {}. */
   sigs: Record<string, string | null>;
   /** lead.turns when the merge nudge was sent; null = not nudged. */
   nudgedTurns: number | null;
-  problem: string | null; startedAt: number; settledAt: number | null;
+  problem: string | null;
+  /**
+   * With a problem: the units that failed their artifact check. null means the whole job failed: a job-level problem
+   * (unmerged heads, a lost session) or a row written before this column existed. Always null without a problem.
+   */
+  failed: readonly Unit[] | null;
+  startedAt: number; settledAt: number | null;
 }
 
 export interface Snapshot {
-  features: readonly Feature[];
+  features: readonly MapFeature[];
+  areas: readonly Area[];
+  layout: "flat" | "areas";
   mapExists: boolean;
   plans: ReadonlyMap<FeatureId, { steps: number; problem: string | null }>;
   /** Open = status new|accepted. feature = stored ?? featureForUrl ?? null (same rule as the board). */
@@ -218,7 +238,7 @@ export interface Snapshot {
 }
 
 export type Launch =
-  | { stage: "map"; units: readonly ["map"] }
+  | { stage: "map"; units: readonly [MapUnit] }
   | { stage: "plan" | "test"; units: NonEmpty<FeatureId> }
   | { stage: "fix"; units: NonEmpty<BugId> };
 
@@ -227,3 +247,17 @@ export type Decision =
   | { kind: "launch"; launches: NonEmpty<Launch> }
   /** units: present exactly when control becomes running(stage): that stage's frozen units. */
   | { kind: "control"; control: Control; units: Unit[] | null };
+
+export type AreaId = string & { readonly __brand: "AreaId" };
+
+/** A slice of a big product's feature map, mapped by its own job. Its id is not a feature id and is never a plan's file name. */
+export interface Area { id: AreaId; title: string; where: string[]; summary: string }
+
+/** A feature as read from `lab/features.md`: `area` is null in the flat layout and above the first area heading. */
+export interface MapFeature extends Feature { area: AreaId | null }
+
+/** What a map job writes: the whole flat map, the list of areas, or one area's features. */
+export type MapUnit = "map" | "areas" | `area:${string}`;
+
+/** A qa_map_writes row: one accepted qa_map call. `changed` is false when the file already held the same text. */
+export interface MapWrite { job: JobId; unit: MapUnit; changed: boolean; dropped: FeatureId[]; sig: string; at: number }

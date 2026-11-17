@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { ClipboardCheck } from "lucide-react";
+import { ClipboardCheck, SearchX } from "lucide-react";
 import { toast } from "sonner";
 import { Empty, Spinner } from "@/components/ui/misc";
 import { usePairs } from "@/lib/queries";
 import { useQaActions, useQaBoard } from "./api";
-import type { PipelineRequest, Stage } from "./api";
+import type { BoardArea, PipelineRequest, Stage } from "./api";
+import { AreaRows } from "./AreaRows";
 import { FeatureDetailPane } from "./FeatureDetailPane";
+import { FeatureFilterBar } from "./FeatureFilterBar";
 import { FeatureGrid } from "./FeatureGrid";
 import type { RowAction } from "./FeatureRow";
-import { bugFixRequest, defaultForm, findBug, isBusy, mapCell, phaseOf, pipelineRequest, prunePicked, rowRequest, runBlock, scopeLabel, scopeOf, since, type RunForm } from "./logic";
+import { NO_QUERY, areaRemapRequest, bugFixRequest, bugsFixRequest, defaultForm, featureRows, findBug, isBusy, isFiltering, liveQuery, mapCell, phaseOf, pickShown, pipelineRequest, prunePicked, rowRequest, runBlock, scopeLabel, scopeOf, since, toggleShown, type FeatureQuery, type RunForm } from "./logic";
 import { OrphanPlans } from "./OrphanPlans";
 import { PipelineStrip } from "./PipelineStrip";
 import { RunBar } from "./RunBar";
@@ -17,6 +19,8 @@ import { CellView } from "./Status";
 import { UnsortedBugs } from "./UnsortedBugs";
 import type { QaIntent } from "./open";
 
+const NO_AREAS: readonly BoardArea[] = [];
+
 export function QaBoardView({ root, intent, onIntentDone }: { root: string; intent: QaIntent | null; onIntentDone: () => void }) {
   const q = useQaBoard(root);
   const actions = useQaActions(root);
@@ -24,6 +28,8 @@ export function QaBoardView({ root, intent, onIntentDone }: { root: string; inte
   const [driver, setDriver] = useQaDriver();
   const [edited, setEdited] = useState<RunForm | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
+  const [query, setQuery] = useState<FeatureQuery>(NO_QUERY);
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [open, setOpen] = useState<string | null>(null);
   const [focusBug, setFocusBug] = useState<string | null>(null);
   const board = q.data;
@@ -43,6 +49,9 @@ export function QaBoardView({ root, intent, onIntentDone }: { root: string; inte
     onIntentDone();
   }, [intent, board, onIntentDone]);
 
+  const areas = board?.map.layout === "areas" ? board.map.areas : NO_AREAS;
+  const activeQuery = useMemo(() => liveQuery(query, areas), [query, areas]);
+  const view = useMemo(() => featureRows(board?.features ?? [], activeQuery, collapsed), [board, activeQuery, collapsed]);
   const form = useMemo(() => edited ?? defaultForm(!!board?.map.exists), [edited, board?.map.exists]);
 
   if (q.isPending) {
@@ -59,7 +68,7 @@ export function QaBoardView({ root, intent, onIntentDone }: { root: string; inte
   const busy = isBusy(phase);
   const pending = actions.start.isPending || actions.cont.isPending || actions.stop.isPending;
   const pickedNow = prunePicked(picked, board.features);
-  const scope = scopeOf(pickedNow, board.features);
+  const scope = scopeOf(pickedNow, board.features, activeQuery.area);
   const driverMissing = driver.kind === "pair" && !!pairs.data && !pairs.data.some((p) => p.id === driver.pairId);
   const blockOf = (stages: readonly Stage[]) => runBlock({ stages, browser: board.browser, featureCount: board.features.length, driverMissing });
   const go = (req: PipelineRequest) => {
@@ -78,7 +87,7 @@ export function QaBoardView({ root, intent, onIntentDone }: { root: string; inte
         phase={phase}
         pipeline={pipeline}
         scope={scope}
-        scopeText={scopeLabel(scope, board.features.length)}
+        scopeText={scopeLabel(scope, board.features.length, areas)}
         pickedCount={pickedNow.length}
         onClearPicked={() => setPicked([])}
         form={form}
@@ -105,6 +114,7 @@ export function QaBoardView({ root, intent, onIntentDone }: { root: string; inte
               )}
             </div>
           )}
+          {board.map.layout === "areas" && <AreaRows areas={board.map.areas} busy={busy || pending} onRemap={(id) => go(areaRemapRequest(id, form, driver))} />}
           {board.features.length === 0 ? (
             <Empty
               icon={mapping ? <Spinner className="size-5" /> : <ClipboardCheck />}
@@ -112,26 +122,36 @@ export function QaBoardView({ root, intent, onIntentDone }: { root: string; inte
               hint={mapping ? "An agent is writing lab/features.md." : board.map.exists ? (board.map.problem ?? "lab/features.md lists no features.") : "Run starts by mapping the features, then plans and tests each one."}
             />
           ) : (
-            <FeatureGrid
-              features={board.features}
-              open={open}
-              picked={pickedNow}
-              busy={busy}
-              onOpen={(id) => {
-                setOpen(id);
-                setFocusBug(null);
-              }}
-              onPick={(id, on) => setPicked(on ? [...pickedNow, id] : pickedNow.filter((x) => x !== id))}
-              onPickAll={(on) => setPicked(on ? board.features.map((f) => f.id) : [])}
-              onAction={(a: RowAction, id) => go(rowRequest(a, id, form, driver))}
-            />
+            <>
+              <FeatureFilterBar features={board.features} areas={areas} query={activeQuery} shown={view.matched.length} onChange={setQuery} onSelectShown={() => setPicked(pickShown(view.matched))} />
+              {view.matched.length === 0 ? (
+                <Empty icon={<SearchX />} title="No feature matches" hint="Loosen the search or press Reset." />
+              ) : (
+                <FeatureGrid
+                  rows={view.rows}
+                  matched={view.matched}
+                  locked={isFiltering(activeQuery)}
+                  open={open}
+                  picked={pickedNow}
+                  busy={busy}
+                  onOpen={(id) => {
+                    setOpen(id);
+                    setFocusBug(null);
+                  }}
+                  onPick={(id, on) => setPicked(on ? [...pickedNow, id] : pickedNow.filter((x) => x !== id))}
+                  onPickAll={() => setPicked(toggleShown(pickedNow, view.matched))}
+                  onToggle={(id) => setCollapsed((c) => (c.has(id) ? new Set([...c].filter((x) => x !== id)) : new Set([...c, id])))}
+                  onAction={(a: RowAction, id) => go(rowRequest(a, id, form, driver))}
+                />
+              )}
+            </>
           )}
-          <UnsortedBugs root={root} bugs={board.bugsWithoutFeature} features={choices} busy={busy} pending={pending} focusBug={focusBug} onFix={(id) => go(bugFixRequest(id, driver))} onStatus={onStatus} onFeature={(id, f) => actions.setBug.mutate({ id, feature: f })} />
+          <UnsortedBugs root={root} bugs={board.bugsWithoutFeature} features={choices} busy={busy} pending={pending} focusBug={focusBug} onFix={(id) => go(bugFixRequest(id, driver))} onFixMany={(ids) => go(bugsFixRequest(ids, driver))} onStatus={onStatus} onFeature={(id, f) => actions.setBug.mutate({ id, feature: f })} />
           <OrphanPlans plans={board.plansWithoutFeature} pending={actions.deletePlan.isPending} onDelete={(slug) => actions.deletePlan.mutate(slug)} />
         </div>
         {feature && (
           <aside className="max-h-[50%] min-h-0 shrink-0 border-t border-line @[800px]:max-h-none @[800px]:w-90 @[800px]:border-t-0 @[800px]:border-l">
-            <FeatureDetailPane root={root} feature={feature} busy={busy} pending={pending} focusBug={focusBug} onClose={() => setOpen(null)} onAction={(a) => go(rowRequest(a, feature.id, form, driver))} onFix={(id) => go(bugFixRequest(id, driver))} onStatus={onStatus} />
+            <FeatureDetailPane root={root} feature={feature} busy={busy} pending={pending} focusBug={focusBug} onClose={() => setOpen(null)} onAction={(a) => go(rowRequest(a, feature.id, form, driver))} onFix={(id) => go(bugFixRequest(id, driver))} onFixMany={(ids) => go(bugsFixRequest(ids, driver))} onStatus={onStatus} />
           </aside>
         )}
       </div>

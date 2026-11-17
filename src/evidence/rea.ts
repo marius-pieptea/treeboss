@@ -18,7 +18,7 @@ import { getSetting } from "../settings";
 export const REA_NAME = "rea";
 /** Homebrew's prefixes: /opt/homebrew on Apple silicon, /usr/local on Intel. */
 export const BREW_PREFIXES = ["/opt/homebrew", "/usr/local"];
-export const REA_VERSION = "6.4.0";
+export const REA_VERSION = "6.9.0";
 export const REA_HINT = "REA is available (the rea MCP server): use it to inspect software you have no source for (binaries, Electron apps, APKs, WASM). It returns findings with their evidence and limits: report them the same way. When the evidence_* tools exist, start an investigation first, save each REA result that matters with evidence_save_result (keep its evidence and limits), and record each feature or UI design it shows as evidence_finding.";
 
 export interface ReaLaunch {
