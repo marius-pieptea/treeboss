@@ -52,7 +52,7 @@ for (const theme of ["dark", "light"] as const) {
       await page.waitForTimeout(250);
       await shot(`chatui-${t}-runwith`);
       const body = await page.locator("[data-run-with]").innerText();
-      check(`${t}: Run with offers Harness and Hydra, with engine and effort under Harness`, ["Harness", "Hydra", "Engine", "Effort"].every((w) => body.includes(w)));
+      check(`${t}: Run with offers Single engine and Hydra pair, with engine and effort under Single engine`, ["Single engine", "Hydra pair", "Engine", "Effort"].every((w) => body.includes(w)));
       await page.locator('[data-run-tab="hydra"]').click();
       await page.getByText("Fake Hydra").first().waitFor();
       await page.waitForTimeout(250);
@@ -145,7 +145,7 @@ for (const theme of ["dark", "light"] as const) {
       await page.waitForSelector("[data-chat-head]", { timeout: 25000 });
       await page.waitForTimeout(1500);
       await shot(`chatui-${t}-hydra-working`);
-      check(`${t}: shelf shows a lead and one chip per head`, (await page.locator("[data-shelf-head]").count()) === 2 && /Lead/.test(await page.locator("[data-shelf]").innerText()));
+      check(`${t}: the heads rail has one row per head`, (await page.locator("[data-shelf-head]").count()) === 2);
       check(`${t}: thread has ONE card per head`, (await page.locator("[data-chat-head]").count()) === 2);
       await mode(page, "trace").click();
       await page.waitForTimeout(500);

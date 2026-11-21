@@ -162,11 +162,12 @@ const VERBS: Record<string, [string, string]> = {
 };
 
 /** "Ran 3 commands, read 2 files, edited a file": the one-line summary of a group. */
-export function summarizeTools(tools: Array<{ name: string }>): string {
+export function summarizeTools(tools: Array<{ name: string }>, extra?: Record<string, [string, string]>): string {
   const counts = new Map<string, number>();
   for (const t of tools) counts.set(t.name, (counts.get(t.name) ?? 0) + 1);
   const parts = [...counts.entries()].map(([name, n]) => {
-    const v = VERBS[name];
+    // `extra` is keyed by the tool's own name, without the `mcp__server__` prefix.
+    const v = VERBS[name] ?? extra?.[name.replace(/^mcp__[^_]+__/, "")];
     if (v) return n === 1 ? v[0] : v[1].replace("{n}", String(n));
     const short = name.replace(/^mcp__[^_]+__/, "").replace(/_/g, " ");
     return n === 1 ? `called ${short}` : `called ${short} ×${n}`;

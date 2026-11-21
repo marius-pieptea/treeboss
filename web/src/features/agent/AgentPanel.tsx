@@ -11,7 +11,7 @@ import type { TranscriptItem } from "@/lib/transcript";
 import type { SessionView, TerminalInfo, TurnRow } from "@/lib/types";
 import { cn, money, tokens } from "@/lib/utils";
 import { DropdownMenu, Tooltip } from "@/components/ui/overlay";
-import { Badge, Kbd, Skeleton, StatusDot } from "@/components/ui/misc";
+import { Badge, Kbd, Skeleton, StatusDot, WorkingDots } from "@/components/ui/misc";
 import { ask, confirm } from "@/components/ui/dialogs";
 import { Transcript, type SessionLabels } from "./Transcript";
 import { FileLinkScope } from "./FileLinks";
@@ -25,6 +25,7 @@ import { WaitingChip } from "./WaitingChip";
 import { openHandoff } from "./HandoffDialog";
 import { loadViewMode, otherMode, saveViewMode, shelfFor, terminalResume, type ViewMode } from "./chat-logic";
 import { useHeadActions } from "@/features/heads/actions";
+import { activityBySession } from "@/features/heads/model";
 import { FailureCard, RunStrip, TurnSummary } from "./RunStrip";
 import { NextSteps } from "./NextSteps";
 import { bus } from "@/lib/bus";
@@ -116,7 +117,7 @@ function Header({ session, mode, onMode, onRename, onClose, onDelete, onStop, on
       <div className="flex items-center gap-2">
         <h2 className="min-w-0 max-w-full text-[13px] font-medium">
           <SessionSwitcher activeId={session.id} title={`${session.title} (double-click to rename)`} onDoubleClick={onRename}>
-            <StatusDot status={session.status} size={8} />
+            {session.status === "running" ? <WorkingDots className="text-fg" label="running" /> : <StatusDot status={session.status} size={8} />}
             <span className="truncate">{session.title}</span>
           </SessionSwitcher>
         </h2>
@@ -124,9 +125,9 @@ function Header({ session, mode, onMode, onRename, onClose, onDelete, onStop, on
         <NewSessionButton />
         {(session.mode === "ask" || session.mode === "plan") && <ModeBadge mode={session.mode} />}
         <VerifyToggle session={session} verify={verify} />
-        <div role="tablist" aria-label="View" className="flex shrink-0 items-center gap-0.5 rounded-md bg-raised p-0.5">
+        <div role="tablist" aria-label="View" className="flex shrink-0 items-center gap-1">
           {(["chat", "trace"] as const).map((m) => (
-            <button key={m} role="tab" aria-selected={mode === m} data-view-mode={m} onClick={() => onMode(m)} title={`${m === "chat" ? "Chat" : "Trace"} view (${isMac ? "⌘" : "Ctrl"}.)`} className={cn("h-5 rounded px-2 text-[11px] font-medium capitalize outline-none transition-colors focus-visible:ring-1 focus-visible:ring-accent", mode === m ? "bg-panel text-fg shadow-sm ring-1 ring-line" : "text-fg-muted hover:text-fg")}>
+            <button key={m} role="tab" aria-selected={mode === m} data-view-mode={m} onClick={() => onMode(m)} title={`${m === "chat" ? "Chat" : "Trace"} view (${isMac ? "⌘" : "Ctrl"}.)`} className={cn("h-6 rounded-md px-1.5 text-xs capitalize outline-none transition-colors hover:bg-hover focus-visible:bg-hover", mode === m ? "font-medium text-fg" : "text-fg-muted hover:text-fg")}>
               {m}
             </button>
           ))}
@@ -307,6 +308,10 @@ export function AgentPanel() {
 
   const view = detail.data?.session ?? null;
   const children = detail.data?.children ?? [];
+  // The heads the lead is blocked on: their cards in the thread say so.
+  const awaiting = useMemo(() => view?.waiting_on?.map((w) => w.id), [view?.waiting_on]);
+  // The rail names what each running head is doing from the tail of the shared transcript.
+  const shelf = useMemo(() => shelfFor(view, detail.data?.children ?? [], activityBySession(stream.transcript.items)), [view, detail.data?.children, stream.transcript.items]);
   const here = pending && pending.sid === (sid ?? NEW_SESSION) ? pending : null;
   const liveStatus = sid ? stream.status[sid] : undefined;
   const status = liveStatus ?? view?.status;
@@ -426,7 +431,7 @@ export function AgentPanel() {
         <ThreadActionsProvider sessionId={sid} running={running} closed={(status ?? view?.status) === "closed"}>
           <FileLinkScope session={view} items={stream.transcript.items} running={running}>
             {mode === "chat" ? (
-              <ChatThread items={stream.transcript.items} focusSession={sid} heads={children} running={running} pending={here} error={view?.error} failed={status === "failed"} onRetry={() => retry.mutate()} retrying={retry.isPending} onOpenHead={(h) => headActions.open(h)} onMergeHead={(h) => void headActions.merge(h)} />
+              <ChatThread items={stream.transcript.items} focusSession={sid} heads={children} running={running} pending={here} error={view?.error} failed={status === "failed"} onRetry={() => retry.mutate()} retrying={retry.isPending} onOpenHead={(h) => headActions.open(h)} onMergeHead={(h) => void headActions.merge(h)} awaiting={awaiting} />
             ) : (
               <Transcript items={stream.transcript.items} labels={labels} focusSession={sid} running={running} footer={footer} />
             )}
@@ -444,10 +449,14 @@ export function AgentPanel() {
       )}
       {mode === "trace" && running && view && <RunStrip session={view} items={stream.transcript.items} heads={children} turn={lastTurn} onStop={() => stop.mutate()} />}
       <Composer
-        shelf={shelfFor(view, children)}
+        shelf={shelf}
         onOpenHead={(id) => {
           const h = children.find((c) => c.id === id);
           if (h) headActions.open(h);
+        }}
+        onMergeHead={(id) => {
+          const h = children.find((c) => c.id === id);
+          if (h) void headActions.merge(h);
         }}
         session={view}
         running={running}

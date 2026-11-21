@@ -3,16 +3,12 @@
  * calls, one compact card per head. No costs, tokens, durations or dividers anywhere (Trace has those).
  */
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, ArrowDown, Check, ChevronRight, ExternalLink, GitMerge, RotateCcw, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ChevronRight, ExternalLink, GitMerge, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { TranscriptItem } from "@/lib/transcript";
 import type { SessionView } from "@/lib/types";
 import { Button, IconButton } from "@/components/ui/button";
-import { EngineIcon } from "@/components/ui/engine-icon";
-import { StatusDot } from "@/components/ui/misc";
 import { shortModelName } from "@/lib/models-logic";
-import { RoleBadge } from "@/features/heads/RoleBadge";
-import { shortToolName } from "@/features/heads/model";
 import { CopyButton, ForkButton, RewindButton, useScrollToTurn } from "@/features/checkpoints/ThreadActions";
 import { AskFooter } from "./AskFooter";
 import { askTurnsById, followUpsFor, lastTextByTurn } from "./ask-logic";
@@ -21,8 +17,9 @@ import { AssistantText } from "./AssistantText";
 import { OpenFileButton } from "./FileLinks";
 import { CompactDivider } from "./ContextMeter";
 import { PlanThreadChip } from "./PlanFlow";
+import { StateMark } from "./StateMark";
 import { nextStick, showJumpPill } from "./scroll-logic";
-import { deriveChat, diffStat, hasLiveTail, headLine, isMergeReady, splitContext, splitInstructions, splitSkillCall, type ChatItem } from "./chat-logic";
+import { deriveChat, diffStat, hasLiveTail, headLine, isMergeReady, splitContext, splitInstructions, splitSkillCall, toolLabel, type ChatItem } from "./chat-logic";
 import { useSkills } from "@/features/settings/data";
 import { DesignThreadCard } from "@/features/design/ThreadCard";
 
@@ -50,26 +47,31 @@ function ToolsLine({ item }: { item: ToolsItem }) {
       <button
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="group flex max-w-full items-center gap-1.5 rounded-full border border-transparent py-0.5 pl-1.5 pr-2.5 text-left text-[12px] text-fg-faint outline-none transition-colors hover:border-line hover:bg-raised hover:text-fg-muted focus-visible:border-line focus-visible:text-fg-muted"
+        className="group flex h-6 max-w-full items-center gap-1.5 rounded-md px-1 text-left text-xs text-fg-muted outline-none transition-colors hover:bg-hover hover:text-fg focus-visible:bg-hover focus-visible:text-fg"
       >
         <ChevronRight className={cn("size-3 shrink-0 transition-transform duration-150", open && "rotate-90")} />
         {item.running ? <span className="shimmer-text truncate">{item.verb}</span> : <span className="truncate">{item.summary}</span>}
-        {failed && !item.running && <span className="shrink-0 text-red/80">· something failed</span>}
+        {failed && !item.running && <span className="shrink-0 text-red">· something failed</span>}
       </button>
       {open && (
-        <ul className="mb-1 ms-3 mt-1.5 flex animate-slide-up flex-col gap-1.5 border-s border-line ps-3.5">
-          {item.tools.map((t, i) => (
-            <li key={t.id} style={{ ["--i" as string]: i }} className="stagger animate-slide-up flex items-center gap-2 text-[12px] text-fg-faint">
-              <span className="step-ring" data-state={t.status}>
-                {t.status === "ok" ? <Check className="size-2.5" strokeWidth={3} /> : t.status === "running" ? null : <X className="size-2.5" strokeWidth={3} />}
-              </span>
-              <span className={cn("shrink-0 text-fg-muted", t.status === "running" && "shimmer-text")}>{shortToolName(t.name)}</span>
-              <span className="min-w-0 flex-1 truncate rounded-md bg-hover px-1.5 py-0.5 font-mono text-[11px]" title={t.arg}>
-                {t.arg.replace(/\s+/g, " ")}
-              </span>
-              <OpenFileButton arg={t.arg} className="-my-0.5" />
-            </li>
-          ))}
+        // A timeline: one mark per call, joined by a hairline that runs from the first mark to the last.
+        <ul className="relative mb-1 mt-0.5 flex animate-slide-up flex-col gap-0.5 ps-1">
+          <span aria-hidden className="absolute bottom-3 start-[10px] top-3 w-px bg-line-strong" />
+          {item.tools.map((t, i) => {
+            const label = toolLabel(t);
+            return (
+              <li key={t.id} style={{ ["--i" as string]: i }} className="stagger relative flex h-[22px] animate-slide-up items-center gap-2 text-xs">
+                <span className="relative flex shrink-0 bg-panel py-0.5">
+                  <StateMark state={t.status === "ok" ? "done" : t.status === "err" ? "failed" : "running"} />
+                </span>
+                <span className="shrink-0 font-mono text-fg">{label.name}</span>
+                <span className="min-w-0 flex-1 truncate font-mono text-label text-fg-muted" title={t.arg}>
+                  {label.arg}
+                </span>
+                <OpenFileButton arg={t.arg} className="-my-0.5" />
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>
@@ -77,81 +79,73 @@ function ToolsLine({ item }: { item: ToolsItem }) {
 }
 
 /**
- * One head in the thread, on one row so none of it is empty: status light, engine, role, then the line (what it is
- * doing, or what it came back with) taking all the room that is left, then the diff, Merge and Open. A long result
- * wraps to a second line instead of being cut off; a live tool line stays on one. Flat on purpose: the group around
- * it carries the frame, the pulsing light is the only motion, and the line shimmers only while the head is working.
- * No cost, tokens or durations (Trace has those).
+ * One head in the thread, as one flat card: the head's mark and title (so heads A, B and C can be told apart), the model
+ * on the right and an Open button; under it one line, what it is doing while it works (a tool call, or what it just
+ * said) or what it came back with; a finished head with changes ends in its diff and Merge. The rail above the composer
+ * carries the live gauge (elapsed time), so no durations here. The line shimmers only while the head is working.
  */
-function HeadCard({ item, head, onOpen, onMerge }: { item: HeadItem; head: SessionView | undefined; onOpen: (h: SessionView) => void; onMerge: (h: SessionView) => void }) {
-  const label = head?.role ?? head?.engine ?? item.session.slice(0, 8);
+function HeadCard({ item, head, awaited, onOpen, onMerge }: { item: HeadItem; head: SessionView | undefined; awaited: boolean; onOpen: (h: SessionView) => void; onMerge: (h: SessionView) => void }) {
+  const title = head?.title || head?.role || head?.engine || item.session.slice(0, 8);
   const status = head?.status ?? (item.activity?.running ? "running" : "idle");
   const running = status === "running";
   const failed = status === "failed";
   const stat = head ? diffStat(head) : null;
+  const ready = !!head && isMergeReady(head);
   const line = head ? headLine(head, item) : (item.activity?.label ?? item.result ?? "");
-  const engine = head ? `${head.engine}${head.model ? ` · ${shortModelName(head.model)}` : ""}` : "";
+  const model = head ? shortModelName(head.model ?? "") || head.engine : "";
+  const doingTool = running && item.activity?.kind === "tool";
   return (
-    <div data-chat-head={item.session} className={cn("flex min-h-8 min-w-0 items-center gap-2 rounded-md border bg-panel px-2 py-1 text-xs transition-colors", failed ? "border-red/30" : "border-transparent")}>
-      <span className="flex size-4 shrink-0 items-center justify-center">
-        {running ? <StatusDot status="running" size={8} /> : failed ? <AlertTriangle className="size-3.5 text-red" aria-label="failed" /> : <Check className="size-3.5 text-green" strokeWidth={2.6} aria-label="done" />}
-      </span>
-      {head && (
-        <span title={engine} className="flex shrink-0">
-          <EngineIcon engine={head.engine} className="size-3.5 opacity-70" />
+    <div data-chat-head={item.session} className={cn("flex min-w-0 flex-col gap-0.5 rounded-lg border bg-raised px-3 py-2 transition-colors", failed ? "border-red/30" : awaited && running ? "border-amber/30" : "border-line")}>
+      <div className="flex h-5 min-w-0 items-center gap-2">
+        <StateMark state={failed ? "failed" : running ? "running" : "done"} awaited={awaited && running} />
+        <span className="min-w-0 truncate text-xs font-medium text-fg" title={title}>
+          {title}
         </span>
+        {awaited && running && <span className="shrink-0 text-label text-amber">lead is waiting</span>}
+        {failed && <span className="shrink-0 text-label text-red">failed</span>}
+        <span className="flex-1" />
+        {model && (
+          <span title={head ? `${head.engine}${head.model ? ` · ${head.model}` : ""}` : undefined} className="shrink-0 font-mono text-label text-fg-muted">
+            {model}
+          </span>
+        )}
+        {head && (
+          <IconButton label={`Open ${title}`} size="icon-sm" onClick={() => onOpen(head)}>
+            <ExternalLink />
+          </IconButton>
+        )}
+      </div>
+      {line && (
+        <div title={line} className={cn("ps-5 text-xs", doingTool ? "truncate font-mono text-label shimmer-text" : running ? "line-clamp-2 text-fg-muted" : failed ? "line-clamp-2 text-red" : "line-clamp-2 text-fg-muted")}>
+          {line}
+        </div>
       )}
-      <RoleBadge role={head?.role} fallback={head ? undefined : label} />
-      <span className={cn("min-w-0 flex-1", running ? "shimmer-text truncate" : failed ? "line-clamp-2 text-red" : "line-clamp-2 text-fg-muted")} title={line}>
-        {line}
-      </span>
-      {stat && (
-        <span className="shrink-0 font-mono text-label tabular-nums text-fg-muted" title={`${stat.files} file${stat.files === 1 ? "" : "s"} changed`}>
-          <span className="text-green">+{stat.plus}</span> <span className="text-red">−{stat.minus}</span>
-        </span>
-      )}
-      {head && isMergeReady(head) && (
-        <Button size="xs" variant="outline" onClick={() => onMerge(head)}>
-          <GitMerge /> Merge
-        </Button>
-      )}
-      {head && (
-        <IconButton label={`Open ${label}`} size="icon-sm" onClick={() => onOpen(head)}>
-          <ExternalLink />
-        </IconButton>
+      {(stat || ready) && (
+        <div className="flex h-6 items-center gap-2 ps-5">
+          {stat && (
+            <span className="flex-1 font-mono text-label tabular-nums text-fg-muted" title={`${stat.files} file${stat.files === 1 ? "" : "s"} changed`}>
+              {stat.files} file{stat.files === 1 ? "" : "s"} · <span className="text-green">+{stat.plus}</span> <span className="text-red">−{stat.minus}</span>
+            </span>
+          )}
+          {!stat && <span className="flex-1" />}
+          {ready && head && (
+            <Button size="xs" variant="outline" onClick={() => onMerge(head)}>
+              <GitMerge /> Merge
+            </Button>
+          )}
+        </div>
       )}
     </div>
   );
 }
 
-/** The heads a lead is running, as one framed block: a live count on top, one card per head under it, so Hydra work reads as one thing. */
-function HeadLanes({ items, headById, onOpen, onMerge }: { items: HeadItem[]; headById: Map<string, SessionView>; onOpen: (h: SessionView) => void; onMerge: (h: SessionView) => void }) {
-  const states = items.map((h) => headById.get(h.session)?.status ?? (h.activity?.running ? "running" : "idle"));
-  const working = states.filter((st) => st === "running").length;
-  const failed = states.filter((st) => st === "failed").length;
-  const done = items.length - working - failed;
-  const progress = [working && `${working} working`, done && `${done} done`].filter(Boolean).join(" · ");
+/** The heads a lead opened, one card each. Consecutive cards stack with a small gap; each names itself, so there is no header. */
+function HeadLanes({ items, headById, awaiting, onOpen, onMerge }: { items: HeadItem[]; headById: Map<string, SessionView>; awaiting: Set<string>; onOpen: (h: SessionView) => void; onMerge: (h: SessionView) => void }) {
   return (
-    <section data-heads-group aria-label="Heads" className={cn("rounded-lg border bg-raised/40 p-1 transition-colors", failed && !working ? "border-red/25" : "border-line")}>
-      <header className="flex h-6 items-center gap-2 px-2 text-xs">
-        {/* Violet is the orchestration colour: the one place this block uses it. */}
-        <span className={cn("size-1.5 rounded-full", working ? "animate-pulse-dot bg-violet" : failed ? "bg-red" : "bg-green")} style={{ ["--pulse" as string]: "var(--violet)" }} />
-        <span className="font-medium text-fg">{items.length === 1 ? "Head" : "Heads"}</span>
-        <span className="font-mono text-label text-fg-muted">
-          {progress}
-          {failed > 0 && (
-            <>
-              {progress && " · "}
-              <span className="text-red">{failed} failed</span>
-            </>
-          )}
-        </span>
-      </header>
-      <div className="flex flex-col gap-1">
-        {items.map((h) => (
-          <HeadCard key={h.id} item={h} head={headById.get(h.session)} onOpen={onOpen} onMerge={onMerge} />
-        ))}
-      </div>
+    <section data-heads-group aria-label="Heads" className="flex flex-col gap-1.5">
+      {items.map((h) => (
+        <HeadCard key={h.id} item={h} head={headById.get(h.session)} awaited={awaiting.has(h.session)} onOpen={onOpen} onMerge={onMerge} />
+      ))}
     </section>
   );
 }
@@ -223,6 +217,8 @@ export interface ChatThreadProps {
   retrying: boolean;
   onOpenHead: (h: SessionView) => void;
   onMergeHead: (h: SessionView) => void;
+  /** Ids of the heads the lead is blocked on (subagent_wait): their cards say so. */
+  awaiting?: string[];
   className?: string;
 }
 
@@ -258,7 +254,7 @@ function UserMessage({ text, turnId }: { text: string; turnId?: string | null })
   );
 }
 
-export const ChatThread = memo(function ChatThread({ items, focusSession, heads, running, pending, error, failed, onRetry, retrying, onOpenHead, onMergeHead, className }: ChatThreadProps) {
+export const ChatThread = memo(function ChatThread({ items, focusSession, heads, running, pending, error, failed, onRetry, retrying, onOpenHead, onMergeHead, awaiting, className }: ChatThreadProps) {
   const scroller = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -287,6 +283,7 @@ export const ChatThread = memo(function ChatThread({ items, focusSession, heads,
   const latestTextId = useMemo(() => [...chat].reverse().find((c) => c.kind === "text")?.id, [chat]);
   useScrollToTurn(content);
   const headById = useMemo(() => new Map(heads.map((h) => [h.id, h])), [heads]);
+  const awaitingSet = useMemo(() => new Set(awaiting ?? []), [awaiting]);
   // What is on screen when the thread first has content is history and appears at once; only later items animate in.
   if (baseline.current === null && chat.length > 0) baseline.current = chat.length;
   const indexOf = useMemo(() => new Map(chat.map((c, i) => [c.id, i])), [chat]);
@@ -392,7 +389,7 @@ export const ChatThread = memo(function ChatThread({ items, focusSession, heads,
       case "plan":
         return focusSession ? <PlanThreadChip sessionId={focusSession} item={c} /> : null;
       case "head":
-        return <HeadCard item={c} head={headById.get(c.session)} onOpen={onOpenHead} onMerge={onMergeHead} />;
+        return <HeadCard item={c} head={headById.get(c.session)} awaited={awaitingSet.has(c.session)} onOpen={onOpenHead} onMerge={onMergeHead} />;
     }
   };
 
@@ -403,7 +400,7 @@ export const ChatThread = memo(function ChatThread({ items, focusSession, heads,
           {rows.map((r) =>
             r.kind === "heads" ? (
               <div key={r.id} className={cn(animate(r.items[0].id) && "animate-slide-up")}>
-                <HeadLanes items={r.items} headById={headById} onOpen={onOpenHead} onMerge={onMergeHead} />
+                <HeadLanes items={r.items} headById={headById} awaiting={awaitingSet} onOpen={onOpenHead} onMerge={onMergeHead} />
               </div>
             ) : (
               <div key={r.id} className={cn(animate(r.id) && "animate-slide-up")}>

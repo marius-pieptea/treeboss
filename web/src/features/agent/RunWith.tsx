@@ -33,11 +33,11 @@ export function PairChipInner({ pair }: { pair: Pair }) {
 export function RunTabs({ tab, setTab, hasPair, children }: { tab: RunTab; setTab: (t: RunTab) => void; hasPair: boolean; children: ReactNode }) {
   return (
     <div data-run-with>
-      <div role="tablist" aria-label="Run with" className="mb-1.5 grid grid-cols-2 gap-0.5 rounded-lg bg-raised p-0.5 text-[11.5px]">
+      <div role="tablist" aria-label="Run with" className="mb-1.5 grid grid-cols-2 gap-0.5 rounded-lg bg-raised p-0.5 text-xs">
         {(
           [
-            ["harness", "Harness", null],
-            ["hydra", "Hydra", <Network key="i" className="size-3" />],
+            ["harness", "Single engine", null],
+            ["hydra", "Hydra pair", <Network key="i" className="size-3" />],
           ] as const
         ).map(([id, label, icon]) => (
           <button

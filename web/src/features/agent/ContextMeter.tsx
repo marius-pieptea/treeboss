@@ -43,7 +43,8 @@ export function ContextMeter({ session }: { session: SessionView }) {
     },
     onError: (e: Error) => toast.error("Could not compact", { description: e.message }),
   });
-  if (!m) return null;
+  // Quiet until it matters: below half a window the composer stays plain (Hand off is also in the session menu).
+  if (!m || (m.level === "ok" && !showMeterLabel(m.fill))) return null;
   const busy = session.status === "running";
   const rows = breakdownRows(session);
   const hint = shouldHintHandoff(session);
@@ -62,7 +63,7 @@ export function ContextMeter({ session }: { session: SessionView }) {
         open={open}
         onOpenChange={setOpen}
         trigger={
-          <button data-context-meter data-level={m.level} aria-label={`Context: ${m.label}`} title={m.title} className={cn("flex h-6 shrink-0 items-center gap-1.5 rounded-md px-1 font-mono text-[10.5px] outline-none transition-colors hover:bg-hover focus-visible:bg-hover", LEVEL_TEXT[m.level])}>
+          <button data-context-meter data-level={m.level} aria-label={`Context: ${m.label}`} title={m.title} className={cn("flex h-6 shrink-0 items-center gap-1.5 rounded-md px-1 font-mono text-label outline-none transition-colors hover:bg-hover focus-visible:bg-hover", LEVEL_TEXT[m.level])}>
             <Ring fill={m.fill} level={m.level} />
             {showMeterLabel(m.fill) && m.label}
           </button>

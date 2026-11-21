@@ -4,7 +4,7 @@
  */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, Check, ChevronDown, FileText, Settings2, Square } from "lucide-react";
+import { ArrowUp, Check, ChevronRight, FileText, Settings2, Square } from "lucide-react";
 import { toast } from "sonner";
 import { get, post, url } from "@/lib/api";
 import { bus } from "@/lib/bus";
@@ -34,19 +34,19 @@ import { PairChipInner, PairList, RunTabs, type RunTab } from "./RunWith";
 import { takePendingPrefill } from "./prefill";
 import { setupChips } from "./SetupChips";
 import { TreebossToggle, setSessionTreeboss } from "./TreebossControl";
-import { sessionTreeboss, treebossDefault } from "./treeboss-logic";
+import { TREEBOSS_TIP, sessionTreeboss, treebossDefault } from "./treeboss-logic";
 import { StatusSlot } from "./StatusSlot";
 import { type Mode, isModeShortcut, modeView } from "./slot-logic";
 import { useAskDefault } from "./ask-data";
 import type { Shelf as ShelfModel } from "./chat-logic";
 import { goalPayload, type GoalDraft } from "./goal-logic";
-import { Checkbox, Select } from "@/components/ui/form";
+import { Checkbox, Select, Switch } from "@/components/ui/form";
 import { EngineIcon, ModelIcon } from "@/components/ui/engine-icon";
 import { EffortSlider, ModelPicker } from "@/components/ui/model-select";
 import { UsageHover } from "./UsageHover";
 import { shortModelName, showsModelMark } from "@/lib/models-logic";
 import { cachedCatalog, effortAfterEngineChange, loadCatalog, modelAfterEngineChange } from "@/lib/models";
-import { Button, IconButton } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/misc";
 import {
   EFFORTS,
@@ -79,7 +79,7 @@ function RefetchOnOpen({ refetch }: { refetch: () => unknown }) {
   return null;
 }
 
-const optionClass = "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] outline-none hover:bg-active focus-visible:bg-active";
+const optionClass = "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] outline-none hover:bg-active focus-visible:bg-active";
 
 interface SuggestionItem {
   key: string;
@@ -100,6 +100,8 @@ export interface ComposerProps {
   /** The lead and heads, for the status slot above the box (null when the session has neither a pair nor heads). */
   shelf?: ShelfModel | null;
   onOpenHead?: (id: string) => void;
+  /** Merge a finished head from its row on the rail. */
+  onMergeHead?: (id: string) => void;
   /** A message is going out: the thread shows it before the daemon answers. */
   onSendStart?: (text: string) => void;
   /** The send failed: the thread drops the pending message. */
@@ -112,7 +114,7 @@ interface Outgoing {
   design?: DesignIntent;
 }
 
-export function Composer({ session, running, sending = false, draft, setDraft, onStarted, onNewSession, shelf = null, onOpenHead, onSendStart, onSendFail }: ComposerProps) {
+export function Composer({ session, running, sending = false, draft, setDraft, onStarted, onNewSession, shelf = null, onOpenHead, onMergeHead, onSendStart, onSendFail }: ComposerProps) {
   const { workspace, root } = useWorkspace();
   // Read by the error handlers, which run after the draft has been cleared for the send.
   const draftRef = useRef(draft);
@@ -610,29 +612,44 @@ export function Composer({ session, running, sending = false, draft, setDraft, o
   const chipLabel = `${chipEngine || "engine"} · ${chipModel || "default"}`;
   /** A pair in words for the chip's title and aria-label: "Sonnet 5.5 leads Haiku 5.5 · Team". */
   const pairText = (p: Pair) => `${pairSummary(p, engines.data)} · ${p.title}`;
+  const chipEffort = session ? (session.effort ?? "") : eff.effort;
+  // Plain mono text, "Sonnet 5.5 · high": the engine's mark stays small in front (its hover shows usage).
   const chipInner = (
     <>
       <UsageHover engine={chipEngine}>
-        <EngineIcon engine={chipEngine} className="size-3.5 shrink-0" />
+        <EngineIcon engine={chipEngine} className="size-3 shrink-0 opacity-70" />
       </UsageHover>
-      {showsModelMark(chipEngine, chipModel) && <ModelIcon model={chipModel} engine={chipEngine} className="size-3.5 shrink-0" />}
-      <span className="hidden truncate @[340px]:inline">{shortModelName(chipModel) || "default"}</span>
+      {showsModelMark(chipEngine, chipModel) && <ModelIcon model={chipModel} engine={chipEngine} className="size-3 shrink-0" />}
+      <span className="hidden truncate @[300px]:inline">
+        {shortModelName(chipModel) || "default"}
+        {chipEffort ? ` · ${chipEffort}` : ""}
+      </span>
     </>
   );
-  const chipClass = "flex h-6 min-w-0 max-w-[200px] items-center gap-1.5 rounded-md px-1.5 text-[11.5px] text-fg-muted outline-none transition-colors";
+  const chipClass = "flex h-7 min-w-0 max-w-[220px] items-center gap-1.5 rounded-md px-1.5 font-mono text-label text-fg-muted outline-none transition-colors";
+  // Treeboss mode is set here, in the run popover; once it is on, its mark (and the gate status card) sits in the toolbar.
+  const treebossRow = (
+    <div data-treeboss-row className="flex h-9 items-center gap-2 border-t border-line px-3">
+      <span className="flex-1 text-[13px]" title={TREEBOSS_TIP}>
+        Treeboss mode
+      </span>
+      <Switch checked={treebossOn} disabled={!!closed || treebossSwitch.isPending} label="Treeboss mode" onChange={(on) => (session ? treebossSwitch.mutate(on) : setNewTreeboss(on))} />
+    </div>
+  );
 
   return (
     <div className="shrink-0 border-t border-line bg-panel">
-      <StatusSlot session={session} shelf={shelf} onOpenHead={onOpenHead ?? (() => {})} />
-      <div className="relative px-2.5 pb-2.5 pt-2.5">
+      <StatusSlot session={session} shelf={shelf} onOpenHead={onOpenHead ?? (() => {})} onMergeHead={onMergeHead} />
+      {/* When the heads rail is up it is the top of the box: no gap, and the box's top corners go square to meet it. */}
+      <div className="relative px-2.5 pb-2.5 pt-2.5 peer-data-[status-slot=shelf]:pt-0 peer-data-[status-slot=shelf]:[&_[data-composer]]:rounded-t-none">
         {suggestions.length > 0 && (
-          <div role="listbox" className="absolute inset-x-2.5 bottom-full mb-2 max-h-[240px] animate-slide-up overflow-y-auto rounded-xl border border-line-strong bg-overlay/95 p-1 shadow-pop backdrop-blur-md">
+          <div role="listbox" className="absolute inset-x-2.5 bottom-full mb-2 max-h-[240px] animate-slide-up overflow-y-auto rounded-lg border border-line-strong bg-overlay p-1 shadow-pop">
             {suggestions.map((s, i) => (
-              <button key={s.key} role="option" aria-selected={i === index} onMouseEnter={() => setIndex(i)} onMouseDown={(e) => e.preventDefault()} onClick={s.apply} className={cn("flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] outline-none", i === index && "bg-active")}>
+              <button key={s.key} role="option" aria-selected={i === index} onMouseEnter={() => setIndex(i)} onMouseDown={(e) => e.preventDefault()} onClick={s.apply} className={cn("flex min-h-7 w-full items-center gap-2 rounded-md px-2 py-1 text-left text-[13px] outline-none", i === index && "bg-hover")}>
                 {s.node}
               </button>
             ))}
-            <div className="flex items-center gap-2 border-t border-line px-2 pt-1 text-[10px] text-fg-faint">
+            <div className="mt-1 flex items-center gap-2 border-t border-line px-2 pt-1.5 font-mono text-label text-fg-muted">
               <Kbd>↑↓</Kbd> move <Kbd>↵</Kbd> choose <Kbd>esc</Kbd> close
             </div>
           </div>
@@ -653,7 +670,8 @@ export function Composer({ session, running, sending = false, draft, setDraft, o
               modeControl.toggle();
             }
           }}
-          className={cn("aura rounded-2xl border bg-raised shadow-sm transition-[background-color,border-color,box-shadow] focus-within:bg-panel focus-within:shadow-pop", planning ? "border-violet/50 ring-1 ring-violet/20 focus-within:border-violet" : asking ? "border-accent/50 ring-1 ring-accent/25 focus-within:border-accent" : "focus-within:border-accent/60", !planning && !asking && (running ? "border-accent/30" : "border-line"))}>
+          // One plain frame: the mode shows in the Build / Plan / Ask label, not in the border.
+          className="rounded-xl border border-line bg-raised transition-[background-color,border-color] focus-within:border-accent/60 focus-within:bg-panel">
           <textarea
             ref={area}
             value={draft}
@@ -673,7 +691,7 @@ export function Composer({ session, running, sending = false, draft, setDraft, o
             // The global :focus-visible ring is unlayered CSS and beats Tailwind's outline-none; the box around the
             // textarea (focus-within) already shows focus.
             style={{ outline: "none" }}
-            className="block max-h-[220px] min-h-[38px] w-full resize-none bg-transparent px-3 pb-1 pt-2.5 text-[13px] leading-[1.5] text-fg placeholder:text-fg-faint disabled:opacity-60"
+            className="block max-h-[220px] min-h-[38px] w-full resize-none bg-transparent px-3 pb-1 pt-2.5 text-[13px] leading-[1.5] text-fg placeholder:text-fg-muted disabled:opacity-60"
           />
           <ContextChips ctx={ctx} />
           <AttachChips
@@ -701,7 +719,7 @@ export function Composer({ session, running, sending = false, draft, setDraft, o
               ) : null;
             })()}
           />
-          <div className="@container flex items-center gap-1 px-1.5 pb-1.5">
+          <div className="@container flex items-center gap-2 px-1.5 pb-1.5">
             <PlusMenu
               att={attach}
               closed={!!closed}
@@ -719,7 +737,7 @@ export function Composer({ session, running, sending = false, draft, setDraft, o
 
             <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
               {session ? (
-                <SessionModelChip session={session} chipClass={chipClass} chipInner={sessionPair ? <PairChipInner pair={sessionPair} /> : chipInner} chipLabel={sessionPair ? pairText(sessionPair) : chipLabel} pair={sessionPair} />
+                <SessionModelChip session={session} chipClass={chipClass} chipInner={sessionPair ? <PairChipInner pair={sessionPair} /> : chipInner} chipLabel={sessionPair ? pairText(sessionPair) : chipLabel} pair={sessionPair} extra={treebossRow} />
               ) : (
                 <Popover
                   side="top"
@@ -736,7 +754,6 @@ export function Composer({ session, running, sending = false, draft, setDraft, o
                   trigger={
                     <button data-engine-chip data-pair-chip={pair ? "" : undefined} aria-label={`Run with: ${pair ? pairText(pair) : chipLabel}`} title={`${pair ? pairText(pair) : "Choose the harness or a Hydra pair"}${agent ? ` · agent: ${agent.title}` : ""}`} className={cn(chipClass, "hover:bg-hover hover:text-fg focus-visible:bg-hover", problem && "text-amber")}>
                       {pair ? <PairChipInner pair={pair} /> : chipInner}
-                      <ChevronDown className="!size-2.5 shrink-0 opacity-60" />
                     </button>
                   }
                 >
@@ -781,39 +798,33 @@ export function Composer({ session, running, sending = false, draft, setDraft, o
                     )}
                   </RunTabs>
                   {/* The agent sits under both tabs: it works with a harness and with a pair (a pair still decides the lead's engine). */}
-                  <div data-run-agent className="mt-1.5 flex items-center gap-2 border-t border-line px-2 pt-1.5">
-                    <span className="w-11 shrink-0 text-[11px] text-fg-muted">Agent</span>
-                    <Select
-                      size="sm"
-                      aria-label="Agent"
-                      value={agentName}
-                      onChange={chooseAgent}
-                      options={[{ value: "", label: "No agent", hint: "plain session" }, ...(agentsQuery.data ?? []).map((a) => ({ value: a.name, label: a.title, hint: a.engine ?? undefined }))]}
-                      placeholder="No agent"
-                      className="min-w-0 flex-1"
-                    />
-                    <IconButton
-                      label={(agentsQuery.data ?? []).length ? "Manage agents" : "Create an agent"}
-                      size="icon-sm"
-                      onClick={() => {
-                        setModelOpen(false);
-                        useUi.getState().openTab({ kind: "settings", page: "agents", title: "Agents" });
-                      }}
-                    >
-                      <Settings2 />
-                    </IconButton>
-                  </div>
+                  <button
+                    type="button"
+                    data-run-agent
+                    onClick={() => {
+                      setModelOpen(false);
+                      setSetupView("agent");
+                    }}
+                    className="mt-1.5 flex h-9 w-full items-center gap-2 border-t border-line px-3 text-left outline-none hover:bg-hover focus-visible:bg-hover"
+                  >
+                    <span className="flex-1 text-[13px]">Agent</span>
+                    <span className="max-w-[160px] truncate text-xs text-fg-muted">{agent?.title ?? "No agent"}</span>
+                    <ChevronRight className="size-3.5 shrink-0 text-fg-faint" aria-hidden />
+                  </button>
+                  {treebossRow}
                 </Popover>
               )}
             </div>
 
-            <TreebossToggle
-              on={treebossOn}
-              disabled={!!closed || treebossSwitch.isPending}
-              onToggle={() => (session ? treebossSwitch.mutate(!treebossOn) : setNewTreeboss(!treebossOn))}
-              sessionId={session?.id}
-              state={session?.treeboss_state}
-            />
+            {treebossOn && (
+              <TreebossToggle
+                on={treebossOn}
+                disabled={!!closed || treebossSwitch.isPending}
+                onToggle={() => (session ? treebossSwitch.mutate(!treebossOn) : setNewTreeboss(!treebossOn))}
+                sessionId={session?.id}
+                state={session?.treeboss_state}
+              />
+            )}
             <ModeSegment control={modeControl} />
 
             {session && <ContextMeter session={session} />}
@@ -824,8 +835,8 @@ export function Composer({ session, running, sending = false, draft, setDraft, o
               </Button>
             )}
             {running ? (
-              <Button variant="danger" size="sm" onClick={() => interrupt.mutate()} disabled={interrupt.isPending} aria-label="Stop the running turn" className="animate-pop">
-                <Square className="!size-2.5 fill-current" /> <span className="hidden @[380px]:inline">Stop</span>
+              <Button variant="danger" size="icon" onClick={() => interrupt.mutate()} disabled={interrupt.isPending} aria-label="Stop the running turn" title="Stop the running turn" className="size-7 animate-pop rounded-full">
+                <Square className="!size-2.5 fill-current" />
               </Button>
             ) : (
               <Button variant="primary" size="icon" onClick={submit} disabled={!canSend} aria-label={session ? "Send message" : "Start session"} className={cn("size-7 rounded-full transition-[opacity,transform] enabled:hover:scale-105 enabled:active:scale-95", !canSend && "opacity-40")}>

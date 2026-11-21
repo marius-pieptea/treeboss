@@ -107,6 +107,28 @@ export function toolVerb(tool: { name: string; arg: string }): string {
   return `Using ${shortToolName(tool.name)}…`;
 }
 
+/** The Hydra tools, in the words of a group's summary line ("Ran a command, opened 2 heads"). */
+const HEAD_VERBS: Record<string, [string, string]> = {
+  subagent_create: ["opened a head", "opened {n} heads"],
+  subagent_wait: ["waited on a head", "waited on heads {n} times"],
+};
+
+/**
+ * A tool call as the timeline shows it: a name and one short line. The Hydra tools say what they do instead of
+ * showing their JSON ("Open head" and the head's title); everything else keeps its own name and one line of argument.
+ */
+export function toolLabel(tool: { name: string; arg: string }): { name: string; arg: string } {
+  const base = tool.name.replace(/^mcp__[^_]+__/, "").replace(/^trb\//, "");
+  const flat = tool.arg.replace(/\s+/g, " ").trim();
+  if (base === "subagent_create") {
+    // The argument may be cut off mid-JSON, so read the title with a pattern rather than parsing it.
+    const title = /"title"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(flat)?.[1];
+    return { name: "Open head", arg: title ? title.replace(/\\"/g, '"') : "" };
+  }
+  if (base === "subagent_wait") return { name: "Wait for heads", arg: "" };
+  return { name: shortToolName(tool.name), arg: flat };
+}
+
 /**
  * The Chat view's items. Lines from the focus session become messages and one muted line per run of tool calls;
  * everything another session (a head) does folds into ONE card per head, placed where that head first spoke.
@@ -177,7 +199,7 @@ export function deriveChat(items: TranscriptItem[], focusSession: string | undef
       const running = c.tools.filter((t) => t.status === "running");
       c.running = running.length > 0;
       c.verb = running.length ? toolVerb(running[running.length - 1]) : null;
-      c.summary = summarizeTools(c.tools);
+      c.summary = summarizeTools(c.tools, HEAD_VERBS);
     } else if (c.kind === "head") {
       const a = acts.get(c.session) ?? null;
       c.activity = a;
@@ -227,6 +249,12 @@ export interface ShelfChip {
   awaited?: boolean;
   /** Finished with changes that can be merged (set only when true). */
   ready?: boolean;
+  /** What a running head is doing right now ("Read: src/a.ts"), when the transcript has said. */
+  activity?: string;
+  /** Seconds the running turn had run when the head was last fetched (running heads only). */
+  runningSec?: number;
+  /** The head's diff, when it changed files. */
+  stat?: { files: number; plus: number; minus: number };
 }
 
 export interface Shelf {
@@ -240,14 +268,31 @@ const chipState = (s: SessionView["status"]): ChipState => (s === "running" ? "r
  * The strip above the composer: the lead plus one chip per open head. Null when the session has neither a pair nor
  * heads, so a plain single-agent session carries no extra chrome.
  */
-export function shelfFor(session: SessionView | null, children: SessionView[]): Shelf | null {
+export function shelfFor(session: SessionView | null, children: SessionView[], activity?: Map<string, Activity>): Shelf | null {
   if (!session) return null;
   const heads = children.filter((c) => c.status !== "closed");
   if (!session.pair && heads.length === 0) return null;
   const waiting = waitingInfo(session);
   return {
     lead: { engine: session.engine, status: session.status, ...(waiting ? { waiting: { names: waiting.names, sinceMs: waiting.sinceMs } } : {}) },
-    heads: heads.map((h) => ({ id: h.id, label: h.role ?? h.engine, engine: h.engine, title: h.title, role: h.role ?? null, state: chipState(h.status), ...(waiting?.ids.includes(h.id) ? { awaited: true } : {}), ...(isMergeReady(h) ? { ready: true } : {}) })),
+    heads: heads.map((h) => {
+      const running = h.status === "running";
+      const doing = running ? activity?.get(h.id)?.label : undefined;
+      const stat = diffStat(h);
+      return {
+        id: h.id,
+        label: h.role ?? h.engine,
+        engine: h.engine,
+        title: h.title,
+        role: h.role ?? null,
+        state: chipState(h.status),
+        ...(waiting?.ids.includes(h.id) ? { awaited: true } : {}),
+        ...(isMergeReady(h) ? { ready: true } : {}),
+        ...(doing ? { activity: doing } : {}),
+        ...(running && h.running_for_sec != null ? { runningSec: h.running_for_sec } : {}),
+        ...(stat ? { stat } : {}),
+      };
+    }),
   };
 }
 

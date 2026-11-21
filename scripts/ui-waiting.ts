@@ -1,6 +1,6 @@
 /**
- * The waiting indicator, end to end: a lead blocked in subagent_wait shows who it waits on, in the shelf, the
- * session header and the sessions list; the head carries an "awaited" tag; it all clears when the wait ends.
+ * The waiting indicator, end to end: a lead blocked in subagent_wait shows who it waits on, in the session header
+ * and the sessions list; the head's row on the rail carries an "awaited" tag; it all clears when the wait ends.
  *   bun run scripts/ui-waiting.ts            (dark, then light, one process each)
  *   TRB_WEB_DIR=<dist> THEME=dark bun run scripts/ui-waiting.ts
  */
@@ -32,16 +32,17 @@ await withUi(
     await page.waitForSelector("header");
     await page.locator("button", { hasText: "Build the API" }).first().click();
 
-    await page.waitForSelector("[data-shelf-waiting]", { timeout: 20_000 });
-    const line = (await page.locator("[data-shelf-waiting]").textContent())?.trim() ?? "";
-    check("the shelf says who the lead waits on", /^waiting on api-head, \d+s$/.test(line), line);
-    check("the awaited head chip is tagged", (await page.locator("[data-shelf-head] [data-awaited]").count()) === 1);
-    check("the session header carries the same chip", (await page.locator("[data-waiting-chip]").filter({ hasText: "waiting on api-head" }).count()) >= 1);
+    // The rail rows tag the awaited head; the lead's own wait (who, how long) is the header's chip.
+    const headerChip = page.locator("[data-waiting-chip]").filter({ hasText: "waiting on api-head" }).first();
+    await headerChip.waitFor({ timeout: 20_000 });
+    const line = (await headerChip.textContent())?.trim() ?? "";
+    check("the header says who the lead waits on", /^waiting on api-head, \d+s$/.test(line), line);
+    check("the awaited head row is tagged", (await page.locator("[data-shelf-head] [data-awaited]").count()) === 1);
     check("the sessions list shows a compact chip", (await page.locator("[data-waiting-chip]").filter({ hasText: /^waiting \d+s$/ }).count()) >= 1);
 
-    const before = (await page.locator("[data-shelf-waiting]").textContent()) ?? "";
+    const before = (await headerChip.textContent()) ?? "";
     await page.waitForTimeout(2200);
-    const after = (await page.locator("[data-shelf-waiting]").textContent()) ?? "";
+    const after = (await headerChip.textContent()) ?? "";
     check("the timer ticks", before !== after, `${before.trim()} -> ${after.trim()}`);
     await page.waitForTimeout(400);
     await shot(`waiting-1-shelf-${theme}`);
@@ -54,11 +55,11 @@ await withUi(
     await page.waitForTimeout(300);
     await shot(`waiting-2-heads-${theme}`);
     await page.getByRole("tab", { name: /Agent/ }).first().click();
-    await page.waitForSelector("[data-shelf-waiting]", { timeout: 5000 });
+    await headerChip.waitFor({ timeout: 5000 });
 
     // Interrupt the lead: the wait ends and everything clears.
     trb("interrupt", id);
-    await page.waitForSelector("[data-shelf-waiting]", { state: "detached", timeout: 15_000 });
+    await headerChip.waitFor({ state: "detached", timeout: 15_000 });
     check("the indicator clears when the lead is interrupted", (await page.locator("[data-waiting-chip]").count()) === 0 && (await page.locator("[data-shelf-head] [data-awaited]").count()) === 0);
     await shot(`waiting-3-cleared-${theme}`);
     check("no page errors", errors.length === 0, errors.join(" | ").slice(0, 200));

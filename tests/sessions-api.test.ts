@@ -101,6 +101,51 @@ describe("delete", () => {
   });
 });
 
+describe("close-failed", () => {
+  // Set the status directly: whether the engine's turn ran has no bearing on the endpoint's scoping and closing.
+  const setStatus = (id: string, status: string) => db().prepare("UPDATE sessions SET status = ? WHERE id = ?").run(status, id);
+
+  test("closes every failed session in the workspace, leaves the rest alone", async () => {
+    resetState();
+    const { Workspaces } = await import("../src/workspaces");
+    const ws = Workspaces.open(makeDir());
+    const a = await started("x", { cwd: ws.path });
+    const b = await started("x", { cwd: ws.path });
+    const idle = await started("x", { cwd: ws.path });
+    const elsewhere = await started("x"); // a failed session outside the workspace: out of scope
+    for (const id of [a, b, elsewhere]) setStatus(id, "failed");
+    setStatus(idle, "idle");
+    const r = await call("POST", `/api/workspaces/${ws.id}/close-failed`);
+    expect(r.body.closed).toBe(2);
+    expect(r.body.errors).toEqual([]);
+    for (const id of [a, b]) expect(getSession(id)!.status).toBe("closed");
+    expect(getSession(idle)!.status).toBe("idle");
+    expect(getSession(elsewhere)!.status).toBe("failed");
+  });
+
+  test("a failed head is closed by its own close, not 'with its parent'", async () => {
+    resetState();
+    const { Workspaces } = await import("../src/workspaces");
+    const ws = Workspaces.open(makeRepo());
+    const lead = await started("x", { cwd: ws.path });
+    const head = (await call("POST", `/api/sessions/${lead}/spawn`, { brief: "x", engine: "fake" })).body.session.id;
+    for (let i = 0; i < 100 && getSession(head)!.status === "running"; i++) await Bun.sleep(50);
+    for (const id of [lead, head]) setStatus(id, "failed");
+    const r = await call("POST", `/api/workspaces/${ws.id}/close-failed`);
+    expect(r.body).toMatchObject({ closed: 2, errors: [] });
+    expect(getSession(head)!.status).toBe("closed");
+    expect(getSession(lead)!.status).toBe("closed");
+  });
+
+  test("empty and unknown workspaces", async () => {
+    resetState();
+    const { Workspaces } = await import("../src/workspaces");
+    const ws = Workspaces.open(makeDir());
+    expect((await call("POST", `/api/workspaces/${ws.id}/close-failed`)).body).toEqual({ closed: 0, errors: [] });
+    expect((await call("POST", "/api/workspaces/w_ghost/close-failed")).status).toBe(404);
+  });
+});
+
 describe("detail", () => {
   test("names the workspace the session belongs to, so a toast can switch there before opening it", async () => {
     resetState();

@@ -1,6 +1,7 @@
 /**
  * The one slot above the composer's box. It shows exactly one thing, by urgency (see `slotKind`): a plan question
- * the agent is blocked on, a plan waiting for a decision, a goal that is working, or the lead and its heads.
+ * the agent is blocked on, a plan waiting for a decision, a goal that is working, or the heads rail. The rail is the
+ * one that joins the box (it is drawn as the top of it); the others are cards of their own.
  * Nothing else lives up here, and when there is nothing the slot takes no room.
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -12,16 +13,17 @@ import { GoalBar } from "./GoalBar";
 import { usePlanState } from "./plan-data";
 import { dockFor } from "./plan-logic";
 import { PlanReadyRow, QuestionnaireCard, usePlanAutoOpen } from "./PlanFlow";
-import { ShelfStrip } from "./Shelf";
+import { HydraRail } from "./Shelf";
 import { goalSlot, planReady, slotKind } from "./slot-logic";
 
 export interface StatusSlotProps {
   session: SessionView | null;
   shelf: ShelfModel | null;
   onOpenHead: (id: string) => void;
+  onMergeHead?: (id: string) => void;
 }
 
-export function StatusSlot({ session, shelf, onOpenHead }: StatusSlotProps) {
+export function StatusSlot({ session, shelf, onOpenHead, onMergeHead }: StatusSlotProps) {
   const state = usePlanState(session?.id ?? null, !!session);
   const plan = session ? planReady(state.data, session.status) : null;
   const dock = dockFor(state.data);
@@ -34,13 +36,13 @@ export function StatusSlot({ session, shelf, onOpenHead }: StatusSlotProps) {
   const goal = session?.goal ?? null;
   const goalMode = goalSlot(goal?.status, !!goal && dismissed === goalKey(goal));
 
-  const kind = session ? slotKind({ question: !!question, plan: !!plan, goal: goalMode, shelf: !!shelf }) : "none";
+  const kind = session ? slotKind({ question: !!question, plan: !!plan, goal: goalMode, shelf: !!shelf && shelf.heads.length > 0 }) : "none";
 
   let node: ReactNode = null;
   if (session && kind === "question" && question && state.data) node = <div data-plan-flow="question" className="max-h-[58vh] min-h-0 overflow-y-auto rounded-lg border border-violet/30 bg-violet/5"><QuestionnaireCard key={question.id} session={session} state={state.data} question={question} /></div>;
   else if (session && kind === "plan" && plan) node = <PlanReadyRow key={plan.id} session={session} plan={plan} />;
   else if (session && kind === "goal" && goal) node = <GoalBar session={session} onDismiss={() => setDismissed(goalKey(goal))} />;
-  else if (kind === "shelf" && shelf) node = <ShelfStrip shelf={shelf} onOpenHead={onOpenHead} />;
+  else if (kind === "shelf" && shelf) node = <HydraRail shelf={shelf} onOpenHead={onOpenHead} onMergeHead={onMergeHead} />;
 
   // Keep what was showing while the slot animates closed, so it does not blink out empty.
   const kept = useRef<{ kind: string; node: ReactNode } | null>(null);
@@ -58,7 +60,7 @@ export function StatusSlot({ session, shelf, onOpenHead }: StatusSlotProps) {
   const view = node ? { kind, node } : kept.current;
 
   return (
-    <div data-status-slot={node ? kind : "none"} aria-hidden={!node} inert={!node} className={cn("grid transition-[grid-template-rows,opacity] duration-200 ease-out", node ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0")}>
+    <div data-status-slot={node ? kind : "none"} aria-hidden={!node} inert={!node} className={cn("peer grid transition-[grid-template-rows,opacity] duration-200 ease-out", node ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0")}>
       <div className="min-h-0 overflow-hidden">
         {view && (
           <div key={view.kind} className="animate-slide-up px-2.5 pt-2.5">

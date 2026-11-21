@@ -7,7 +7,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowRightLeft, ChevronDown, Lock, TriangleAlert } from "lucide-react";
+import { ArrowRightLeft, Lock, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { put, url } from "@/lib/api";
 import { bus } from "@/lib/bus";
@@ -28,11 +28,13 @@ interface Props {
   chipLabel: string;
   /** The session's pair, when it has one. */
   pair: Pair | null;
+  /** Rows under the tabs, in the popover (the composer puts the Treeboss switch here). */
+  extra?: ReactNode;
 }
 
 const leadModel = (p: Pair): string => (p.lead_model && p.lead_model !== "default" ? p.lead_model : "");
 
-export function SessionModelChip({ session, chipClass, chipInner, chipLabel, pair }: Props) {
+export function SessionModelChip({ session, chipClass, chipInner, chipLabel, pair, extra }: Props) {
   const qc = useQueryClient();
   const state = modelChipState(session);
   const pending = !!session.model_pending;
@@ -129,7 +131,6 @@ export function SessionModelChip({ session, chipClass, chipInner, chipLabel, pai
         <button data-engine-chip data-model-switchable aria-label={`Run with: ${chipLabel}. Change it`} title={title} className={cn(chipClass, "hover:bg-hover hover:text-fg focus-visible:bg-hover")}>
           {chipInner}
           {dot}
-          <ChevronDown className="!size-2.5 shrink-0 opacity-60" />
         </button>
       }
     >
@@ -207,6 +208,7 @@ export function SessionModelChip({ session, chipClass, chipInner, chipLabel, pai
           )}
         </RunTabs>
       )}
+      {!confirm && extra && <div className="mt-1.5">{extra}</div>}
     </Popover>
   );
 }

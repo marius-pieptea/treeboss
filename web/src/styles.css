@@ -446,6 +446,12 @@ kbd,
 @utility animate-pop { animation: trb-pop var(--duration-base) var(--ease-out) both; }
 @utility animate-spin-fast { animation: trb-spin 0.7s linear infinite; }
 @utility animate-flash { animation: trb-flash 0.9s ease-out both; }
+/* The working mark in the agent pane: three dots that hop in turn. Set --i (0, 1, 2) on each dot. Transform only. */
+@keyframes trb-dot-hop {
+  0%, 55%, 100% { transform: none; }
+  25% { transform: translateY(-3px); }
+}
+@utility animate-dot-hop { animation: trb-dot-hop 900ms var(--ease-out) infinite; animation-delay: calc(var(--i, 0) * 150ms); }
 /* Follow-through: set --i on each item; the delay caps at six steps so long lists never wait. */
 @utility stagger { animation-delay: calc(min(var(--i, 0), 6) * var(--stagger-step)); }
 /* Popovers, menus and tooltips grow out of their trigger, not their center. */
@@ -571,21 +577,6 @@ kbd,
 }
 .pop-row[data-highlighted]::before, .pop-row[data-active="true"]::before { transform: scaleY(1); }
 .pop-check { animation: trb-pop var(--duration-fast) var(--ease-out) both; }
-
-/* A step of work in the thread: a ring that fills as the tool finishes (after the Reasoning Thread component). */
-.step-ring {
-  display: inline-flex;
-  width: 1rem;
-  height: 1rem;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  border-radius: 9999px;
-  border: 1.5px solid var(--line-strong);
-}
-.step-ring[data-state="ok"] { background: color-mix(in oklab, var(--green) 18%, transparent); border-color: color-mix(in oklab, var(--green) 55%, transparent); color: var(--green); }
-.step-ring[data-state="err"] { background: color-mix(in oklab, var(--red) 15%, transparent); border-color: color-mix(in oklab, var(--red) 55%, transparent); color: var(--red); }
-.step-ring[data-state="running"] { border-color: color-mix(in oklab, var(--accent) 30%, transparent); border-top-color: var(--accent); animation: trb-spin 0.7s linear infinite; }
 
 /* Surfaces that glow faintly toward the pointer. Set --mx/--my from onPointerMove (see useGlow). */
 .glow-surface {

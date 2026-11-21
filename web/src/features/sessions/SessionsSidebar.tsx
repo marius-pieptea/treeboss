@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ClipboardCopy, Download, History, MessageSquarePlus, Network, Pencil, Pin, PinOff, Search, Square, Trash2, UserRoundCog, X, XCircle } from "lucide-react";
+import { ClipboardCopy, Download, History, MessageSquarePlus, Network, OctagonX, Pencil, Pin, PinOff, Search, Square, Trash2, UserRoundCog, X, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { api, post, url } from "@/lib/api";
 import { qk, useClosedCount, useClosedSessions, usePairs, usePinnedSessions, useSessions } from "@/lib/queries";
@@ -183,6 +183,7 @@ export function SessionsSidebar() {
   // With a filter typed, the header counts matches; otherwise every closed lead.
   const closedTotal = needle ? (closed.data?.pages[0]?.total ?? 0) : (closedCount.data ?? 0);
   const heads = useMemo(() => headCounts(all), [all]);
+  const failedCount = useMemo(() => all.filter((s) => s.status === "failed").length, [all]);
   const pairTitle = (id: string | null) => (id ? pairs.data?.find((p) => p.id === id)?.title : undefined);
 
   const refresh = () => void qc.invalidateQueries({ queryKey: qk.sessionsAll });
@@ -239,13 +240,35 @@ export function SessionsSidebar() {
     }
   };
 
+  /** Close every failed session in the workspace, server-side in one call. */
+  const closeFailed = async () => {
+    const n = failedCount;
+    const ok = await confirm({ title: `Close ${n} failed session${n === 1 ? "" : "s"}?`, description: "A failed lead's heads are closed with it. Unmerged work stays on its branch.", confirmLabel: "Close failed" });
+    if (!ok) return;
+    try {
+      const r = await post<{ closed: number; errors: string[] }>(`/api/workspaces/${workspace.id}/close-failed`);
+      if (r.errors.length) toast.error(`Closed ${r.closed}; ${r.errors.length} could not be closed: ${r.errors[0]}`);
+      else toast.success(`Closed ${r.closed} failed session${r.closed === 1 ? "" : "s"}`);
+      refresh();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-9 shrink-0 items-center justify-between px-3 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-fg-muted">
         Sessions
-        <IconButton label="New session" size="icon-sm" onClick={startNewSession}>
-          <MessageSquarePlus />
-        </IconButton>
+        <div className="flex items-center">
+          {failedCount > 0 && (
+            <IconButton label={`Close ${failedCount} failed session${failedCount === 1 ? "" : "s"}`} size="icon-sm" onClick={() => void closeFailed()}>
+              <OctagonX />
+            </IconButton>
+          )}
+          <IconButton label="New session" size="icon-sm" onClick={startNewSession}>
+            <MessageSquarePlus />
+          </IconButton>
+        </div>
       </div>
 
       <div className="flex items-center gap-1 px-2 pb-2">

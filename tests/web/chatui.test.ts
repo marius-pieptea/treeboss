@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { deriveChat, diffStat, hasLiveTail, headLine, loadDefaultViewMode, loadViewMode, otherMode, saveViewMode, settingsSummary, shelfFor, splitContext, terminalResume, toolVerb } from "../../web/src/features/agent/chat-logic";
+import { deriveChat, diffStat, hasLiveTail, headLine, loadDefaultViewMode, loadViewMode, otherMode, saveViewMode, settingsSummary, shelfFor, splitContext, terminalResume, toolLabel, toolVerb } from "../../web/src/features/agent/chat-logic";
 import type { TranscriptItem } from "../../web/src/lib/transcript";
 import type { SessionView } from "../../web/src/lib/types";
 
@@ -178,6 +178,36 @@ describe("shelfFor", () => {
       [null, undefined],
       ["scout", undefined],
     ]);
+  });
+
+  test("rows carry what a running head is doing, how long it has run, and what a finished one changed", () => {
+    const acts = new Map([
+      [H1, { kind: "tool" as const, label: "Read: src/a.ts", running: true }],
+      [H2, { kind: "tool" as const, label: "Grep: x", running: false }],
+    ]);
+    const s = shelfFor(sv(L), [sv(H1, { status: "running", running_for_sec: 42 }), sv(H2, { status: "idle", changes: { files: 3, insertions: 9, deletions: 2 } }), sv("s_h3", { status: "running" })], acts);
+    const [a, b, c] = s!.heads;
+    expect([a.activity, a.runningSec, a.stat]).toEqual(["Read: src/a.ts", 42, undefined]);
+    // A finished head says nothing about activity or running time, only its diff.
+    expect([b.activity, b.runningSec, b.stat]).toEqual([undefined, undefined, { files: 3, plus: 9, minus: 2 }]);
+    // Without activity or a time from the daemon the keys are absent, not empty.
+    expect("activity" in c || "runningSec" in c || "stat" in c).toBe(false);
+  });
+});
+
+describe("toolLabel and the group summary", () => {
+  test("a head being opened shows the head's title, not its JSON, even when the argument is cut off", () => {
+    expect(toolLabel({ name: "mcp__trb__subagent_create", arg: '{"title":"A: browser take over","command_id":"x","fil' })).toEqual({ name: "Open head", arg: "A: browser take over" });
+    expect(toolLabel({ name: "subagent_create", arg: '{"brief":"no title here"}' })).toEqual({ name: "Open head", arg: "" });
+    expect(toolLabel({ name: "mcp__trb__subagent_create", arg: '{"title":"say \\"hi\\""}' }).arg).toBe('say "hi"');
+  });
+  test("waiting names itself; every other tool keeps its name and one flat line", () => {
+    expect(toolLabel({ name: "mcp__trb__subagent_wait", arg: "{}" })).toEqual({ name: "Wait for heads", arg: "" });
+    expect(toolLabel({ name: "Bash", arg: "df -h\n  | tail -1" })).toEqual({ name: "Bash", arg: "df -h | tail -1" });
+  });
+  test("the thread summary words the Hydra tools; Trace's summary is unchanged", () => {
+    const chat = deriveChat([tool("Bash", "ls"), tool("mcp__trb__subagent_create", "{}"), tool("mcp__trb__subagent_create", "{}")], L);
+    expect(chat[0].kind === "tools" && chat[0].summary).toBe("Ran a command, opened 2 heads");
   });
 });
 

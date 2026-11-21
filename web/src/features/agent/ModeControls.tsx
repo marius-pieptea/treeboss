@@ -9,7 +9,7 @@
  */
 import { useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ClipboardList, FileText, Hammer, MessageCircleQuestion, ScrollText, Target, X } from "lucide-react";
+import { FileText, Hammer, MessageCircleQuestion, ScrollText, Target, X } from "lucide-react";
 import { toast } from "sonner";
 import { put, url } from "@/lib/api";
 import { qk } from "@/lib/queries";
@@ -72,10 +72,9 @@ export function useModeControl(session: SessionView | null, local: { mode: Mode;
 export function ModeSegment({ control }: { control: ModeControl }) {
   const { mode, depth, closed } = control;
   const v = modeView(mode, depth);
-  const PlanIcon = depth === "spec" ? ScrollText : ClipboardList;
-  const Icon = mode === "plan" ? PlanIcon : mode === "ask" ? MessageCircleQuestion : Hammer;
   const label = mode === "plan" ? "Plan" : mode === "ask" ? "Ask" : "Build";
-  const tone = mode === "plan" ? "bg-violet/15 text-violet" : mode === "ask" ? "bg-accent-soft text-accent" : "bg-raised text-fg-muted hover:text-fg";
+  // Plain text: build is the everyday mode and reads as body text; plan is violet (orchestration), ask is the primary colour.
+  const tone = mode === "plan" ? "text-violet" : mode === "ask" ? "text-accent" : "text-fg";
   return (
     <div data-mode-segment data-mode={mode} data-plan-depth={depth} className="shrink-0">
       <DropdownMenu
@@ -88,11 +87,9 @@ export function ModeSegment({ control }: { control: ModeControl }) {
             disabled={closed}
             aria-label={`Mode: ${label}`}
             title={`${mode === "plan" ? v.planTitle : mode === "ask" ? v.askTitle : "Build: the agent works on your code"} (Alt+P steps through the modes)`}
-            className={cn("flex h-7 w-[34px] items-center justify-center gap-1.5 rounded-lg px-1.5 text-[11.5px] outline-none transition-colors focus-visible:ring-1 focus-visible:ring-accent/60 disabled:opacity-40 @[380px]:w-[84px]", tone)}
+            className={cn("flex h-7 items-center rounded-md px-1.5 text-xs outline-none transition-colors hover:bg-hover focus-visible:bg-hover disabled:opacity-50", tone)}
           >
-            <Icon className="size-3.5 shrink-0" />
-            <span className="hidden @[380px]:inline">{label}</span>
-            <ChevronDown className="hidden size-3 shrink-0 opacity-60 @[380px]:block" />
+            {label}
           </button>
         }
         entries={[

@@ -7,7 +7,7 @@ import { RootError, Workspaces, owningWorkspace, resolveRoot, type Workspace } f
 import { repoInfo } from "../../git/ops";
 import { listeningPorts } from "../../terminal/ports";
 import { STOP_SIGNAL, killTree } from "../../proctree";
-import { countSessions, listSessions, viewSession } from "../../sessions/manager";
+import { close, countSessions, listSessions, viewSession } from "../../sessions/manager";
 import { HttpError, json, type RouteModule } from "../http";
 
 /**
@@ -132,6 +132,27 @@ export const workspaceRoutes: RouteModule = async (c) => {
     }
     const sessions = listSessions({ leadsOnly: !all, status: c.q("closed") === "1" ? null : "open", within, limit: 200 });
     return json({ sessions: sessions.map((s) => viewSession(s, { withOutput: false })) });
+  }
+
+  /**
+   * Close every failed session in the workspace, deepest first so a failed head is closed by its own call rather
+   * than "with its parent". Each goes through the normal close path: live turns are interrupted, worktrees
+   * finalised and cleaned, unmerged branches kept. A failed lead still closes its open heads with it, exactly as
+   * closing that lead alone would. One failure does not stop the rest.
+   */
+  if ((m = c.match(/^\/api\/workspaces\/(w_[^/]+)\/close-failed$/)) && c.method === "POST") {
+    const w = Workspaces.get(m[1]);
+    if (!w) throw new HttpError(404, `No workspace "${m[1]}".`);
+    const failed = listSessions({ status: "failed", within: workspaceScope(w), limit: 500 }).sort((a, b) => b.depth - a.depth);
+    const errors: string[] = [];
+    for (const s of failed) {
+      try {
+        await close({ operator: true }, s.id);
+      } catch (err: any) {
+        errors.push(`${s.id}: ${err?.message ?? err}`);
+      }
+    }
+    return json({ closed: failed.length - errors.length, errors });
   }
 
   if ((m = c.match(/^\/api\/roots\/([^/]+)$/)) && c.method === "GET") {

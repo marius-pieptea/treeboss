@@ -35,6 +35,20 @@ export function StatusDot({ status, className, size = 7 }: { status: string; cla
   return <span aria-label={status} title={status} style={{ width: size, height: size, background: c, ["--pulse" as string]: c }} className={cn("inline-block shrink-0 rounded-full", status === "running" && "animate-pulse-dot", className)} />;
 }
 
+/**
+ * The mark for an agent that is working in the agent pane (the header and the heads rail): three dots hopping in turn,
+ * in the current text colour. Under reduced motion they sit still.
+ */
+export function WorkingDots({ className, label = "working" }: { className?: string; label?: string }) {
+  return (
+    <span role="img" aria-label={label} title={label} className={cn("flex size-3 shrink-0 items-center justify-center gap-0.5", className)}>
+      {[0, 1, 2].map((i) => (
+        <span key={i} style={{ "--i": i } as React.CSSProperties} className="size-[3px] shrink-0 animate-dot-hop rounded-full bg-current" />
+      ))}
+    </span>
+  );
+}
+
 export function Empty({ icon, title, hint, action, className }: { icon?: React.ReactNode; title: string; hint?: React.ReactNode; action?: React.ReactNode; className?: string }) {
   return (
     <div className={cn("flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center animate-slide-up", className)}>
