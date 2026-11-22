@@ -402,15 +402,17 @@ describe("subagents", () => {
     expect(first).toContain("Implement exactly the slice"); // the library's `worker` text, since the pair stored none
   });
 
-  test("a governing pair is binding: a lead may not swap a head's engine or model", async () => {
-    const pair = HydraPairs.create({ title: "Bind", lead_engine: "fake", heads_engine: "fake", heads_model: "only-this" });
+  test("a governing pair is binding: a lead may not swap a head's engine, model or effort", async () => {
+    const pair = HydraPairs.create({ title: "Bind", lead_engine: "fake", heads_engine: "fake", heads_model: "only-this", heads_effort: "high" });
     const l = await settled(lead("SAY ready", { pairId: pair.id }).id);
     expect(() => spawn(l.id, "SAY x", { engine: "claude" })).toThrow(/outside the pair/);
     expect(() => spawn(l.id, "SAY x", { model: "other" })).toThrow(/outside the pair/);
+    expect(() => spawn(l.id, "SAY x", { effort: "max" })).toThrow(/outside the pair/);
     expect(spawn(l.id, "SAY x", { model: "only-this" }).model).toBe("only-this");
+    expect(spawn(l.id, "SAY x", { effort: "high" }).effort).toBe("high");
     // The operator (acting as the parent) is the one who may override.
-    const op = createChild({ caller: { operator: true }, parentId: l.id, brief: "SAY x", model: "operator-pick" });
-    expect(op.model).toBe("operator-pick");
+    const op = createChild({ caller: { operator: true }, parentId: l.id, brief: "SAY x", model: "operator-pick", effort: "max" });
+    expect(op).toMatchObject({ model: "operator-pick", effort: "max" });
   });
 
   test("a model only follows the engine it was chosen for", async () => {
