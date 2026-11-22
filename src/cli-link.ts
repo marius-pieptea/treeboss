@@ -28,6 +28,8 @@ export interface CliLinkStatus {
   /** `trb` in the operator's shell already runs this binary. */
   installed: boolean;
   targets: CliLinkTarget[];
+  /** The platform this status was computed on: the UI's wording differs on Windows (no symlinks, no shell profile). */
+  platform?: string;
 }
 
 export interface CliLinkEnv {
@@ -37,6 +39,10 @@ export interface CliLinkEnv {
   shellPath: string[];
   /** The system-wide folder tried first: /usr/local/bin (a test points it elsewhere). */
   systemBin?: string;
+  /** Defaults to process.platform; Windows takes its own path below. */
+  platform?: NodeJS.Platform;
+  /** Windows only: how a folder is put on the operator's persistent PATH (a test substitutes a fake). */
+  addToUserPath?: (dir: string) => void;
 }
 
 /** The compiled trb binary this daemon runs as, or null when it runs from source. */
@@ -57,8 +63,42 @@ export function shellPath(): string[] {
   return value.split(path.delimiter).filter(Boolean);
 }
 
+/**
+ * The persistent PATH a new terminal gets on Windows: the machine's Path, then the user's, read from the registry —
+ * the same values the installer writes. The daemon's own env is only a fallback: an app-started daemon may carry a
+ * PATH the user's terminals never see. (PowerShell, not `reg query`: argument passing to reg.exe is unreliable.)
+ */
+function windowsShellPath(): string[] {
+  const res = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", '[Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")'], {
+    encoding: "utf-8",
+    timeout: 10000,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  const dirs = (res.stdout ?? "").split(";").map((d) => d.trim()).filter(Boolean);
+  return dirs.length ? dirs : (process.env.PATH ?? "").split(";").filter(Boolean);
+}
+
+/**
+ * Put a folder on the operator's persistent user PATH — the same registry write the Windows installer offers at
+ * setup (build/installer.nsh). New terminals pick it up; nothing already running needs to change.
+ */
+function addToUserPath(dir: string): void {
+  const ps =
+    "$k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment',$true); " +
+    "$p=[string]$k.GetValue('Path','',[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames); " +
+    "$b=$env:TB_BIN; if(($p -split ';') -contains $b){exit 0}; " +
+    "if($p){$p=$p+';'+$b}else{$p=$b}; $k.SetValue('Path',$p,[Microsoft.Win32.RegistryValueKind]::ExpandString); $k.Close()";
+  const res = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", ps], {
+    encoding: "utf-8",
+    timeout: 15000,
+    env: { ...process.env, TB_BIN: dir },
+  });
+  if (res.status !== 0) throw new UserError(`Could not add ${dir} to your PATH. Add it by hand: Settings → Edit environment variables → Path (user).`);
+}
+
 export function defaultEnv(): CliLinkEnv {
-  return { binary: trbBinary(), home: os.homedir(), shellPath: process.platform === "win32" ? [] : shellPath() };
+  const win = process.platform === "win32";
+  return { binary: trbBinary(), home: os.homedir(), shellPath: win ? windowsShellPath() : shellPath(), platform: process.platform, addToUserPath: win ? addToUserPath : undefined };
 }
 
 const real = (p: string): string => {
@@ -96,6 +136,7 @@ function targetState(file: string, binary: string | null): CliLinkTarget["state"
 
 /** Where a link can go and what is there now: /usr/local/bin first, then ~/.local/bin. */
 export function cliLinkStatus(env: CliLinkEnv = defaultEnv()): CliLinkStatus {
+  if (env.platform === "win32") return cliLinkStatusWin(env);
   const onPath = new Set(env.shellPath.map(real));
   const targets = [env.systemBin ?? "/usr/local/bin", path.join(env.home, ".local", "bin")].map((dir) => {
     const file = path.join(dir, "trb");
@@ -103,7 +144,29 @@ export function cliLinkStatus(env: CliLinkEnv = defaultEnv()): CliLinkStatus {
   });
   // What a terminal runs for `trb`: the first PATH folder that has one.
   const found = env.shellPath.map((d) => path.join(d, "trb")).find((f) => fs.existsSync(f));
-  return { binary: env.binary, installed: !!env.binary && !!found && real(found) === real(env.binary), targets };
+  return { binary: env.binary, installed: !!env.binary && !!found && real(found) === real(env.binary), targets, platform: env.platform };
+}
+
+/**
+ * Windows: nothing is linked — the app's own bin folder goes on the user PATH directly, the same thing the
+ * installer offers at setup. The one target is that folder; "ours" means it is already on the PATH.
+ */
+const WIN_TRB_NAMES = ["trb.exe", "trb.cmd", "trb.bat", "trb"];
+
+function cliLinkStatusWin(env: CliLinkEnv): CliLinkStatus {
+  const binDir = env.binary ? path.dirname(env.binary) : null;
+  const on = binDir !== null && env.shellPath.some((d) => real(d).toLowerCase() === real(binDir).toLowerCase());
+  // What a new terminal runs for `trb`: the first PATH folder that has one under any runnable name.
+  const found = env.shellPath
+    .map((d) => WIN_TRB_NAMES.map((n) => path.join(d, n)).find((f) => fs.existsSync(f)))
+    .find(Boolean);
+  const installed = !!env.binary && !!found && real(found).toLowerCase() === real(env.binary).toLowerCase();
+  return {
+    binary: env.binary,
+    installed,
+    targets: binDir ? [{ path: binDir, state: on ? "ours" : "absent", writable: true, onPath: on }] : [],
+    platform: "win32",
+  };
 }
 
 /**
@@ -112,6 +175,15 @@ export function cliLinkStatus(env: CliLinkEnv = defaultEnv()): CliLinkStatus {
  */
 export function installCliLink(target: string | null, env: CliLinkEnv = defaultEnv()): { status: CliLinkStatus; linked: string; note: string | null } {
   if (!env.binary) throw new UserError("This daemon runs from source, not the app's trb binary: there is nothing to link. Use `bun run src/cli/main.ts`, or install the app.");
+  if (env.platform === "win32") {
+    // The app's bin folder goes on the persistent user PATH. After a successful write it is there, so the status
+    // is recomputed with it appended — the env snapshot still carries the pre-write PATH.
+    const dir = path.dirname(env.binary);
+    const before = cliLinkStatusWin(env);
+    if (!before.installed && !before.targets[0]?.onPath) (env.addToUserPath ?? addToUserPath)(dir);
+    const status = cliLinkStatusWin({ ...env, shellPath: [...env.shellPath, dir] });
+    return { status, linked: dir, note: status.installed ? `${dir} is on your PATH now. Open a new terminal for it to apply.` : null };
+  }
   const before = cliLinkStatus(env);
   const pick = target ? before.targets.find((t) => t.path === target) : (before.targets.find((t) => t.writable && t.onPath && t.state !== "other") ?? before.targets.find((t) => t.writable && t.state !== "other"));
   if (!pick) throw new UserError(target ? `"${target}" is not a place trb links itself: use ${before.targets.map((t) => t.path).join(" or ")}.` : "No folder to link trb into is writable: neither /usr/local/bin nor ~/.local/bin.");

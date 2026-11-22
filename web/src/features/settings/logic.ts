@@ -274,6 +274,7 @@ export interface CliLinkStatus {
   binary: string | null;
   installed: boolean;
   targets: Array<{ path: string; state: "absent" | "ours" | "stale" | "other"; writable: boolean; onPath: boolean }>;
+  platform?: string;
 }
 
 /**
@@ -282,6 +283,11 @@ export interface CliLinkStatus {
  */
 export function cliLinkOffer(s: CliLinkStatus): { text: string; target: string | null } | null {
   if (!s.binary || s.installed) return null;
+  // Windows has no link step: the one target is the app's bin folder, and installing puts it on the user PATH.
+  if (s.platform === "win32") {
+    const dir = s.targets[0]?.path ?? s.binary.replace(/[\\/][^\\/]+$/, "");
+    return { text: `The trb command is not on your PATH, so commands like \`trb config set\` do not work in a terminal. Add ${dir} to your PATH — it applies to new terminals.`, target: dir };
+  }
   const usable = s.targets.filter((t) => t.writable && t.state !== "other");
   const target = usable.find((t) => t.onPath) ?? usable[0] ?? null;
   if (!target) return { text: `The trb command is not on your PATH, and neither ${s.targets.map((t) => t.path).join(" nor ")} can be written. Run: sudo ln -sf "${s.binary}" /usr/local/bin/trb`, target: null };
