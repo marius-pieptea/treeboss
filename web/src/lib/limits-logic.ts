@@ -66,6 +66,8 @@ export function usageTone(percent: number | null, status: string | null): UsageT
 /** Minutes a known window lasts. Unknown ids sort last, so a new window does not hide the 5-hour one. */
 const WINDOW_MINUTES: Record<string, number> = {
   five_hour: 300,
+  daily: 1_440,
+  weekly: 10_080,
   seven_day: 10_080,
   seven_day_opus: 10_080,
   seven_day_sonnet: 10_080,
@@ -109,7 +111,7 @@ export function windowView(w: LimitWindow, now: number): WindowView {
 }
 
 /** Engines that report plan usage; mirrors `exposesLimits` in src/engines/limits.ts. */
-const REPORTS = new Set(["claude", "codex", "cursor", "grok"]);
+const REPORTS = new Set(["claude", "codex", "cursor", "devin", "grok"]);
 export const exposesLimits = (engine: string): boolean => REPORTS.has(engine);
 
 /** What the card says when there is no window. Only an engine that can report may promise a later turn. */

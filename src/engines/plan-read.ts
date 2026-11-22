@@ -1,8 +1,10 @@
 /**
- * Grok, Cursor and Codex plan windows, read the way OpenBot reads them.
+ * Grok, Cursor, Codex and Devin plan windows, read the way OpenBot reads them.
  * Grok: `_x.ai/billing` on a short `grok agent stdio` session (the CLI uses its own sign-in).
  * Cursor: the dashboard calls the Cursor CLI sends, with the token in its auth file.
  * Codex: the newest rollout JSONL under `~/.codex/sessions`, whose `token_count` events carry `rate_limits`.
+ * Devin: the CLI's own cached GetUserStatus reply (`user_status.*.bin` under its cache dir); no sign-in
+ * is read and no call is made.
  * The token is not logged or stored. A miss is cached so a sidebar poll does not retry at once.
  */
 import { spawn, type ChildProcess } from "node:child_process";
@@ -320,6 +322,129 @@ export async function readCodexWindows(now = Math.floor(Date.now() / 1000), root
   return parseCodexRateLimits(reading.rateLimits, reading.at ?? (await mtimeSeconds(path)) ?? now);
 }
 
+/**
+ * A minimal protobuf wire walk: [field, wire, varint | bytes | null for fixed32/64].
+ * Stops at the first malformed field, so a truncated or foreign payload just yields less.
+ */
+function* protoFields(buf: Uint8Array): Generator<[number, number, bigint | Uint8Array | null]> {
+  let i = 0;
+  const varint = (): bigint | null => {
+    let v = 0n;
+    for (let shift = 0n; shift < 70n && i < buf.length; shift += 7n) {
+      const b = buf[i++];
+      v |= BigInt(b & 0x7f) << shift;
+      if (!(b & 0x80)) return v;
+    }
+    return null;
+  };
+  while (i < buf.length) {
+    const key = varint();
+    if (key === null || key <= 0n) return;
+    const field = Number(key >> 3n);
+    const wire = Number(key & 7n);
+    if (wire === 0) {
+      const v = varint();
+      if (v === null) return;
+      yield [field, 0, v];
+    } else if (wire === 2) {
+      const len = varint();
+      if (len === null || len > BigInt(buf.length - i)) return;
+      yield [field, 2, buf.subarray(i, i + Number(len))];
+      i += Number(len);
+    } else if (wire === 1 || wire === 5) {
+      const size = wire === 1 ? 8 : 4;
+      if (i + size > buf.length) return;
+      i += size;
+      yield [field, wire, null];
+    } else {
+      return;
+    }
+  }
+}
+
+/**
+ * Devin's plan windows from the CLI's cached GetUserStatus reply: a JSON envelope
+ * `{"version":1,"fetched_at_secs":…,"payload":"<base64 UserStatus>"}` whose protobuf field 13
+ * (plan_status) carries daily/weekly `*_quota_remaining_percent` (f14, f15) and `*_quota_reset_at_unix`
+ * (f17, f18). Proto3 omits a zero scalar, so a missing percent reads as 0 left; only the four scalars
+ * are read and the payload's identity fields are never looked at.
+ */
+export function parseDevinUserStatus(fileText: string, now = Math.floor(Date.now() / 1000)): LimitWindow[] {
+  let env: unknown;
+  try {
+    env = JSON.parse(fileText);
+  } catch {
+    return [];
+  }
+  const body = asRecord(env);
+  if (!body || body.version !== 1 || typeof body.payload !== "string") return [];
+  const payload = Buffer.from(body.payload, "base64");
+  let planStatus: Uint8Array | null = null;
+  for (const [field, wire, value] of protoFields(payload)) {
+    if (field === 13 && wire === 2) planStatus = value as Uint8Array;
+  }
+  if (!planStatus) return [];
+  let dailyRemaining: number | undefined;
+  let weeklyRemaining: number | undefined;
+  let dailyResetsAt: number | undefined;
+  let weeklyResetsAt: number | undefined;
+  for (const [field, wire, value] of protoFields(planStatus)) {
+    if (wire !== 0) continue;
+    if (field === 14) dailyRemaining = Number(value);
+    else if (field === 15) weeklyRemaining = Number(value);
+    else if (field === 17) dailyResetsAt = Number(value);
+    else if (field === 18) weeklyResetsAt = Number(value);
+  }
+  const at = finite(body.fetched_at_secs) ?? now;
+  const out: LimitWindow[] = [];
+  const quota = (id: string, title: string, remaining: number | undefined, resetsAt: number | undefined) => {
+    if (remaining === undefined && resetsAt === undefined) return;
+    const used = clamp(100 - (remaining ?? 0));
+    out.push({ id, title, percent: used, resets_at: resetsAt ?? null, status: used >= 100 ? "limit reached" : "allowed", at });
+  };
+  quota("daily", "Daily quota", dailyRemaining, dailyResetsAt);
+  quota("weekly", "Weekly quota", weeklyRemaining, weeklyResetsAt);
+  return out;
+}
+
+/** Where the Devin CLI keeps `user_status.*.bin`. Only the Windows path is verified (devin 3000.12.x). */
+function devinCacheDirs(): string[] {
+  if (process.platform === "win32") return [join(process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local"), "devin", "cli")];
+  if (process.platform === "darwin")
+    return [join(homedir(), "Library", "Caches", "devin", "cli"), join(homedir(), "Library", "Application Support", "devin", "cli")];
+  return [join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "devin", "cli")];
+}
+
+/** Devin plan windows from the newest `user_status.*.bin`, ordered by its `fetched_at_secs` (mtime when unreadable). */
+export async function readDevinWindows(now = Math.floor(Date.now() / 1000), dirs = devinCacheDirs()): Promise<LimitWindow[]> {
+  let newest: { key: number; text: string } | null = null;
+  for (const dir of dirs) {
+    let names: string[];
+    try {
+      names = await readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (!name.startsWith("user_status.") || !name.endsWith(".bin")) continue;
+      const path = join(dir, name);
+      let text: string;
+      try {
+        text = await readFile(path, "utf8");
+      } catch {
+        continue;
+      }
+      let fetched: number | null = null;
+      try {
+        fetched = finite(asRecord(JSON.parse(text))?.fetched_at_secs);
+      } catch {}
+      const key = fetched ?? (await mtimeSeconds(path)) ?? 0;
+      if (!newest || key > newest.key) newest = { key, text };
+    }
+  }
+  return newest ? parseDevinUserStatus(newest.text, now) : [];
+}
+
 function stopChild(child: ChildProcess): void {
   try {
     if (process.platform === "win32") killTree(child.pid, "SIGKILL");
@@ -409,7 +534,7 @@ export function readGrokWindows(bin: string, now = Math.floor(Date.now() / 1000)
 
 /** Refresh one engine when its snapshot is older than the cache. Failures keep the previous windows. */
 export async function refreshReportedLimits(engine: string): Promise<void> {
-  if (engine !== "grok" && engine !== "cursor" && engine !== "codex") return;
+  if (engine !== "grok" && engine !== "cursor" && engine !== "codex" && engine !== "devin") return;
   const nowMs = Date.now();
   const snap = getLimits(engine, Math.floor(nowMs / 1000));
   if (snap.updated_at && nowMs / 1000 - snap.updated_at < REFRESH_MS / 1000) return;
@@ -422,7 +547,11 @@ export async function refreshReportedLimits(engine: string): Promise<void> {
       const now = Math.floor(Date.now() / 1000);
       const bin = engine === "grok" ? resolveBinary(ENGINES.grok) : null;
       if (engine === "grok" && !bin) return;
-      const windows = engine === "cursor" ? await readCursorWindows(now) : engine === "codex" ? await readCodexWindows(now) : await readGrokWindows(bin!, now);
+      const windows =
+        engine === "cursor" ? await readCursorWindows(now)
+        : engine === "codex" ? await readCodexWindows(now)
+        : engine === "devin" ? await readDevinWindows(now)
+        : await readGrokWindows(bin!, now);
       if (engine === "codex") mergeWindows(engine, windows);
       else if (windows.length) storeWindows(engine, windows);
     } catch {

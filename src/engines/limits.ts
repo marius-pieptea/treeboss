@@ -1,6 +1,7 @@
 /**
- * Plan usage windows. Claude's come from its stream (`rate_limit_event`). Grok, Cursor and Codex are
- * read in `plan-read.ts` (Codex from its rollout JSONL), then stored here. The snapshot survives a restart.
+ * Plan usage windows. Claude's come from its stream (`rate_limit_event`). Grok, Cursor, Codex and
+ * Devin are read in `plan-read.ts` (Codex from its rollout JSONL, Devin from its CLI's cached plan
+ * status), then stored here. The snapshot survives a restart.
  */
 import { db } from "../db";
 
@@ -25,8 +26,8 @@ export interface EngineLimits {
   updated_at: number | null;
 }
 
-/** Engines that report plan usage: Claude on its stream, Grok, Cursor and Codex via plan-read.ts. */
-const REPORTS = new Set(["claude", "codex", "cursor", "grok"]);
+/** Engines that report plan usage: Claude on its stream, Grok, Cursor, Codex and Devin via plan-read.ts. */
+const REPORTS = new Set(["claude", "codex", "cursor", "devin", "grok"]);
 export const exposesLimits = (engine: string): boolean => REPORTS.has(engine);
 
 const TITLES: Record<string, string> = {

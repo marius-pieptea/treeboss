@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ago, exposesLimits, ringWindows, span, usageEmptyCopy, usageTone, windowView } from "../../web/src/lib/limits-logic";
+import { ago, exposesLimits, orderedWindows, ringWindows, span, usageEmptyCopy, usageTone, windowView } from "../../web/src/lib/limits-logic";
 
 const w = { id: "five_hour", title: "5-hour limit", percent: 3, resets_at: 1000 + 7800, status: "allowed", at: 1000 };
 
@@ -19,11 +19,12 @@ describe("usage card logic", () => {
     expect(windowView({ ...w, percent: null, status: "rejected" }, 1000)).toMatchObject({ summary: "status: rejected", warn: true });
     expect(windowView(w, 9000)).toMatchObject({ summary: "reset since", used: null });
   });
-  test("claude, grok, cursor and codex report; other engines do not", () => {
+  test("claude, grok, cursor, codex and devin report; other engines do not", () => {
     expect(exposesLimits("claude")).toBe(true);
     expect(exposesLimits("grok")).toBe(true);
     expect(exposesLimits("cursor")).toBe(true);
     expect(exposesLimits("codex")).toBe(true);
+    expect(exposesLimits("devin")).toBe(true);
     expect(exposesLimits("opencode")).toBe(false);
     expect(usageEmptyCopy(true)).toBe("Nothing reported yet. It updates after the next turn.");
     expect(usageEmptyCopy(false)).toBe("This engine does not report plan usage.");
@@ -41,5 +42,9 @@ describe("usage card logic", () => {
     expect(rings.map((r) => r.id)).toEqual(["seven_day", "five_hour"]);
     expect(rings[1]).toMatchObject({ left: 97, tone: "neutral" });
     expect(ringWindows([w], 9000)).toEqual([{ id: "five_hour", left: null, tone: "neutral" }]);
+    const daily = { id: "daily", title: "Daily quota", percent: 6, resets_at: 2000, status: "allowed", at: 1000 };
+    const devinWeekly = { id: "weekly", title: "Weekly quota", percent: 3, resets_at: 3000, status: "allowed", at: 1000 };
+    const unknown = { id: "aaaa", title: "Unnamed", percent: 1, resets_at: 4000, status: "allowed", at: 1000 };
+    expect(orderedWindows([devinWeekly, unknown, daily]).map((x) => x.id)).toEqual(["daily", "weekly", "aaaa"]);
   });
 });
