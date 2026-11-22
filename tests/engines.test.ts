@@ -113,6 +113,12 @@ describe("cursor", () => {
   });
 });
 
+describe("devin", () => {
+  test("its Rust tracing logs are clamped to warn so INFO lines do not fill the transcript's stderr", () => {
+    expect(ENGINES.devin.build(input(), "devin").env.RUST_LOG).toBe("warn");
+  });
+});
+
 describe("engines without MCP wiring say so instead of silently dropping the servers", () => {
   for (const id of ["agy", "grok"]) {
     test(id, () => {

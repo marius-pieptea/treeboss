@@ -68,4 +68,36 @@ describe("putting trb on the PATH", () => {
     expect(cliLinkOffer(cliLinkStatus(env))).toBeNull();
     expect(() => installCliLink(null, env)).toThrow(/runs from source/);
   });
+
+  /** A Windows machine: the app's bin dir with trb.exe inside, a persistent PATH that lacks it, and a PATH writer. */
+  function winMachine(opts: { onPath?: boolean } = {}) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "trb-clilink-win-"));
+    const binDir = path.join(root, "resources", "bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const binary = path.join(binDir, "trb.exe");
+    fs.writeFileSync(binary, "MZ");
+    const shellPath = [...(opts.onPath ? [binDir] : []), "C:\\Windows"];
+    const added: string[] = [];
+    const env: CliLinkEnv = { binary, home: root, shellPath, platform: "win32", addToUserPath: (d) => { added.push(d); shellPath.push(d); } };
+    return { env, binDir, binary, added };
+  }
+
+  test("windows: the app's bin folder is offered and installing puts it on the user PATH", () => {
+    const m = winMachine();
+    const before = cliLinkStatus(m.env);
+    expect(before.installed).toBe(false);
+    expect(before.targets).toEqual([{ path: m.binDir, state: "absent", writable: true, onPath: false }]);
+    expect(cliLinkOffer(before)).toMatchObject({ target: m.binDir });
+    expect(cliLinkOffer(before)!.text).toContain("PATH");
+    const r = installCliLink(null, m.env);
+    expect(m.added).toEqual([m.binDir]);
+    expect(r.status.installed).toBe(true);
+    expect(cliLinkOffer(r.status)).toBeNull();
+  });
+
+  test("windows: the app's bin folder already on PATH is installed, nothing is offered", () => {
+    const m = winMachine({ onPath: true });
+    expect(cliLinkStatus(m.env).installed).toBe(true);
+    expect(cliLinkOffer(cliLinkStatus(m.env))).toBeNull();
+  });
 });

@@ -422,7 +422,9 @@ const devin: EngineDef = {
       cmd: bin,
       args,
       stdin: null,
-      env: baseEnv(),
+      // devin writes its INFO tracing log to stderr; clamp it so the transcript does not render every line as a
+      // warning. The full log always lands in %APPDATA%\devin\cli\logs, so nothing is lost.
+      env: { ...baseEnv(), RUST_LOG: "warn" },
       cleanup: restore,
       notes: readOnly ? ["devin has no read-only mode: this turn refuses every tool permission request it is asked."] : [],
       acp: { cwd: input.cwd, resumeId: input.resumeId, prompt: input.prompt, allowTools: !readOnly },

@@ -3,7 +3,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { exposesLimits, getLimits, mergeWindows, parseCodexRateLimits, parseRateLimitInfo, recordLimits } from "../src/engines/limits";
-import { parseCursorUsage, parseGrokBilling, readCodexWindows } from "../src/engines/plan-read";
+import { parseCursorUsage, parseDevinUserStatus, parseGrokBilling, readCodexWindows } from "../src/engines/plan-read";
 
 const event = { status: "allowed", resetsAt: 1791462000, rateLimitType: "five_hour", unifiedWindows: { five_hour: { utilization: 0.03, resetsAt: 1791462000 } } };
 
@@ -177,5 +177,51 @@ describe("grok and cursor readings", () => {
     ]);
     expect(parseCursorUsage(usage, { isMerged: true }, now)).toMatchObject([{ id: "monthly", title: "Monthly", percent: 25, resets_at: end / 1000 }]);
     expect(parseCursorUsage({ planUsage: {} }, null, now)).toEqual([]);
+  });
+});
+
+describe("devin user status", () => {
+  const varint = (n: number): number[] => {
+    const out: number[] = [];
+    for (let v = n; ; v = Math.floor(v / 128)) {
+      out.push((v & 0x7f) | (v > 0x7f ? 0x80 : 0));
+      if (v <= 0x7f) return out;
+    }
+  };
+  const fieldVarint = (field: number, value: number): number[] => varint(field << 3).concat(varint(value));
+  const fieldBytes = (field: number, bytes: number[]): number[] => varint((field << 3) | 2).concat(varint(bytes.length), bytes);
+  const file = (payload: number[], version = 1) =>
+    JSON.stringify({ version, fetched_at_secs: 1_795_030_821, payload: Buffer.from(payload).toString("base64") });
+  // field 1 is unrelated and must be skipped on the way to plan_status (field 13).
+  const payload = (planStatus: number[]) => fieldVarint(1, 7).concat(fieldBytes(13, planStatus));
+
+  test("daily and weekly remaining percents become used windows with their resets", () => {
+    const plan = fieldVarint(14, 94).concat(fieldVarint(15, 97), fieldVarint(17, 1_795_075_200), fieldVarint(18, 1_795_334_400));
+    expect(parseDevinUserStatus(file(payload(plan)))).toEqual([
+      { id: "daily", title: "Daily quota", percent: 6, resets_at: 1_795_075_200, status: "allowed", at: 1_795_030_821 },
+      { id: "weekly", title: "Weekly quota", percent: 3, resets_at: 1_795_334_400, status: "allowed", at: 1_795_030_821 },
+    ]);
+  });
+
+  test("proto3 drops a zero scalar: a reset with no percent reads as fully used", () => {
+    expect(parseDevinUserStatus(file(payload(fieldVarint(17, 1_795_075_200))))).toEqual([
+      { id: "daily", title: "Daily quota", percent: 100, resets_at: 1_795_075_200, status: "limit reached", at: 1_795_030_821 },
+    ]);
+    const weeklyOnly = fieldVarint(15, 40).concat(fieldVarint(17, 1_795_075_200));
+    expect(parseDevinUserStatus(file(payload(weeklyOnly)))).toEqual([
+      { id: "daily", title: "Daily quota", percent: 100, resets_at: 1_795_075_200, status: "limit reached", at: 1_795_030_821 },
+      { id: "weekly", title: "Weekly quota", percent: 60, resets_at: null, status: "allowed", at: 1_795_030_821 },
+    ]);
+  });
+
+  test("garbage, an unknown envelope version and an empty plan_status yield nothing", () => {
+    expect(parseDevinUserStatus("not json")).toEqual([]);
+    expect(parseDevinUserStatus(file(payload([]), 2))).toEqual([]);
+    expect(parseDevinUserStatus(file(payload([])))).toEqual([]);
+    expect(parseDevinUserStatus(file([255]))).toEqual([]);
+  });
+
+  test("devin reports plan usage", () => {
+    expect(exposesLimits("devin")).toBe(true);
   });
 });

@@ -15,6 +15,9 @@ a month (2026-11) or a quarter (2026-Q4). {#rN} is the item's id: the app adds i
 
 ## Now
 
+- [ ] Devin plan usage in the Usage card {#r17} (spec: specs/122-devin-plan-usage) (docs: docs/GUIDE.md)
+  Daily and weekly quota for Devin, read from the Devin CLI's own cached plan status (no sign-in read, no network call).
+
 
 ## Next
 

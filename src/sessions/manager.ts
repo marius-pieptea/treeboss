@@ -441,17 +441,19 @@ function pickModel(engine: string, candidates: Array<[string | null, string | nu
 }
 
 /**
- * Refuses an engine/model the governing pair does not offer: the chosen role's config, else a
+ * Refuses an engine/model/effort the governing pair does not offer: the chosen role's config, else a
  * heads pair's heads config. The operator picked those engines; a lead does not get to swap them,
  * not even when one is failing. That is the operator's call, so the error says so.
  */
-function assertWithinPair(pair: HydraPair, role: NonNullable<HydraPair["roles"]>[string] | null, engine: string | null, model: string | null): void {
-  if (!engine && !model) return;
-  const offered = role ? { engine: clean(role.engine), model: clean(role.model) } : { engine: clean(pair.heads_engine), model: clean(pair.heads_model) };
-  const fits = (!engine || engine === offered.engine) && (!model || model === offered.model);
+function assertWithinPair(pair: HydraPair, role: NonNullable<HydraPair["roles"]>[string] | null, engine: string | null, model: string | null, effort: string | null): void {
+  if (!engine && !model && !effort) return;
+  const offered = role
+    ? { engine: clean(role.engine), model: clean(role.model), effort: clean(role.effort) }
+    : { engine: clean(pair.heads_engine), model: clean(pair.heads_model), effort: clean(pair.heads_effort) };
+  const fits = (!engine || engine === offered.engine) && (!model || model === offered.model) && (!effort || effort === offered.effort);
   if (fits) return;
-  const list = [offered.engine ?? "default engine", offered.model].filter(Boolean).join("/");
-  const asked = [engine, model].filter(Boolean).join("/");
+  const list = [offered.engine ?? "default engine", offered.model, offered.effort].filter(Boolean).join("/");
+  const asked = [engine, model, effort].filter(Boolean).join("/");
   throw new SessionError(
     `Hydra pair "${pair.title}" governs this session: heads run on ${list}. ${asked} is outside the pair, and only the operator can change that. ` +
       `If the pair's engine is failing (503s, rate limits, auth errors), do not switch engines and do not do the work yourself: stop, tell the operator ` +
@@ -631,7 +633,7 @@ export function createChild(input: CreateChildInput): SessionRecord {
     // A roles pair has no heads config to fall back on, by design: the lead picks a role.
     throw new SessionError(`This pair runs heads by role. Pass role: one of ${Object.keys(pair.roles ?? {}).join(", ")}.`);
   }
-  if (pair && !caller.operator) assertWithinPair(pair, roleCfg, clean(input.engine), clean(input.model));
+  if (pair && !caller.operator) assertWithinPair(pair, roleCfg, clean(input.engine), clean(input.model), clean(input.effort));
 
   // The specialized agent: asked for explicitly, else the one the pair role names.
   const agentName = clean(input.agent) ?? clean(roleCfg?.agent);
