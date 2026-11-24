@@ -12,7 +12,7 @@
  *   codex   `exec --json`: thread.started, item.*, turn.completed|failed
  *   cursor  `-p --output-format stream-json`: tool_call started|completed, thinking, plus claude-shaped
  *   agy     `--output-format stream-json`: { event: init | step_update | result }
- *   opencode `run --format json`: step_start, text, tool_use (completed, self-contained), step_finish
+ *   opencode `run --format json`: step_start, text, tool_use (completed, self-contained), step_finish, error
  *   devin   `acp`: JSON-RPC session/update notifications; the session/prompt response is the terminal event
  */
 import { truncate } from "../util";
@@ -695,14 +695,30 @@ export function createStreamAccumulator(
       }
     }
 
-    // opencode: { type: "step_start" | "text" | "tool_use" | "step_finish", part, sessionID }
+    // opencode: { type: "step_start" | "text" | "tool_use" | "step_finish" | "error", part, sessionID }
     if (
       event?.type === "step_start" ||
       event?.type === "step_finish" ||
       (event?.type === "tool_use" && event?.part) ||
-      (event?.type === "text" && event?.part)
+      (event?.type === "text" && event?.part) ||
+      (label === "opencode" && event?.type === "error")
     ) {
       setSession(event.sessionID);
+      if (event.type === "error") {
+        // `run` prints one error event and exits non-zero; its message is the reason, not "exit code 1".
+        const e = event.error;
+        const msg =
+          (typeof e?.data?.message === "string" && e.data.message) ||
+          (typeof e?.message === "string" && e.message) ||
+          (typeof e?.name === "string" && e.name) ||
+          "opencode reported an error";
+        sawResult = true;
+        errored = true;
+        resultText = msg;
+        if (RESUME_REJECTED_PATTERNS.some((re) => re.test(msg))) sawResumeRejection = true;
+        onLine(`[${label}] error: ${truncate(msg, 200)}`);
+        return;
+      }
       if (event.type === "text" && typeof event.part?.text === "string" && event.part.text.trim()) {
         lastAssistantText += event.part.text;
         onLine(event.part.text.trimEnd());

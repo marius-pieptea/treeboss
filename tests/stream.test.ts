@@ -308,6 +308,20 @@ describe("other engines", () => {
     expect(acc.finalText()).toBe("done");
   });
 
+  test("opencode: a terminal error event is an error and its message is the answer", () => {
+    const { acc, lines } = feed(
+      [
+        { type: "step_start", sessionID: "oc4", part: {} },
+        { type: "error", sessionID: "oc4", error: { name: "UnknownError", data: { message: "Unexpected server error" } } },
+      ],
+      "opencode",
+    );
+    expect(acc.completed()).toBe(true);
+    expect(acc.isError()).toBe(true);
+    expect(acc.finalText()).toBe("Unexpected server error");
+    expect(lines).toContain("[opencode] error: Unexpected server error");
+  });
+
   test("opencode: a failed tool_use is marked", () => {
     const { lines } = feed(
       [

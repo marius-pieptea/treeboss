@@ -60,6 +60,7 @@ import { lifecycleRoutes } from "./routes/lifecycle";
 import { contextRoutes } from "./routes/context";
 import { searchRoutes } from "./routes/search";
 import { devserverRoutes } from "./routes/x_devserver";
+import { withRecording } from "./record";
 import { COOKIE, cookieFrom, mintTicket, redeemTicket, serveStatic, sessionCookie } from "./ui";
 import { remoteRoutes } from "./routes/remote";
 import { getTerminal } from "../terminal/pty";
@@ -178,12 +179,13 @@ export function startServer(opts: ServerOptions) {
   };
 
   const primaryHost = opts.hostname ?? "127.0.0.1";
+  const recordDir = process.env.TRB_RECORD_DIR;
   const listen = (hostname: string, port: number) => Bun.serve<TerminalSocketData | LiveSocketData>({
     hostname,
     port,
     // A subagent_wait holds its request open; 255s is Bun's maximum idle timeout.
     idleTimeout: 255,
-    async fetch(req, srv) {
+    fetch: withRecording(recordDir, async (req, srv) => {
       const url = new URL(req.url);
       // DNS-rebinding guard: a hostile page that resolves its own name to 127.0.0.1 still sends its own Host.
       // Non-loopback hosts are admitted only while remote access is on (remote/hosts.ts).
@@ -229,7 +231,7 @@ export function startServer(opts: ServerOptions) {
         console.error(`[trb] ${req.method} ${url.pathname}:`, err);
         return json({ error: err?.message ?? "Internal error." }, 500);
       }
-    },
+    }),
     websocket: {
       open: (ws) => {
         const rid = (ws.data as any).remoteId as string | undefined;

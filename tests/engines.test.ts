@@ -132,17 +132,28 @@ describe("engines without MCP wiring say so instead of silently dropping the ser
   });
 });
 
-describe("opencode v2 launcher", () => {
-  test("no --dir or --variant: cwd is the spawn directory, the variant rides on --model", () => {
+describe("opencode launcher", () => {
+  test("effort goes to --variant; the model stays bare", () => {
     const a = ENGINES.opencode.build(input({ model: "zai-coding-plan/glm-5.3-flash", effort: "high" }), "opencode").args;
     expect(a).not.toContain("--dir");
-    expect(a).not.toContain("--variant");
-    expect(a.slice(a.indexOf("--model"), a.indexOf("--model") + 2)).toEqual(["--model", "zai-coding-plan/glm-5.3-flash#high"]);
+    expect(a.slice(a.indexOf("--model"), a.indexOf("--model") + 2)).toEqual(["--model", "zai-coding-plan/glm-5.3-flash"]);
+    expect(a.slice(a.indexOf("--variant"), a.indexOf("--variant") + 2)).toEqual(["--variant", "high"]);
   });
-  test("an existing #variant is replaced, and no effort leaves the model alone", () => {
-    expect(ENGINES.opencode.build(input({ model: "p/m#low", effort: "max" }), "opencode").args).toContain("p/m#max");
-    expect(ENGINES.opencode.build(input({ model: "p/m" }), "opencode").args).toContain("p/m");
-    expect(ENGINES.opencode.build(input({ model: "default", effort: "max" }), "opencode").args).not.toContain("--model");
+  test("a model-embedded #variant becomes --variant; an explicit effort wins", () => {
+    expect(ENGINES.opencode.build(input({ model: "p/m#low", effort: "max" }), "opencode").args).toEqual(
+      expect.arrayContaining(["--model", "p/m", "--variant", "max"]),
+    );
+    expect(ENGINES.opencode.build(input({ model: "p/m#low" }), "opencode").args).toEqual(
+      expect.arrayContaining(["--model", "p/m", "--variant", "low"]),
+    );
+  });
+  test("no effort means no --variant; the default model still takes one", () => {
+    const a = ENGINES.opencode.build(input({ model: "p/m" }), "opencode").args;
+    expect(a).toContain("p/m");
+    expect(a).not.toContain("--variant");
+    const d = ENGINES.opencode.build(input({ model: "default", effort: "max" }), "opencode").args;
+    expect(d).not.toContain("--model");
+    expect(d.slice(d.indexOf("--variant"), d.indexOf("--variant") + 2)).toEqual(["--variant", "max"]);
   });
 });
 

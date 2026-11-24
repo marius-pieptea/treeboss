@@ -304,9 +304,13 @@ const opencode: EngineDef = {
   build(input, bin) {
     const args = ["run", "--format", "json", ...(input.mode === "plan" || input.mode === "ask" ? ["--agent", "plan"] : ["--auto"]), "--thinking"];
     if (input.resumeId) args.push("--session", input.resumeId);
-    // v2 dropped --dir (the runner spawns in input.cwd) and --variant: the variant rides on the model as `provider/model#variant`.
-    // A variant needs a model to hang on, so with the default model an effort has nowhere to go.
-    if (!isDefaultModel(input.model)) args.push("--model", input.effort ? `${input.model!.replace(/#.*$/, "")}#${input.effort}` : input.model!);
+    // Effort is opencode's --variant flag (`run --help`, 1.19.6): a `provider/model#variant` model
+    // only ever produced "Unexpected server error". A `#` on the model is the same fact, so it is
+    // re-read as the variant, an explicit effort winning. No --dir: the runner spawns in input.cwd.
+    const [model, hashVariant] = (input.model ?? "").split("#", 2);
+    if (!isDefaultModel(model)) args.push("--model", model);
+    const variant = input.effort ?? hashVariant;
+    if (variant) args.push("--variant", variant);
     const inline = opencodeMcpConfig(input.mcp);
     return {
       cmd: bin,
