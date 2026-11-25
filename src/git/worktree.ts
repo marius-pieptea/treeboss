@@ -71,7 +71,7 @@ interface GitResult {
  * `unstageScaffolding` takes any of them back out of a commit unless the repo
  * already tracked them at the base.
  */
-export const SCAFFOLD_PATHS = [".cursor/mcp.json", ".devin/mcp_config.json", ".claude/skills", ".agents/skills", ".cursor/skills", ".grok/skills"];
+export const SCAFFOLD_PATHS = [".cursor/mcp.json", ".devin/mcp_config.json", ".agents/mcp_config.json", ".claude/skills", ".agents/skills", ".cursor/skills", ".grok/skills"];
 
 /**
  * `spawnSync`, so two sessions in one daemon cannot interleave `worktree add` /

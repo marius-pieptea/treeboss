@@ -327,7 +327,7 @@ const agy: EngineDef = {
   id: "agy",
   label: "Antigravity",
   binaries: ["agy"],
-  mcp: "none",
+  mcp: "workspace-file",
   skillsDir: ".agents/skills",
   resume: true,
   build(input, bin) {
@@ -337,13 +337,18 @@ const agy: EngineDef = {
     // agy model ids bake effort in (`gemini-3.8-flash-high`); the CLI rejects --effort alongside one.
     if (input.effort && (isDefaultModel(input.model) || !/-(low|medium|high)$/.test(input.model!))) args.push("--effort", input.effort);
     args.push("-p", input.prompt);
+    let restore: () => void = () => {};
+    if (Object.keys(input.mcp).length > 0) {
+      const file = path.join(input.cwd, ".agents", "mcp_config.json");
+      restore = writeWorkspaceFile(file, JSON.stringify(mergeAgyMcpConfig(file, agyMcpJson(input.mcp)), null, 2));
+    }
     return {
       cmd: bin,
       args,
       stdin: null,
       env: baseEnv(),
-      cleanup: () => {},
-      notes: Object.keys(input.mcp).length ? ["agy: trb's MCP servers are not wired; running without them."] : [],
+      cleanup: restore,
+      notes: [],
     };
   },
 };
@@ -390,6 +395,30 @@ const fake: EngineDef = {
     return { ...spec, args: spec.args.filter((a) => a !== "--dangerously-skip-permissions") };
   },
 };
+
+/** `.agents/mcp_config.json`: stdio entries as `{ command, args, env? }`, HTTP entries use `serverUrl`. */
+function agyMcpJson(cfg: McpRunConfig): { mcpServers: Record<string, unknown> } {
+  const mcpServers: Record<string, unknown> = {};
+  for (const [name, s] of Object.entries(cfg)) {
+    mcpServers[name] =
+      s.type === "stdio"
+        ? { command: s.command, args: s.args, ...(s.env && Object.keys(s.env).length ? { env: s.env } : {}) }
+        : { serverUrl: s.url, ...(s.headers && Object.keys(s.headers).length ? { headers: s.headers } : {}) };
+  }
+  return { mcpServers };
+}
+
+/** Merge `ours` onto an existing `.agents/mcp_config.json` when it has an object `mcpServers`; ours win on clash. */
+function mergeAgyMcpConfig(file: string, ours: { mcpServers: Record<string, unknown> }): { mcpServers: Record<string, unknown> } {
+  try {
+    if (!fs.existsSync(file)) return ours;
+    const existing = JSON.parse(fs.readFileSync(file, "utf-8"));
+    if (existing && typeof existing === "object" && !Array.isArray(existing) && existing.mcpServers && typeof existing.mcpServers === "object" && !Array.isArray(existing.mcpServers)) {
+      return { ...existing, mcpServers: { ...existing.mcpServers, ...ours.mcpServers } };
+    }
+  } catch {}
+  return ours;
+}
 
 /** `.devin/mcp_config.json`: stdio entries as they are, remote ones name their kind `transport`. */
 function devinMcpJson(cfg: McpRunConfig): { mcpServers: Record<string, unknown> } {

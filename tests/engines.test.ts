@@ -119,8 +119,77 @@ describe("devin", () => {
   });
 });
 
+describe("agy", () => {
+  test("writes .agents/mcp_config.json with trb entry and cleanup removes the file and .agents dir", () => {
+    expect(ENGINES.agy.mcp).toBe("workspace-file");
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), "trb-agy-"));
+    try {
+      const s = ENGINES.agy.build(input({ cwd: ws, mcp }), "agy");
+      expect(s.notes).toEqual([]);
+      const file = path.join(ws, ".agents", "mcp_config.json");
+      expect(fs.existsSync(file)).toBe(true);
+      const cfg = JSON.parse(fs.readFileSync(file, "utf-8"));
+      expect(cfg.mcpServers.trb).toEqual({ command: "/usr/bin/bun", args: ["main.ts", "mcp-serve"], env: { TRB_SESSION: "s_1" } });
+      s.cleanup();
+      expect(fs.existsSync(file)).toBe(false);
+      expect(fs.existsSync(path.join(ws, ".agents"))).toBe(false);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("merges existing user mcpServers (ours wins on clash) and restores original bytes on cleanup", () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), "trb-agy-"));
+    try {
+      const file = path.join(ws, ".agents", "mcp_config.json");
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const original = '{\n  "extra": true,\n  "mcpServers": {\n    "mine": { "command": "my-mcp", "args": [] },\n    "trb": { "command": "old", "args": [] }\n  }\n}\n';
+      fs.writeFileSync(file, original);
+      const s = ENGINES.agy.build(input({ cwd: ws, mcp }), "agy");
+      const cfg = JSON.parse(fs.readFileSync(file, "utf-8"));
+      expect(cfg.extra).toBe(true);
+      expect(cfg.mcpServers.mine).toEqual({ command: "my-mcp", args: [] });
+      expect(cfg.mcpServers.trb).toEqual({ command: "/usr/bin/bun", args: ["main.ts", "mcp-serve"], env: { TRB_SESSION: "s_1" } });
+      s.cleanup();
+      expect(fs.readFileSync(file, "utf-8")).toBe(original);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("unparseable existing file writes ours only and cleanup restores original bytes", () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), "trb-agy-"));
+    try {
+      const file = path.join(ws, ".agents", "mcp_config.json");
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const original = "{not valid json";
+      fs.writeFileSync(file, original);
+      const s = ENGINES.agy.build(input({ cwd: ws, mcp }), "agy");
+      const cfg = JSON.parse(fs.readFileSync(file, "utf-8"));
+      expect(Object.keys(cfg)).toEqual(["mcpServers"]);
+      expect(cfg.mcpServers.trb.command).toBe("/usr/bin/bun");
+      s.cleanup();
+      expect(fs.readFileSync(file, "utf-8")).toBe(original);
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("renders http servers with serverUrl", () => {
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), "trb-agy-"));
+    try {
+      const s = ENGINES.agy.build(input({ cwd: ws, mcp }), "agy");
+      const cfg = JSON.parse(fs.readFileSync(path.join(ws, ".agents", "mcp_config.json"), "utf-8"));
+      expect(cfg.mcpServers.remote).toEqual({ serverUrl: "https://h/mcp", headers: { Authorization: "Bearer x" } });
+      s.cleanup();
+    } finally {
+      fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("engines without MCP wiring say so instead of silently dropping the servers", () => {
-  for (const id of ["agy", "grok"]) {
+  for (const id of ["grok"]) {
     test(id, () => {
       const s = ENGINES[id].build(input({ mcp }), id);
       expect(s.notes.join(" ")).toContain("not wired");
