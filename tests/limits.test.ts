@@ -3,7 +3,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { exposesLimits, getLimits, mergeWindows, parseCodexRateLimits, parseRateLimitInfo, recordLimits } from "../src/engines/limits";
-import { parseCursorUsage, parseDevinUserStatus, parseGrokBilling, readCodexWindows } from "../src/engines/plan-read";
+import { parseAgyUsage, parseCursorUsage, parseDevinUserStatus, parseGrokBilling, readCodexWindows } from "../src/engines/plan-read";
 
 const event = { status: "allowed", resetsAt: 1791462000, rateLimitType: "five_hour", unifiedWindows: { five_hour: { utilization: 0.03, resetsAt: 1791462000 } } };
 
@@ -223,5 +223,82 @@ describe("devin user status", () => {
 
   test("devin reports plan usage", () => {
     expect(exposesLimits("devin")).toBe(true);
+  });
+});
+
+describe("antigravity usage", () => {
+  const now = 1_795_000_000;
+  const reply = {
+    conversation_id: "",
+    status: "SUCCESS",
+    command: {
+      name: "usage",
+      data: {
+        groups: [
+          {
+            name: "Gemini Models",
+            buckets: [
+              { id: "gemini-weekly", name: "Weekly Limit Remaining", window: "weekly", remaining_fraction: 0.9701, reset_time: "2026-12-01T22:22:30Z" },
+              { id: "gemini-5h", name: "Five Hour Limit Remaining", window: "5h", remaining_fraction: 0.9312, reset_time: "2026-11-25T23:15:28Z" },
+            ],
+          },
+          {
+            name: "Claude and GPT models",
+            buckets: [
+              { id: "3p-weekly", name: "Weekly Limit Remaining", window: "weekly", remaining_fraction: 1, reset_time: "2026-12-02T22:25:34Z" },
+              { id: "3p-5h", name: "Five Hour Limit Remaining", window: "5h", remaining_fraction: 0.25, reset_time: "2026-11-26T03:25:34Z" },
+            ],
+          },
+        ],
+      },
+    },
+  };
+
+  test("groups and buckets become used windows with reset times", () => {
+    const windows = parseAgyUsage(JSON.stringify(reply), now);
+    expect(windows).toEqual([
+      { id: "gemini_weekly", title: "Weekly · Gemini", percent: 3, resets_at: Math.floor(Date.parse("2026-12-01T22:22:30Z") / 1000), status: "allowed", at: now },
+      { id: "gemini_5h", title: "5-hour · Gemini", percent: 6.9, resets_at: Math.floor(Date.parse("2026-11-25T23:15:28Z") / 1000), status: "allowed", at: now },
+      { id: "third_party_weekly", title: "Weekly · Claude/GPT", percent: 0, resets_at: Math.floor(Date.parse("2026-12-02T22:25:34Z") / 1000), status: "allowed", at: now },
+      { id: "third_party_5h", title: "5-hour · Claude/GPT", percent: 75, resets_at: Math.floor(Date.parse("2026-11-26T03:25:34Z") / 1000), status: "allowed", at: now },
+    ]);
+  });
+
+  test("zero or omitted remaining_fraction with a reset reads as limit reached", () => {
+    const exhausted = {
+      status: "SUCCESS",
+      command: {
+        name: "usage",
+        data: {
+          groups: [
+            {
+              name: "Gemini Models",
+              buckets: [
+                { id: "gemini-5h", window: "5h", remaining_fraction: 0, reset_time: "2026-11-25T23:15:28Z" },
+                { id: "gemini-weekly", window: "weekly", reset_time: "2026-12-01T22:22:30Z" },
+              ],
+            },
+          ],
+        },
+      },
+    };
+    expect(parseAgyUsage(exhausted, now)).toMatchObject([
+      { id: "gemini_5h", percent: 100, status: "limit reached" },
+      { id: "gemini_weekly", percent: 100, status: "limit reached" },
+    ]);
+  });
+
+  test("errors, wrong commands, malformed numbers and garbage yield nothing", () => {
+    expect(parseAgyUsage("not json", now)).toEqual([]);
+    expect(parseAgyUsage({ status: "ERROR", command: reply.command }, now)).toEqual([]);
+    expect(parseAgyUsage({ status: "SUCCESS", command: { name: "models", data: reply.command.data } }, now)).toEqual([]);
+    expect(parseAgyUsage({
+      status: "SUCCESS",
+      command: { name: "usage", data: { groups: [{ name: "Gemini Models", buckets: [{ id: "gemini-5h", remaining_fraction: "nope" }, { id: "gemini-weekly" }] }] } },
+    }, now)).toEqual([]);
+  });
+
+  test("agy reports plan usage", () => {
+    expect(exposesLimits("agy")).toBe(true);
   });
 });

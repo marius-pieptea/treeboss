@@ -1,16 +1,18 @@
 /**
- * Grok, Cursor, Codex and Devin plan windows, read the way OpenBot reads them.
+ * Grok, Cursor, Codex, Devin and Antigravity plan windows.
  * Grok: `_x.ai/billing` on a short `grok agent stdio` session (the CLI uses its own sign-in).
  * Cursor: the dashboard calls the Cursor CLI sends, with the token in its auth file.
  * Codex: the newest rollout JSONL under `~/.codex/sessions`, whose `token_count` events carry `rate_limits`.
  * Devin: the CLI's own cached GetUserStatus reply (`user_status.*.bin` under its cache dir); no sign-in
  * is read and no call is made.
+ * Antigravity: `agy -p "/usage" --output-format json` (0 turns, 0 tokens, uses the CLI's own session).
  * The token is not logged or stored. A miss is cached so a sidebar poll does not retry at once.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { open, readFile, readdir, stat } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { runCmd } from "../git/run";
 import { killTree } from "../proctree";
 import { ENGINES, resolveBinary } from "./registry";
 import { getLimits, mergeWindows, parseCodexRateLimits, storeWindows, type LimitWindow } from "./limits";
@@ -18,6 +20,7 @@ import { getLimits, mergeWindows, parseCodexRateLimits, storeWindows, type Limit
 /** shortcut: at most one read per 5 minutes, including a miss, so hovering does not spawn grok or call Cursor every time. */
 const REFRESH_MS = 5 * 60_000;
 const GROK_TIMEOUT_MS = 12_000;
+const AGY_TIMEOUT_MS = 12_000;
 const CURSOR_TIMEOUT_MS = 10_000;
 /** Rollouts can pass 100 MB, so the newest `token_count` is found from the tail first. */
 const CODEX_TAIL_START = 256 * 1024;
@@ -532,9 +535,109 @@ export function readGrokWindows(bin: string, now = Math.floor(Date.now() / 1000)
   });
 }
 
+const AGY_GROUPS: Record<string, string> = {
+  "gemini models": "Gemini",
+  "claude and gpt models": "Claude/GPT",
+};
+
+const AGY_BUCKET_IDS: Record<string, string> = {
+  "gemini-5h": "gemini_5h",
+  "gemini-weekly": "gemini_weekly",
+  "3p-5h": "third_party_5h",
+  "3p-weekly": "third_party_weekly",
+};
+
+const AGY_SPAN_TITLES: Record<string, string> = {
+  "5h": "5-hour",
+  daily: "Daily",
+  weekly: "Weekly",
+  monthly: "Monthly",
+};
+
+/** Antigravity's `agy -p "/usage" --output-format json` groups model pools with 5h and weekly buckets. */
+export function parseAgyUsage(value: unknown, now = Math.floor(Date.now() / 1000)): LimitWindow[] {
+  let parsed = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+  const body = asRecord(parsed);
+  if (!body || (typeof body.status === "string" && body.status !== "SUCCESS")) return [];
+  const cmd = asRecord(body.command);
+  if (!cmd || (typeof cmd.name === "string" && cmd.name !== "usage")) return [];
+  const groups = asRecord(cmd.data)?.groups;
+  if (!Array.isArray(groups)) return [];
+
+  const out: LimitWindow[] = [];
+  for (const rawGroup of groups) {
+    const group = asRecord(rawGroup);
+    if (!group || !Array.isArray(group.buckets)) continue;
+    const groupName = typeof group.name === "string" ? group.name.trim() : "";
+    const groupTag = AGY_GROUPS[groupName.toLowerCase()] ?? groupName.replace(/\s+models$/i, "").trim();
+
+    for (const rawBucket of group.buckets) {
+      const bucket = asRecord(rawBucket);
+      if (!bucket) continue;
+      const rawId = typeof bucket.id === "string" ? bucket.id.trim() : "";
+      const win = typeof bucket.window === "string" ? bucket.window.trim().toLowerCase() : "";
+      const resetMs = typeof bucket.reset_time === "string" ? Date.parse(bucket.reset_time) : Number.NaN;
+      const resetsAt = Number.isFinite(resetMs) ? Math.floor(resetMs / 1000) : null;
+
+      // Go's `omitempty` drops a 0.0 float when a bucket is exhausted; a malformed non-number is skipped.
+      let remaining: number | null;
+      if (bucket.remaining_fraction === undefined) {
+        if (resetsAt === null) continue;
+        remaining = 0;
+      } else {
+        remaining = finite(bucket.remaining_fraction);
+        if (remaining === null) continue;
+      }
+
+      const clamped = Math.max(0, Math.min(1, remaining));
+      const used = Math.round((1 - clamped) * 1000) / 10;
+      const fallbackId = (rawId || `${groupTag || "agy"}_${win || "limit"}`).replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").toLowerCase();
+      const id = AGY_BUCKET_IDS[rawId] ?? (fallbackId || "limit");
+      const rawName = typeof bucket.name === "string" ? bucket.name.replace(/\s+Limit\s+Remaining$/i, "").trim() : "Limit";
+      const spanTitle = AGY_SPAN_TITLES[win] ?? (rawName || "Limit");
+      const title = groupTag ? `${spanTitle} · ${groupTag}` : spanTitle;
+      out.push({ id, title, percent: used, resets_at: resetsAt, status: used >= 100 ? "limit reached" : "allowed", at: now });
+    }
+  }
+  return out;
+}
+
+/** Ask `agy -p "/usage" --output-format json` for its account quota (0 turns, 0 tokens). */
+export async function readAgyWindows(bin: string, now = Math.floor(Date.now() / 1000)): Promise<LimitWindow[]> {
+  const r = await runCmd(bin, ["-p", "/usage", "--output-format", "json"], {
+    cwd: tmpdir(),
+    timeoutMs: AGY_TIMEOUT_MS,
+    env: { NO_COLOR: "1", CI: "true" },
+  });
+  if (r.code !== 0) return [];
+  return parseAgyUsage(r.stdout.toString("utf8").trim(), now);
+}
+
+const LIMIT_READERS: Record<string, (now: number) => Promise<LimitWindow[]>> = {
+  agy: async (now) => {
+    const bin = resolveBinary(ENGINES.agy);
+    return bin ? readAgyWindows(bin, now) : [];
+  },
+  codex: (now) => readCodexWindows(now),
+  cursor: (now) => readCursorWindows(now),
+  devin: (now) => readDevinWindows(now),
+  grok: async (now) => {
+    const bin = resolveBinary(ENGINES.grok);
+    return bin ? readGrokWindows(bin, now) : [];
+  },
+};
+
 /** Refresh one engine when its snapshot is older than the cache. Failures keep the previous windows. */
 export async function refreshReportedLimits(engine: string): Promise<void> {
-  if (engine !== "grok" && engine !== "cursor" && engine !== "codex" && engine !== "devin") return;
+  const reader = LIMIT_READERS[engine];
+  if (!reader) return;
   const nowMs = Date.now();
   const snap = getLimits(engine, Math.floor(nowMs / 1000));
   if (snap.updated_at && nowMs / 1000 - snap.updated_at < REFRESH_MS / 1000) return;
@@ -544,14 +647,7 @@ export async function refreshReportedLimits(engine: string): Promise<void> {
   const job = (async () => {
     attempted.set(engine, Date.now());
     try {
-      const now = Math.floor(Date.now() / 1000);
-      const bin = engine === "grok" ? resolveBinary(ENGINES.grok) : null;
-      if (engine === "grok" && !bin) return;
-      const windows =
-        engine === "cursor" ? await readCursorWindows(now)
-        : engine === "codex" ? await readCodexWindows(now)
-        : engine === "devin" ? await readDevinWindows(now)
-        : await readGrokWindows(bin!, now);
+      const windows = await reader(Math.floor(Date.now() / 1000));
       if (engine === "codex") mergeWindows(engine, windows);
       else if (windows.length) storeWindows(engine, windows);
     } catch {
