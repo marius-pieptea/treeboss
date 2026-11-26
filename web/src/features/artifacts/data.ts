@@ -6,7 +6,7 @@ import { useUi } from "@/lib/store";
 
 export type ArtifactIntent = "document" | "slides" | "design" | "other";
 export type ArtifactOwner = "mine" | "shared" | "unknown";
-export type ArtifactError = "not_signed_in" | "no_plan" | "no_access" | "too_old" | "read_failed";
+export type ArtifactError = "not_signed_in" | "no_plan" | "no_access" | "too_old" | "usage_limit" | "read_failed";
 export type ArtifactContentKind = "html" | "markdown" | "files" | "summary";
 
 export interface ArtifactFileEntry {
@@ -39,7 +39,7 @@ export interface Artifact {
   contentPath: string | null;
 }
 
-export type AccountState = "ok" | "not_signed_in" | "no_plan" | "too_old" | "unknown";
+export type AccountState = "ok" | "not_signed_in" | "no_plan" | "too_old" | "usage_limit" | "unknown";
 export const MIN_CLAUDE_VERSION = "2.1.318";
 
 export interface AccountStatus {

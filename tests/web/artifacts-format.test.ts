@@ -137,8 +137,12 @@ describe("artifacts format", () => {
     expect(artifactBadges(ownedDesign)).toEqual({ rowType: "Design", detailType: "Design", shared: false });
 
     const unknownSummary = makeArtifact({ id: "d3", owner: "unknown", typeName: "Docs", contentKind: "summary" });
-    expect(isSharedArtifact(unknownSummary)).toBe(true);
-    expect(artifactBadges(unknownSummary)).toEqual({ rowType: "Docs", detailType: "Docs", shared: true });
+    expect(isSharedArtifact(unknownSummary)).toBe(false);
+    expect(artifactBadges(unknownSummary)).toEqual({ rowType: "Docs", detailType: "Docs", shared: false });
+
+    const sharedSummary = makeArtifact({ id: "d3b", owner: "shared", typeName: "Docs", contentKind: "summary" });
+    expect(isSharedArtifact(sharedSummary)).toBe(true);
+    expect(artifactBadges(sharedSummary)).toEqual({ rowType: "Docs", detailType: "Docs", shared: true });
 
     const legacyShared = makeArtifact({ id: "d4", owner: "shared", typeName: null, contentKind: null });
     expect(isSharedArtifact(legacyShared)).toBe(true);

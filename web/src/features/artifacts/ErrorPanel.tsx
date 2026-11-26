@@ -1,4 +1,4 @@
-import { Copy, ExternalLink, Lock, RefreshCw, Terminal, Trash2, TriangleAlert, UserRound } from "lucide-react";
+import { Copy, ExternalLink, Gauge, Lock, RefreshCw, Terminal, Trash2, TriangleAlert, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Empty } from "@/components/ui/misc";
@@ -59,6 +59,24 @@ export function AccountBanner({
             </Button>
           </div>
         </div>
+      </div>
+    );
+  }
+
+  if (account.state === "usage_limit") {
+    return (
+      <div className="flex items-start gap-2 border-b border-line bg-amber/[0.06] p-3 text-xs">
+        <Gauge className="mt-0.5 size-3.5 shrink-0 text-amber" />
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium text-fg">Claude's usage limit is reached</div>
+          <div className="mt-0.5 leading-relaxed text-fg-muted">
+            Reading artifacts runs Claude Code on your Claude subscription, and it has no usage left right now. The list below is from the last read. Try again after your limit resets.
+          </div>
+        </div>
+        <Button variant="subtle" onClick={onRefresh} disabled={refreshing}>
+          <RefreshCw className={refreshing ? "animate-spin-fast" : undefined} />
+          Try again
+        </Button>
       </div>
     );
   }
@@ -175,6 +193,25 @@ export function ErrorPanel({
             <Button variant="dangerGhost" onClick={onRemove}>
               <Trash2 />
               Remove from list
+            </Button>
+          </div>
+        }
+        className="h-full"
+      />
+    );
+  }
+
+  if (error === "usage_limit") {
+    return (
+      <Empty
+        icon={<Gauge />}
+        title="Claude's usage limit is reached"
+        hint="Reading artifacts runs Claude Code on your Claude subscription, and it has no usage left right now. The list below is from the last read. Try again after your limit resets."
+        action={
+          <div className="mt-2 flex items-center justify-center">
+            <Button variant="subtle" onClick={onRetry} disabled={retrying}>
+              <RefreshCw className={retrying ? "animate-spin-fast" : undefined} />
+              Try again
             </Button>
           </div>
         }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, File, FileText, Layers, LayoutPanelLeft, Link, Presentation, RefreshCw, Search } from "lucide-react";
+import { ChevronRight, File, FileText, Info, Layers, LayoutPanelLeft, Link, Presentation, RefreshCw, Search } from "lucide-react";
 import { Button, IconButton } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/form";
 import { Badge, Empty, SegTabs, Skeleton } from "@/components/ui/misc";
@@ -126,6 +126,13 @@ export function List({
           </IconButton>
         </div>
 
+        <p className="flex items-start gap-1 text-xs leading-snug text-fg-muted">
+          <Info className="mt-0.5 size-3 shrink-0" />
+          <span className="min-w-0 flex-1">
+            Claude only. Reads run Claude Code on your claude.ai plan, so it must be signed in and have usage left.
+          </span>
+        </p>
+
         {/* Row 2: paste link + Add */}
         <div className="flex flex-col gap-1">
           <form
@@ -216,7 +223,11 @@ export function List({
           <Empty
             icon={<Layers />}
             title="No artifacts yet"
-            hint="When a Claude session publishes an artifact to your claude.ai account, it shows up here. You can also paste a link above."
+            hint={
+              <>
+                Artifacts come from Claude: a Claude session publishes them to your claude.ai account, and TreeBoss reads them back through Claude Code. Other engines can use them through the <span className="font-mono">artifact_read</span> tool, as long as Claude Code is signed in and has usage left. You can also paste a claude.ai artifact link above.
+              </>
+            }
             className="m-3 rounded-xl border border-dashed border-line"
           />
         ) : filtered.length === 0 ? (

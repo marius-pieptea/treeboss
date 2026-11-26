@@ -166,7 +166,7 @@ export function groupArtifacts(items: Artifact[], mode: GroupMode, now = Date.no
 /** Whether an artifact should be treated as a shared summary-only item. */
 export function isSharedArtifact(item: Pick<Artifact, "owner" | "contentKind">): boolean {
   if (item.owner === "mine") return false;
-  if (item.contentKind === "summary") return true;
+  if (item.contentKind === "summary") return item.owner === "shared";
   if (item.contentKind === "html" || item.contentKind === "markdown" || item.contentKind === "files") return false;
   return item.owner === "shared";
 }
