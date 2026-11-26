@@ -15,7 +15,7 @@ import {
   saveError,
   saveRead,
 } from "../src/artifacts/store";
-import { artifactIdFromUrl, intentFromPath, parseArtifactUrl, parsePublished } from "../src/artifacts/capture";
+import { artifactIdFromUrl, intentFromPath, intentFromType, parseArtifactUrl, parsePublished } from "../src/artifacts/capture";
 import { resetState } from "./helpers";
 
 beforeEach(() => {
@@ -54,6 +54,13 @@ describe("artifacts capture helpers", () => {
     expect(intentFromPath("app.html", "Settings UI")).toBe("design");
     expect(intentFromPath("spec.md", "Architecture Spec")).toBe("document");
     expect(intentFromPath("build_tool.html", "Build Tool")).toBe("other");
+    expect(intentFromType("Docs")).toBe("document");
+    expect(intentFromType("Slides")).toBe("slides");
+    expect(intentFromType("Design")).toBe("design");
+    expect(intentFromType("Design System")).toBe("design");
+    expect(intentFromType("Whiteboard")).toBe("design");
+    expect(intentFromType("Data")).toBe("other");
+    expect(intentFromType(null)).toBeNull();
   });
 });
 
@@ -178,10 +185,32 @@ describe("artifacts store", () => {
     migrate(fresh);
     const cols = fresh.prepare("PRAGMA table_info(artifacts)").all() as Array<{ name: string }>;
     expect(cols.map((c) => c.name)).toContain("removed_at");
+    expect(cols.map((c) => c.name)).toContain("type_name");
+    expect(cols.map((c) => c.name)).toContain("content_kind");
+    expect(cols.map((c) => c.name)).toContain("content_path");
     const indexes = fresh
       .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'artifacts'")
       .all() as Array<{ name: string }>;
     expect(indexes.map((i) => i.name)).toContain("artifacts_created");
     fresh.close();
+
+    // Upgrading an older artifacts table without typed columns leaves existing rows with NULLs.
+    const legacy = new Database(":memory:");
+    legacy.exec(`CREATE TABLE artifacts (
+      id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT NOT NULL, intent TEXT NOT NULL DEFAULT 'other',
+      owner TEXT NOT NULL DEFAULT 'unknown', source TEXT NOT NULL, session_id TEXT, created_at INTEGER NOT NULL,
+      updated_at INTEGER, last_read_at INTEGER, html_path TEXT, summary TEXT, error TEXT, error_text TEXT, removed_at INTEGER
+    )`);
+    legacy
+      .prepare("INSERT INTO artifacts (id, url, title, source, created_at) VALUES (?, ?, ?, 'pasted', ?)")
+      .run("old-1", "https://claude.ai/artifact/old-1", "Old", 123);
+    migrate(legacy);
+    const oldRow = legacy.prepare("SELECT type_name, content_kind, content_path FROM artifacts WHERE id = 'old-1'").get() as {
+      type_name: string | null;
+      content_kind: string | null;
+      content_path: string | null;
+    };
+    expect(oldRow).toEqual({ type_name: null, content_kind: null, content_path: null });
+    legacy.close();
   });
 });

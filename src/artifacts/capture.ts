@@ -54,3 +54,14 @@ export function intentFromPath(filePath: string, title: string): ArtifactIntent 
   if ((fp.endsWith(".md") || fp.endsWith(".html")) && DOC_WORD_RE.test(combined)) return "document";
   return "other";
 }
+
+/** Map an artifact type name ("Docs", "Design", "Slides", …) to an ArtifactIntent. */
+export function intentFromType(typeName: string | null | undefined): ArtifactIntent | null {
+  const norm = (typeName ?? "").trim().toLowerCase();
+  if (!norm) return null;
+  if (norm === "docs" || norm === "document") return "document";
+  if (norm === "slides") return "slides";
+  if (norm === "design" || norm === "design system" || norm === "whiteboard") return "design";
+  if (norm === "data") return "other";
+  return "other";
+}

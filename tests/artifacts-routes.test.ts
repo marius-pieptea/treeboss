@@ -7,7 +7,7 @@ import { HttpError, makeCtx, type RouteModule } from "../src/daemon/http";
 import { artifactRoutes } from "../src/daemon/routes/artifacts";
 import { coreRoutes } from "../src/daemon/routes/core";
 import { drainReads, setClaudeSpawner } from "../src/artifacts/reader";
-import { addPasted, getArtifact } from "../src/artifacts/store";
+import { addPasted, getArtifact, saveRead } from "../src/artifacts/store";
 import { createLead, interruptAll } from "../src/sessions/manager";
 import { UserError } from "../src/util";
 import { makeDir, resetState, settled } from "./helpers";
@@ -263,5 +263,74 @@ describe("artifacts HTTP routes", () => {
     );
     expect(toolRes.status).toBe(200);
     expect((await toolRes.json()).text).toContain("<p>MCP</p>");
+  });
+
+  test("content, files, and file routes serve markdown and project files and block path traversal", async () => {
+    addPasted("https://claude.ai/artifact/md-1");
+    expect((await callRoute(artifactRoutes, "GET", "/api/artifacts/md-1/content")).status).toBe(404);
+    expect((await callRoute(artifactRoutes, "GET", "/api/artifacts/md-1/files")).status).toBe(404);
+
+    const mdDir = path.join(home(), "artifacts", "md-1");
+    fs.mkdirSync(mdDir, { recursive: true });
+    const mdPath = path.join(mdDir, "content.md");
+    fs.writeFileSync(mdPath, "# Spec\n\n## Overview\n\nHello markdown\n", "utf-8");
+    saveRead("md-1", {
+      owner: "mine",
+      typeName: "Docs",
+      intent: "document",
+      contentKind: "markdown",
+      contentPath: mdPath,
+      title: "Spec",
+    });
+
+    const mdRes = await callRoute(artifactRoutes, "GET", "/api/artifacts/md-1/content");
+    expect(mdRes.status).toBe(200);
+    expect(mdRes.headers.get("content-type")).toBe("text/markdown; charset=utf-8");
+    expect(await mdRes.text()).toContain("Hello markdown");
+
+    addPasted("https://claude.ai/artifact/des-1");
+    const filesDir = path.join(home(), "artifacts", "des-1", "files");
+    const projDir = path.join(filesDir, "project");
+    fs.mkdirSync(path.join(projDir, "sub"), { recursive: true });
+    const canvasJson = JSON.stringify({ v: 1, title: "App", boards: ["Home"] });
+    fs.writeFileSync(path.join(projDir, "canvas.json"), canvasJson, "utf-8");
+    fs.writeFileSync(path.join(projDir, "sub", "Home.dc.html"), "<div>Home</div>", "utf-8");
+    // Secret file outside filesDir to verify ../ traversal is refused.
+    fs.writeFileSync(path.join(home(), "artifacts", "des-1", "secret.txt"), "top-secret", "utf-8");
+
+    saveRead("des-1", {
+      owner: "mine",
+      typeName: "Design",
+      intent: "design",
+      contentKind: "files",
+      contentPath: filesDir,
+      title: "App",
+    });
+
+    const filesRes = await callRoute(artifactRoutes, "GET", "/api/artifacts/des-1/files");
+    expect(filesRes.status).toBe(200);
+    const filesBody = await filesRes.json();
+    expect(filesBody.files).toEqual([
+      { path: "project/canvas.json", size: Buffer.byteLength(canvasJson, "utf-8") },
+      { path: "project/sub/Home.dc.html", size: Buffer.byteLength("<div>Home</div>", "utf-8") },
+    ]);
+
+    const jsonRes = await callRoute(artifactRoutes, "GET", "/api/artifacts/des-1/file?path=project%2Fcanvas.json");
+    expect(jsonRes.status).toBe(200);
+    expect(jsonRes.headers.get("content-type")).toContain("application/json");
+    expect(await jsonRes.text()).toBe(canvasJson);
+
+    const boardRes = await callRoute(artifactRoutes, "GET", "/api/artifacts/des-1/file?path=project%2Fsub%2FHome.dc.html");
+    expect(boardRes.status).toBe(200);
+    expect(boardRes.headers.get("content-type")).toContain("text/html");
+    expect(boardRes.headers.get("content-security-policy")).toBe(
+      "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' https:; style-src 'unsafe-inline' https:; img-src data: blob: https:; font-src data: https:; media-src data: blob: https:; connect-src 'none'; frame-ancestors 'self'",
+    );
+    expect(await boardRes.text()).toBe("<div>Home</div>");
+
+    expect((await callRoute(artifactRoutes, "GET", "/api/artifacts/des-1/file?path=..%2Fsecret.txt")).status).toBe(404);
+    expect((await callRoute(artifactRoutes, "GET", "/api/artifacts/des-1/file?path=project%2F..%2F..%2Fsecret.txt")).status).toBe(404);
+    expect((await callRoute(artifactRoutes, "GET", "/api/artifacts/des-1/file?path=%2Fetc%2Fpasswd")).status).toBe(404);
+    expect((await callRoute(artifactRoutes, "GET", "/api/artifacts/des-1/file")).status).toBe(404);
   });
 });

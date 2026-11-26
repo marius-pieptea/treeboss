@@ -4,7 +4,7 @@ import { db } from "../db";
 import { home } from "../paths";
 import { UserError } from "../util";
 import { ARTIFACT_ID_RE, intentFromPath, parseArtifactUrl } from "./capture";
-import type { Artifact, ArtifactError, ArtifactIntent, ArtifactOwner } from "./types";
+import type { Artifact, ArtifactContentKind, ArtifactError, ArtifactIntent, ArtifactOwner } from "./types";
 
 interface ArtifactRow {
   id: string;
@@ -12,6 +12,9 @@ interface ArtifactRow {
   title: string;
   intent: ArtifactIntent;
   owner: ArtifactOwner;
+  type_name: string | null;
+  content_kind: ArtifactContentKind | null;
+  content_path: string | null;
   source: "created" | "pasted";
   session_id: string | null;
   session_title: string | null;
@@ -32,6 +35,9 @@ function toArtifact(row: ArtifactRow): Artifact {
     title: row.title,
     intent: row.intent,
     owner: row.owner,
+    typeName: row.type_name ?? null,
+    contentKind: row.content_kind ?? null,
+    contentPath: row.content_path ?? null,
     source: row.source,
     sessionId: row.session_id,
     sessionTitle: row.session_title ?? null,
@@ -87,6 +93,9 @@ export function recordPublished(input: {
          last_read_at = NULL,
          html_path = NULL,
          summary = NULL,
+         type_name = NULL,
+         content_kind = NULL,
+         content_path = NULL,
          error = NULL,
          error_text = NULL`,
     )
@@ -171,7 +180,16 @@ export function purgeRemoved(olderThanMs: number): number {
 /** Record the result of reading an artifact from claude.ai and clear any prior error. */
 export function saveRead(
   id: string,
-  data: { htmlPath?: string; summary?: string; owner?: ArtifactOwner; title?: string },
+  data: {
+    htmlPath?: string | null;
+    summary?: string | null;
+    owner?: ArtifactOwner;
+    title?: string;
+    intent?: ArtifactIntent;
+    typeName?: string | null;
+    contentKind?: ArtifactContentKind | null;
+    contentPath?: string | null;
+  },
 ): Artifact | null {
   const sets = ["last_read_at = ?", "error = NULL", "error_text = NULL"];
   const params: Array<string | number | null> = [Date.now()];
@@ -191,11 +209,64 @@ export function saveRead(
     sets.push("title = ?");
     params.push(data.title);
   }
+  if (data.intent !== undefined) {
+    sets.push("intent = ?");
+    params.push(data.intent);
+  }
+  if (data.typeName !== undefined) {
+    sets.push("type_name = ?");
+    params.push(data.typeName);
+  }
+  if (data.contentKind !== undefined) {
+    sets.push("content_kind = ?");
+    params.push(data.contentKind);
+  }
+  if (data.contentPath !== undefined) {
+    sets.push("content_path = ?");
+    params.push(data.contentPath);
+  }
   params.push(id);
   db()
     .prepare(`UPDATE artifacts SET ${sets.join(", ")} WHERE id = ?`)
     .run(...params);
   return getArtifact(id);
+}
+
+/** Recursively list non-symlink files inside `dir` as sorted relative POSIX paths with sizes. */
+export function listArtifactFiles(dir: string): Array<{ path: string; size: number }> {
+  const root = path.resolve(dir);
+  if (!fs.existsSync(root)) return [];
+  let realRoot: string;
+  try {
+    realRoot = fs.realpathSync(root);
+    if (!fs.statSync(realRoot).isDirectory()) return [];
+  } catch {
+    return [];
+  }
+  const out: Array<{ path: string; size: number }> = [];
+  const walk = (cur: string, relPrefix: string) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(cur, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const ent of entries) {
+      if (ent.isSymbolicLink()) continue;
+      const full = path.join(cur, ent.name);
+      const rel = relPrefix ? `${relPrefix}/${ent.name}` : ent.name;
+      if (ent.isDirectory()) {
+        walk(full, rel);
+      } else if (ent.isFile()) {
+        try {
+          out.push({ path: rel, size: fs.statSync(full).size });
+        } catch {}
+      }
+    }
+  };
+  walk(realRoot, "");
+  out.sort((a, b) => a.path.localeCompare(b.path));
+  return out;
 }
 
 /** Record an error from reading an artifact. */

@@ -6,8 +6,8 @@ import { ENGINES, resolveBinary } from "../engines/registry";
 import { shimInvocation } from "../engines/win-shim";
 import { home } from "../paths";
 import { DETACH_GROUP, killTree } from "../proctree";
-import { ARTIFACT_ID_RE, artifactIdFromUrl, parseArtifactUrl } from "./capture";
-import { getArtifact, saveError, saveRead } from "./store";
+import { ARTIFACT_ID_RE, artifactIdFromUrl, intentFromType, parseArtifactUrl } from "./capture";
+import { getArtifact, listArtifactFiles, saveError, saveRead } from "./store";
 import {
   MIN_CLAUDE_VERSION,
   type AccountState,
@@ -51,12 +51,43 @@ const VERSION_CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_CONCURRENT_READS = 2;
 const MAX_SUMMARY_CHARS = 2000;
 const MAX_PROMPT_CHARS = 500;
+const MAX_PROJECT_FILES = 60;
+const MAX_BINARY_BYTES = 2 * 1024 * 1024;
+const MAX_CONTENT_BYTES = 2 * 1024 * 1024;
 const DEFAULT_READ_PROMPT = "Summarize this artifact in 3 sentences: what it is and what it contains.";
 const LIST_LINE_RE = /^- \((mine|shared)\) (.+?) — (https:\/\/claude\.ai\/\S+) — updated (.+)$/;
 
 const NOT_SIGNED_IN_RE = /\bnot (?:logged|signed) in\b|\/login\b|\bunauthenticated\b|\b401\b/i;
 const NO_ACCESS_RE = /\b403\b|\b404\b|not authorized|forbidden|not found|no access/i;
 const NO_PLAN_RE = /\b(plan|subscription)\b.*\b(not|doesn't|does not)\b|upgrade/i;
+
+const DOCS_READ_TOOL = "mcp__claude_ai_Claude_Docs__read";
+const DOCS_EXPORT_TOOL = "mcp__claude_ai_Claude_Docs__export";
+const DOCS_NOT_CONNECTED_ERROR =
+  "Claude Docs isn't connected in Claude Code. Open claude.ai → Settings → Connectors, or run /mcp in Claude Code.";
+
+const TEXT_EXTS = new Set([
+  ".html",
+  ".htm",
+  ".json",
+  ".md",
+  ".markdown",
+  ".txt",
+  ".css",
+  ".scss",
+  ".js",
+  ".mjs",
+  ".cjs",
+  ".ts",
+  ".tsx",
+  ".jsx",
+  ".svg",
+  ".xml",
+  ".yaml",
+  ".yml",
+  ".csv",
+  ".toml",
+]);
 
 let customSpawner: ClaudeSpawner | null = null;
 let versionCache: { value: string | null; checkedAt: number } | null = null;
@@ -232,20 +263,43 @@ function extractToolResultText(content: unknown): string {
   return JSON.stringify(content ?? "");
 }
 
+interface ToolCallResult {
+  toolId: string;
+  name: string;
+  input: any;
+  text: string;
+  isError: boolean;
+}
+
 interface ParsedStream {
   initTools: string[] | null;
-  artifactToolIds: Set<string>;
-  toolResult: { text: string; isError: boolean } | null;
+  toolResults: ToolCallResult[];
+  artifactToolResult: ToolCallResult | null;
   assistantTexts: string[];
   finalResult: { text: string; isError: boolean } | null;
 }
 
 function parseStreamOutput(stdout: string): ParsedStream {
-  const artifactToolIds = new Set<string>();
+  const toolCalls = new Map<string, { name: string; input: any }>();
+  const toolResults: ToolCallResult[] = [];
   let initTools: string[] | null = null;
-  let toolResult: { text: string; isError: boolean } | null = null;
+  let artifactToolResult: ToolCallResult | null = null;
   const assistantTexts: string[] = [];
   let finalResult: { text: string; isError: boolean } | null = null;
+
+  const pushResult = (toolId: string, content: unknown, isError: boolean) => {
+    const call = toolCalls.get(toolId);
+    if (!call) return;
+    const res: ToolCallResult = {
+      toolId,
+      name: call.name,
+      input: call.input,
+      text: extractToolResultText(content),
+      isError,
+    };
+    toolResults.push(res);
+    if (call.name === "Artifact") artifactToolResult = res;
+  };
 
   for (const rawLine of stdout.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -267,16 +321,15 @@ function parseStreamOutput(stdout: string): ParsedStream {
       case "tool_use": {
         const name = event.tool_name || event.name;
         const toolId = event.tool_id || event.id;
-        if (toolId && name === "Artifact") artifactToolIds.add(toolId);
+        if (toolId && typeof name === "string") {
+          toolCalls.set(toolId, { name, input: event.input });
+        }
         break;
       }
       case "tool_result": {
         const toolId = event.tool_id || event.tool_use_id;
-        if (toolId && artifactToolIds.has(toolId)) {
-          toolResult = {
-            text: extractToolResultText(event.output ?? event.content),
-            isError: Boolean(event.is_error),
-          };
+        if (toolId) {
+          pushResult(toolId, event.output ?? event.content, Boolean(event.is_error));
         }
         break;
       }
@@ -285,7 +338,9 @@ function parseStreamOutput(stdout: string): ParsedStream {
         if (!Array.isArray(content)) break;
         for (const block of content) {
           if (block?.type === "tool_use") {
-            if (block.id && block.name === "Artifact") artifactToolIds.add(block.id);
+            if (block.id && typeof block.name === "string") {
+              toolCalls.set(block.id, { name: block.name, input: block.input });
+            }
           } else if (block?.type === "text" && typeof block.text === "string" && block.text.trim()) {
             assistantTexts.push(block.text.trim());
           }
@@ -296,13 +351,8 @@ function parseStreamOutput(stdout: string): ParsedStream {
         const content = event.message?.content;
         if (!Array.isArray(content)) break;
         for (const block of content) {
-          if (block?.type !== "tool_result") continue;
-          if (block.tool_use_id && artifactToolIds.has(block.tool_use_id)) {
-            toolResult = {
-              text: extractToolResultText(block.content),
-              isError: Boolean(block.is_error),
-            };
-          }
+          if (block?.type !== "tool_result" || !block.tool_use_id) continue;
+          pushResult(block.tool_use_id, block.content, Boolean(block.is_error));
         }
         break;
       }
@@ -317,7 +367,231 @@ function parseStreamOutput(stdout: string): ParsedStream {
     }
   }
 
-  return { initTools, artifactToolIds, toolResult, assistantTexts, finalResult };
+  return { initTools, toolResults, artifactToolResult, assistantTexts, finalResult };
+}
+
+export interface ParsedArtifactHeader {
+  artifactUuid: string | null;
+  owned: boolean;
+  typeName: string | null;
+  typeId: string | null;
+  docsId: string | null;
+  title: string | null;
+  isTyped: boolean;
+}
+
+/** Parse the metadata header returned by `Artifact` `read` without `path`. */
+export function parseArtifactHeader(text: string): ParsedArtifactHeader {
+  const headerLine = /\bArtifact\s+([A-Za-z0-9-]+)\s*\(version\b[^\r\n]*/i.exec(text);
+  const artifactUuid = headerLine && ARTIFACT_ID_RE.test(headerLine[1]!) ? headerLine[1]! : null;
+
+  let owned = false;
+  if (headerLine) {
+    const line = headerLine[0];
+    if (/\bowned by you\b/i.test(line) || /\bwriter\b/i.test(line)) {
+      owned = true;
+    } else if (/\bowned by\b/i.test(line)) {
+      owned = false;
+    }
+  } else if (/^[^\r\n]*\bowned by you\b/mi.test(text)) {
+    owned = true;
+  }
+
+  const typeMatch = /\ban?\s+Artifact of type "([^"\r\n]+)"/i.exec(text);
+  const typeName = typeMatch ? typeMatch[1]!.trim() || null : null;
+
+  const typeIdMatch =
+    /Created from the Artifact type https:\/\/claude\.ai\/(?:code\/)?artifact\/([A-Za-z0-9-]+)/i.exec(text);
+  const typeId = typeIdMatch && ARTIFACT_ID_RE.test(typeIdMatch[1]!) ? typeIdMatch[1]! : null;
+
+  const docsIdMatch =
+    /Claude Docs id is(?: this Artifact's own id,?)?\s*"([A-Za-z0-9-]+)"/i.exec(text);
+  let docsId = docsIdMatch && ARTIFACT_ID_RE.test(docsIdMatch[1]!) ? docsIdMatch[1]! : null;
+  if (!docsId && typeName?.toLowerCase() === "docs" && artifactUuid) {
+    docsId = artifactUuid;
+  }
+
+  const textWithoutTypeInstructions = text.replace(/<artifact-type-instructions>[\s\S]*?<\/artifact-type-instructions>/gi, "");
+  const titleMatch = /^Title:\s*(.+)$/mi.exec(textWithoutTypeInstructions);
+  const title = titleMatch ? titleMatch[1]!.trim() || null : null;
+
+  return {
+    artifactUuid,
+    owned,
+    typeName,
+    typeId,
+    docsId,
+    title,
+    isTyped: Boolean(typeName || typeId || docsId),
+  };
+}
+
+function parseByteSize(line: string): number | null {
+  const m = /(\d+(?:\.\d+)?)\s*(B|bytes?|KB|KiB|MB|MiB|GB|GiB)\b/i.exec(line);
+  if (!m) return null;
+  const val = Number(m[1]);
+  if (!Number.isFinite(val)) return null;
+  const unit = m[2]!.toLowerCase();
+  if (unit === "b" || unit === "byte" || unit === "bytes") return val;
+  if (unit === "kb" || unit === "kib") return val * 1024;
+  if (unit === "mb" || unit === "mib") return val * 1024 * 1024;
+  if (unit === "gb" || unit === "gib") return val * 1024 * 1024 * 1024;
+  return null;
+}
+
+function isBinaryFilePath(relPath: string): boolean {
+  const ext = path.posix.extname(relPath.toLowerCase());
+  return !TEXT_EXTS.has(ext);
+}
+
+/** Parse `project/` file paths from `Artifact` `list` scope `"files"` output. */
+export function parseFilesList(text: string): { typeName: string | null; paths: string[] } {
+  const typeMatch = /\ban?\s+Artifact of type "([^"\r\n]+)"/i.exec(text);
+  const typeName = typeMatch ? typeMatch[1]!.trim() || null : null;
+  const seen = new Set<string>();
+  const paths: string[] = [];
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    let candidate: string | null = null;
+    const quoted = /"(project\/[^"\r\n]+)"/.exec(line);
+    if (quoted) {
+      candidate = quoted[1]!;
+    } else {
+      const unquoted =
+        /(?:^|[\s`(*-])(project\/[^"'<>|\r\n]+?)(?=\s*\(\d|\s+—\s+|\s+\d+(?:\.\d+)?\s*(?:B|bytes?|KB|KiB|MB|MiB|GB|GiB)\b|["'`)\],;]|$)/.exec(
+          line,
+        );
+      if (unquoted) candidate = unquoted[1]!.trim();
+    }
+    if (!candidate) continue;
+    if (candidate.includes("..") || candidate.includes("\\") || /[\x00-\x1f]/.test(candidate)) continue;
+    const sizeBytes = parseByteSize(line);
+    if (sizeBytes !== null && sizeBytes > MAX_BINARY_BYTES && isBinaryFilePath(candidate)) continue;
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
+    paths.push(candidate);
+    if (paths.length >= MAX_PROJECT_FILES) break;
+  }
+
+  return { typeName, paths };
+}
+
+function parseLeadingJson(text: string): any {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{")) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {}
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i]!;
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === "{") {
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        try {
+          return JSON.parse(trimmed.slice(0, i + 1));
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function parseDocsReadPayload(text: string): { title: string | null; files: Array<{ id: string; name: string }> } {
+  const data = parseLeadingJson(text);
+  if (!data) return { title: null, files: [] };
+  const rawTitle =
+    typeof data?.value?.name === "string"
+      ? data.value.name
+      : typeof data?.name === "string"
+        ? data.name
+        : null;
+  const title = rawTitle?.trim() || null;
+  const rawFiles = Array.isArray(data?.files)
+    ? data.files
+    : Array.isArray(data?.value?.files)
+      ? data.value.files
+      : [];
+  const files: Array<{ id: string; name: string }> = [];
+  for (const f of rawFiles) {
+    const id = typeof f?.id === "string" ? f.id.trim() : f?.id !== undefined ? String(f.id).trim() : "";
+    if (!id) continue;
+    const name =
+      typeof f?.name === "string" && f.name.trim()
+        ? f.name.trim()
+        : typeof f?.title === "string" && f.title.trim()
+          ? f.title.trim()
+          : id;
+    files.push({ id, name });
+  }
+  return { title, files };
+}
+
+function extractExportMarkdown(text: string): string {
+  const obj = parseLeadingJson(text);
+  if (obj && typeof obj === "object") {
+    const b64 = typeof obj?.data?.bytes_b64 === "string" ? obj.data.bytes_b64 : typeof obj?.bytes_b64 === "string" ? obj.bytes_b64 : null;
+    if (b64 !== null) {
+      return Buffer.from(b64, "base64").toString("utf-8");
+    }
+    for (const key of ["markdown", "content", "text", "value"]) {
+      if (typeof obj?.[key] === "string") return obj[key];
+      if (typeof obj?.data?.[key] === "string") return obj.data[key];
+    }
+  }
+  return text;
+}
+
+function readTitleFromCanvasIndex(filesDir: string, savedFiles: Array<{ path: string; size: number }>): string | null {
+  const canvas =
+    savedFiles.find((f) => f.path === "project/canvas.json") ??
+    savedFiles.find((f) => path.posix.basename(f.path) === "canvas.json");
+  if (!canvas) return null;
+  try {
+    const raw = fs.readFileSync(path.join(filesDir, ...canvas.path.split("/")), "utf-8");
+    const parsed = JSON.parse(raw);
+    return typeof parsed?.title === "string" && parsed.title.trim() ? parsed.title.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function truncateUtf8(str: string, maxBytes: number): string {
+  if (Buffer.byteLength(str, "utf-8") <= maxBytes) return str;
+  let lo = 0;
+  let hi = str.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (Buffer.byteLength(str.slice(0, mid), "utf-8") <= maxBytes) lo = mid;
+    else hi = mid - 1;
+  }
+  let out = str.slice(0, lo);
+  // Avoid leaving a dangling high surrogate at the cut boundary.
+  if (out.length > 0) {
+    const last = out.charCodeAt(out.length - 1);
+    if (last >= 0xd800 && last <= 0xdbff) out = out.slice(0, -1);
+  }
+  return out;
 }
 
 async function acquireSlot(): Promise<void> {
@@ -368,6 +642,41 @@ function claudeArtifactArgs(prompt: string): string[] {
   ];
 }
 
+function claudeDocsArgs(prompt: string): string[] {
+  return [
+    "-p",
+    "--tools",
+    "",
+    "--allowedTools",
+    `ToolSearch,${DOCS_READ_TOOL},${DOCS_EXPORT_TOOL}`,
+    "--permission-mode",
+    "default",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    prompt,
+  ];
+}
+
+function failFromArtifactStream(id: string, out: SpawnOutput, parsed: ParsedStream): Artifact | null {
+  if (out.timedOut) {
+    return saveError(id, "read_failed", out.stderr.trim() || "Timed out reading artifact after 90s.");
+  }
+  if (parsed.artifactToolResult?.isError) {
+    const err = classify(parsed.artifactToolResult.text);
+    recordErrorAccountState(err);
+    return saveError(id, err, parsed.artifactToolResult.text);
+  }
+  const raw = [parsed.finalResult?.text, ...parsed.assistantTexts, out.stderr.trim()]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+  const toolMissing = parsed.initTools !== null && !parsed.initTools.includes("Artifact");
+  const err = classify(raw, { toolMissing });
+  recordErrorAccountState(err);
+  return saveError(id, err, raw || "Failed to read artifact.");
+}
+
 async function executeRead(id: string, url: string, opts?: { prompt?: string }): Promise<Artifact | null> {
   if (!ARTIFACT_ID_RE.test(id)) {
     return saveError(id, "read_failed", "Invalid artifact id.");
@@ -388,42 +697,231 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
     return saveError(id, "read_failed", "Claude Code is not installed.");
   }
 
+  const existing = getArtifact(id);
+  const pickTitle = (candidate?: string | null): string | undefined => {
+    const existingTitle = existing?.title?.trim() ?? "";
+    if (existingTitle && existingTitle !== "Untitled artifact") return undefined;
+    const clean = candidate?.trim();
+    return clean || undefined;
+  };
+
   const outDir = path.join(home(), "artifacts", id);
   fs.mkdirSync(outDir, { recursive: true });
-
   const summaryPrompt = sanitizePrompt(opts?.prompt);
-  const prompt = `Use the Artifact tool once with action "read", url ${JSON.stringify(parsedUrl.url)}, path "index.html", out_dir ${JSON.stringify(outDir)}, prompt ${JSON.stringify(summaryPrompt)} Then reply with the single word done.`;
 
-  const out = await runClaude(bin ?? "claude", claudeArtifactArgs(prompt), outDir, READ_TIMEOUT_MS);
-
-  if (out.timedOut) {
-    return saveError(id, "read_failed", out.stderr.trim() || "Timed out reading artifact after 90s.");
+  // Step A: read metadata header (without path) to classify ownership and artifact type.
+  const stepAPrompt = `Use the Artifact tool once with action "read", url ${JSON.stringify(parsedUrl.url)}, prompt ${JSON.stringify(summaryPrompt)} Then reply with the single word done.`;
+  const outA = await runClaude(bin ?? "claude", claudeArtifactArgs(stepAPrompt), outDir, READ_TIMEOUT_MS);
+  const parsedA = parseStreamOutput(outA.stdout);
+  if (outA.timedOut || !parsedA.artifactToolResult || parsedA.artifactToolResult.isError) {
+    return failFromArtifactStream(id, outA, parsedA);
   }
 
-  const parsed = parseStreamOutput(out.stdout);
-  if (parsed.toolResult) {
-    if (parsed.toolResult.isError) {
-      const err = classify(parsed.toolResult.text);
-      recordErrorAccountState(err);
-      return saveError(id, err, parsed.toolResult.text);
+  const htmlPath = path.join(outDir, "index.html");
+  if (parsedA.artifactToolResult.text.includes("File saved:") && fs.existsSync(htmlPath)) {
+    accountState = "ok";
+    return saveRead(id, {
+      htmlPath,
+      owner: "mine",
+      typeName: null,
+      contentKind: "html",
+      contentPath: null,
+      summary: null,
+    });
+  }
+
+  const header = parseArtifactHeader(parsedA.artifactToolResult.text);
+  const mappedIntent = intentFromType(header.typeName) ?? undefined;
+
+  // Not owned -> keep the shared summary returned by Step A.
+  if (!header.owned) {
+    accountState = "ok";
+    return saveRead(id, {
+      summary: parsedA.artifactToolResult.text.slice(0, MAX_SUMMARY_CHARS),
+      owner: "shared",
+      typeName: header.typeName,
+      intent: mappedIntent,
+      contentKind: "summary",
+      contentPath: null,
+      htmlPath: null,
+      title: pickTitle(header.title),
+    });
+  }
+
+  // Owned, plain HTML page (no type) -> read index.html into outDir.
+  if (!header.isTyped) {
+    const htmlPrompt = `Use the Artifact tool once with action "read", url ${JSON.stringify(parsedUrl.url)}, path "index.html", out_dir ${JSON.stringify(outDir)}, prompt ${JSON.stringify(summaryPrompt)} Then reply with the single word done.`;
+    const outHtml = await runClaude(bin ?? "claude", claudeArtifactArgs(htmlPrompt), outDir, READ_TIMEOUT_MS);
+    const parsedHtml = parseStreamOutput(outHtml.stdout);
+    if (outHtml.timedOut || !parsedHtml.artifactToolResult || parsedHtml.artifactToolResult.isError) {
+      return failFromArtifactStream(id, outHtml, parsedHtml);
     }
-    const htmlPath = path.join(outDir, "index.html");
-    if (parsed.toolResult.text.includes("File saved:") && fs.existsSync(htmlPath)) {
+    if (parsedHtml.artifactToolResult.text.includes("File saved:") && fs.existsSync(htmlPath)) {
       accountState = "ok";
-      return saveRead(id, { htmlPath, owner: "mine" });
+      return saveRead(id, {
+        htmlPath,
+        owner: "mine",
+        typeName: null,
+        contentKind: "html",
+        contentPath: null,
+        summary: null,
+        title: pickTitle(header.title),
+      });
     }
     accountState = "ok";
-    return saveRead(id, { summary: parsed.toolResult.text.slice(0, MAX_SUMMARY_CHARS), owner: "shared" });
+    return saveRead(id, {
+      summary: parsedHtml.artifactToolResult.text.slice(0, MAX_SUMMARY_CHARS),
+      owner: "shared",
+      typeName: null,
+      contentKind: "summary",
+      contentPath: null,
+      htmlPath: null,
+      title: pickTitle(header.title),
+    });
   }
 
-  const raw = [parsed.finalResult?.text, ...parsed.assistantTexts, out.stderr.trim()]
-    .filter(Boolean)
-    .join("\n")
-    .trim();
-  const toolMissing = parsed.initTools !== null && !parsed.initTools.includes("Artifact");
-  const err = classify(raw, { toolMissing });
-  recordErrorAccountState(err);
-  return saveError(id, err, raw || "Failed to read artifact.");
+  // Owned Docs -> Step B via non-strict Claude Docs MCP connector.
+  const isDocs = header.typeName?.toLowerCase() === "docs" || Boolean(header.docsId && !header.typeName);
+  if (isDocs) {
+    const docsId = header.docsId ?? header.artifactUuid;
+    if (!docsId || !ARTIFACT_ID_RE.test(docsId)) {
+      return saveError(id, "read_failed", "Could not determine valid Claude Docs id.");
+    }
+
+    const docsRef = JSON.stringify({ object: "project", id: docsId });
+    const docsContainer = JSON.stringify({ kind: "project", id: docsId });
+    const docsPrompt = [
+      `Use ToolSearch to load ${DOCS_READ_TOOL} and ${DOCS_EXPORT_TOOL}.`,
+      `Call ${DOCS_READ_TOOL} with ref ${docsRef}.`,
+      `Then for each item in files[], call ${DOCS_EXPORT_TOOL} with container ${docsContainer}, file set to that tab's id, and format "markdown".`,
+      "Reply with only the word done, print nothing else.",
+    ].join(" ");
+
+    const outB = await runClaude(bin ?? "claude", claudeDocsArgs(docsPrompt), outDir, READ_TIMEOUT_MS);
+    if (outB.timedOut) {
+      return saveError(id, "read_failed", outB.stderr.trim() || "Timed out reading Claude Docs after 90s.");
+    }
+    const parsedB = parseStreamOutput(outB.stdout);
+    if (
+      parsedB.initTools !== null &&
+      (!parsedB.initTools.includes(DOCS_READ_TOOL) || !parsedB.initTools.includes(DOCS_EXPORT_TOOL))
+    ) {
+      return saveError(id, "read_failed", DOCS_NOT_CONNECTED_ERROR);
+    }
+
+    const readRes = parsedB.toolResults.find((r) => r.name === DOCS_READ_TOOL);
+    if (!readRes) {
+      const raw = [parsedB.finalResult?.text, ...parsedB.assistantTexts, outB.stderr.trim()]
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+      const err = classify(raw);
+      recordErrorAccountState(err);
+      return saveError(id, err, raw || "Failed to read Claude Docs project.");
+    }
+    if (readRes.isError) {
+      const err = classify(readRes.text);
+      recordErrorAccountState(err);
+      return saveError(id, err, readRes.text);
+    }
+
+    const { title: docTitle, files: tabs } = parseDocsReadPayload(readRes.text);
+    const exportResults = parsedB.toolResults.filter((r) => r.name === DOCS_EXPORT_TOOL);
+    const failedExport = exportResults.find((r) => r.isError);
+    if (failedExport && exportResults.every((r) => r.isError)) {
+      const err = classify(failedExport.text);
+      recordErrorAccountState(err);
+      return saveError(id, err, failedExport.text);
+    }
+
+    const byTabId = new Map<string, string>();
+    const orderedExports: string[] = [];
+    for (const exp of exportResults) {
+      if (exp.isError) continue;
+      const md = extractExportMarkdown(exp.text);
+      orderedExports.push(md);
+      const tabId = typeof exp.input?.file === "string" ? exp.input.file.trim() : "";
+      if (tabId) byTabId.set(tabId, md);
+    }
+
+    const headingTitle = docTitle || header.title || existing?.title || "Untitled artifact";
+    const sections: string[] = [`# ${headingTitle}`];
+    if (tabs.length > 0) {
+      for (let i = 0; i < tabs.length; i++) {
+        const tab = tabs[i]!;
+        const md = byTabId.get(tab.id) ?? (byTabId.size === 0 ? orderedExports[i] : undefined);
+        if (md !== undefined) {
+          sections.push(`## ${tab.name}\n\n${md.trim()}`);
+        }
+      }
+    } else if (orderedExports.length > 0) {
+      for (const md of orderedExports) {
+        sections.push(md.trim());
+      }
+    }
+
+    if (sections.length <= 1 && orderedExports.length === 0) {
+      return saveError(id, "read_failed", "No exported markdown returned from Claude Docs.");
+    }
+
+    const contentMd = truncateUtf8(`${sections.join("\n\n")}\n`, MAX_CONTENT_BYTES);
+    const mdPath = path.join(outDir, "content.md");
+    fs.writeFileSync(mdPath, contentMd, "utf-8");
+
+    accountState = "ok";
+    const effectiveType = header.typeName ?? "Docs";
+    return saveRead(id, {
+      owner: "mine",
+      typeName: effectiveType,
+      intent: intentFromType(effectiveType) ?? "document",
+      contentKind: "markdown",
+      contentPath: mdPath,
+      htmlPath: null,
+      summary: null,
+      title: pickTitle(docTitle || header.title),
+    });
+  }
+
+  // Owned, files-based typed artifact (Design, Slides, Data, Whiteboard, Design System, ...).
+  const listPrompt = `Use the Artifact tool once with action "list", scope "files", url ${JSON.stringify(parsedUrl.url)}. Reply with its output verbatim.`;
+  const outList = await runClaude(bin ?? "claude", claudeArtifactArgs(listPrompt), outDir, READ_TIMEOUT_MS);
+  const parsedList = parseStreamOutput(outList.stdout);
+  if (outList.timedOut || !parsedList.artifactToolResult || parsedList.artifactToolResult.isError) {
+    return failFromArtifactStream(id, outList, parsedList);
+  }
+
+  const listed = parseFilesList(parsedList.artifactToolResult.text);
+  const effectiveType = header.typeName ?? listed.typeName;
+  if (listed.paths.length === 0) {
+    return saveError(id, "read_failed", "No project/ files found in artifact.");
+  }
+
+  const filesDir = path.join(outDir, "files");
+  fs.mkdirSync(filesDir, { recursive: true });
+  const filesPrompt = `Use the Artifact tool once with action "read", url ${JSON.stringify(parsedUrl.url)}, paths ${JSON.stringify(listed.paths)}, out_dir ${JSON.stringify(filesDir)}. Then reply with the single word done.`;
+  const outFiles = await runClaude(bin ?? "claude", claudeArtifactArgs(filesPrompt), filesDir, READ_TIMEOUT_MS);
+  const parsedFiles = parseStreamOutput(outFiles.stdout);
+  if (outFiles.timedOut || !parsedFiles.artifactToolResult || parsedFiles.artifactToolResult.isError) {
+    return failFromArtifactStream(id, outFiles, parsedFiles);
+  }
+
+  const savedFiles = listArtifactFiles(filesDir);
+  if (savedFiles.length === 0) {
+    return saveError(id, "read_failed", "Artifact files were not saved.");
+  }
+
+  const canvasTitle = readTitleFromCanvasIndex(filesDir, savedFiles);
+  accountState = "ok";
+  return saveRead(id, {
+    owner: "mine",
+    typeName: effectiveType,
+    intent: intentFromType(effectiveType) ?? undefined,
+    contentKind: "files",
+    contentPath: filesDir,
+    htmlPath: null,
+    summary: null,
+    title: pickTitle(header.title || canvasTitle),
+  });
 }
 
 /**
@@ -466,9 +964,9 @@ export async function listAccount(opts?: { force?: boolean }): Promise<{ account
   }
 
   const parsed = parseStreamOutput(out.stdout);
-  if (parsed.toolResult) {
-    if (parsed.toolResult.isError) {
-      recordErrorAccountState(classify(parsed.toolResult.text));
+  if (parsed.artifactToolResult) {
+    if (parsed.artifactToolResult.isError) {
+      recordErrorAccountState(classify(parsed.artifactToolResult.text));
       return { account: getAccount(), updated: 0 };
     }
 
@@ -476,7 +974,7 @@ export async function listAccount(opts?: { force?: boolean }): Promise<{ account
     const stmt = db().prepare(
       "UPDATE artifacts SET title = ?, owner = ?, updated_at = ? WHERE id = ? AND removed_at IS NULL",
     );
-    for (const line of parsed.toolResult.text.split(/\r?\n/)) {
+    for (const line of parsed.artifactToolResult.text.split(/\r?\n/)) {
       const m = LIST_LINE_RE.exec(line.trim());
       if (!m) continue;
       const owner = m[1] as ArtifactOwner;

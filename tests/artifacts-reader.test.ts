@@ -11,6 +11,8 @@ import {
   drainReads,
   getAccount,
   listAccount,
+  parseArtifactHeader,
+  parseFilesList,
   readArtifact,
   setClaudeSpawner,
   type SpawnInput,
@@ -347,9 +349,13 @@ describe("artifacts reader", () => {
     expect(defs[0]!.name).toBe("artifact_read");
 
     let mode: "own" | "shared" | "error" = "own";
+    mode = "own";
+    if (mode === "own") {
+      // keep type inference happy
+    }
     setClaudeSpawner(async (input) => {
       if (input.args[0] === "--version") return { exitCode: 0, stdout: "2.1.318\n", stderr: "" };
-      if (mode === "own") return { exitCode: 0, stdout: ownReadStream(input.cwd, "<div>" + "x".repeat(4500) + "</div>"), stderr: "" };
+      if (mode === "own") return { exitCode: 0, stdout: ownReadStream(input.cwd, "<div>" + "x".repeat(25000) + "</div>"), stderr: "" };
       if (mode === "shared") return { exitCode: 0, stdout: sharedReadStream("A shared summary."), stderr: "" };
       return {
         exitCode: 0,
@@ -363,7 +369,7 @@ describe("artifacts reader", () => {
 
     const ownRes = await executeArtifactTool("artifact_read", { url: "https://claude.ai/artifact/mcp-own" }, { sessionId: "s_1" });
     expect(ownRes.text).toMatch(/^Saved .*index\.html \(\d+ KB\)\. It is self-contained HTML\./);
-    expect(ownRes.text.split("\n\n")[1]).toHaveLength(4000);
+    expect(ownRes.text.split("\n\n")[1]).toHaveLength(20000);
     expect(getArtifact("mcp-own")?.source).toBe("pasted");
 
     mode = "shared";
@@ -382,5 +388,322 @@ describe("artifacts reader", () => {
     expect(buildRunMcpConfig({ ...base }).trb).toBeUndefined();
     const withSubagents = buildRunMcpConfig({ ...base, subagents: true }).trb;
     expect(withSubagents?.type === "stdio" && withSubagents.env?.TRB_ARTIFACTS).toBe("0");
+  });
+
+  test("parseArtifactHeader classifies Docs, Design, plain owned, writer, and shared headers", () => {
+    const docsHeader = [
+      "Artifact 11111111-2222-3333-4444-555555555555 (version 3) — owned by you, private",
+      'an Artifact of type "Docs"',
+      "Created from the Artifact type https://claude.ai/artifact/type-docs-1",
+      'Its content is a Claude Docs document that already exists; its Claude Docs id is this Artifact\'s own id, "11111111-2222-3333-4444-555555555555".',
+      "<artifact-type-instructions>\n---\nname: pages\n---\n</artifact-type-instructions>",
+    ].join("\n");
+    expect(parseArtifactHeader(docsHeader)).toEqual({
+      artifactUuid: "11111111-2222-3333-4444-555555555555",
+      owned: true,
+      typeName: "Docs",
+      typeId: "type-docs-1",
+      docsId: "11111111-2222-3333-4444-555555555555",
+      title: null,
+      isTyped: true,
+    });
+
+    const designHeader = [
+      "Artifact aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee (version 1) — owned by you, private",
+      'an Artifact of type "Design"',
+      "Created from the Artifact type https://claude.ai/artifact/type-design-1",
+    ].join("\n");
+    expect(parseArtifactHeader(designHeader)).toEqual({
+      artifactUuid: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      owned: true,
+      typeName: "Design",
+      typeId: "type-design-1",
+      docsId: null,
+      title: null,
+      isTyped: true,
+    });
+
+    const plainHeader = "Artifact 99999999-aaaa-bbbb-cccc-dddddddddddd (version 1) — owned by you, private";
+    expect(parseArtifactHeader(plainHeader)).toEqual({
+      artifactUuid: "99999999-aaaa-bbbb-cccc-dddddddddddd",
+      owned: true,
+      typeName: null,
+      typeId: null,
+      docsId: null,
+      title: null,
+      isTyped: false,
+    });
+
+    const writerHeader = "Artifact 22222222-bbbb-cccc-dddd-eeeeeeeeeeee (version 2) — owned by Alice, writer";
+    expect(parseArtifactHeader(writerHeader).owned).toBe(true);
+
+    const sharedHeader = [
+      "Artifact 33333333-bbbb-cccc-dddd-eeeeeeeeeeee (version 2) — owned by Bob",
+      "Summary: This document describes a writer in Paris.",
+    ].join("\n");
+    expect(parseArtifactHeader(sharedHeader).owned).toBe(false);
+    expect(parseArtifactHeader("Summary of a shared artifact with a writer.").owned).toBe(false);
+  });
+
+  test("parseFilesList extracts project/ paths, skips >2MB binaries, and caps at 60", () => {
+    const lines = [
+      'Artifact abc (version 1), an Artifact of type "Design", 65 files',
+      "- project/canvas.json (512 bytes)",
+      "- project/Home.dc.html (12.5 KB)",
+      "- project/assets/big-video.mp4 (3.2 MB)",
+      "- project/assets/huge-text.json (3.0 MB)",
+      "- project/../escape.txt (10 bytes)",
+      "- src/ignored.ts (100 bytes)",
+      ...Array.from({ length: 65 }, (_, i) => `- project/board-${i}.dc.html (1 KB)`),
+    ].join("\n");
+    const parsed = parseFilesList(lines);
+    expect(parsed.typeName).toBe("Design");
+    expect(parsed.paths).toHaveLength(60);
+    expect(parsed.paths).toContain("project/canvas.json");
+    expect(parsed.paths).toContain("project/Home.dc.html");
+    expect(parsed.paths).toContain("project/assets/huge-text.json");
+    expect(parsed.paths).not.toContain("project/assets/big-video.mp4");
+    expect(parsed.paths).not.toContain("project/../escape.txt");
+    expect(parsed.paths).not.toContain("src/ignored.ts");
+  });
+
+  test("Docs two-step flow writes content.md with tabs, fills title, and artifact_read formats markdown", async () => {
+    const calls: SpawnInput[] = [];
+    const docsUuid = "aaaaaaaa-1111-2222-3333-444444444444";
+    setClaudeSpawner(async (input) => {
+      calls.push(input);
+      if (input.args[0] === "--version") return { exitCode: 0, stdout: "2.1.318\n", stderr: "" };
+      if (input.args.includes("--strict-mcp-config")) {
+        return {
+          exitCode: 0,
+          stdout: streamLines([
+            { type: "system", subtype: "init", tools: ["Artifact"] },
+            { type: "assistant", message: { content: [{ type: "tool_use", id: "tu_a", name: "Artifact", input: { action: "read" } }] } },
+            {
+              type: "user",
+              message: {
+                content: [
+                  {
+                    type: "tool_result",
+                    tool_use_id: "tu_a",
+                    is_error: false,
+                    content: [
+                      `Artifact ${docsUuid} (version 2) — owned by you, private`,
+                      'an Artifact of type "Docs"',
+                      "Created from the Artifact type https://claude.ai/artifact/docs-type",
+                      `Its content is a Claude Docs document that already exists; its Claude Docs id is this Artifact's own id, "${docsUuid}".`,
+                    ].join("\n"),
+                  },
+                ],
+              },
+            },
+          ]),
+          stderr: "",
+        };
+      }
+      // Step B: non-strict Docs run
+      return {
+        exitCode: 0,
+        stdout: streamLines([
+          {
+            type: "system",
+            subtype: "init",
+            tools: ["ToolSearch", "mcp__claude_ai_Claude_Docs__read", "mcp__claude_ai_Claude_Docs__export"],
+          },
+          {
+            type: "assistant",
+            message: {
+              content: [
+                { type: "tool_use", id: "tu_r", name: "mcp__claude_ai_Claude_Docs__read", input: { ref: { object: "project", id: docsUuid } } },
+                { type: "tool_use", id: "tu_e1", name: "mcp__claude_ai_Claude_Docs__export", input: { container: { kind: "project", id: docsUuid }, file: "tab-1", format: "markdown" } },
+                { type: "tool_use", id: "tu_e2", name: "mcp__claude_ai_Claude_Docs__export", input: { container: { kind: "project", id: docsUuid }, file: "tab-2", format: "markdown" } },
+              ],
+            },
+          },
+          {
+            type: "user",
+            message: {
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: "tu_r",
+                  is_error: false,
+                  content:
+                    JSON.stringify({
+                      value: { name: "Architecture Doc" },
+                      files: [
+                        { id: "tab-1", name: "Overview" },
+                        { id: "tab-2", name: "API" },
+                      ],
+                    }) + "\n\nThis doc takes suggestions.",
+                },
+                {
+                  type: "tool_result",
+                  tool_use_id: "tu_e1",
+                  is_error: false,
+                  content: JSON.stringify({
+                    verdict: "allow",
+                    data: { bytes_b64: Buffer.from("First tab body.", "utf-8").toString("base64") },
+                  }),
+                },
+                { type: "tool_result", tool_use_id: "tu_e2", is_error: false, content: "Second tab body." },
+              ],
+            },
+          },
+        ]),
+        stderr: "",
+      };
+    });
+
+    const toolRes = await executeArtifactTool("artifact_read", { url: "https://claude.ai/artifact/docs-1" }, { sessionId: "s_1" });
+    const item = getArtifact("docs-1")!;
+    const expectedMdPath = path.join(home(), "artifacts", "docs-1", "content.md");
+
+    expect(item.owner).toBe("mine");
+    expect(item.typeName).toBe("Docs");
+    expect(item.intent).toBe("document");
+    expect(item.title).toBe("Architecture Doc");
+    expect(item.contentKind).toBe("markdown");
+    expect(item.contentPath).toBe(expectedMdPath);
+    expect(fs.readFileSync(expectedMdPath, "utf-8")).toBe(
+      "# Architecture Doc\n\n## Overview\n\nFirst tab body.\n\n## API\n\nSecond tab body.\n",
+    );
+
+    const stepB = calls.find((c) => c.args.includes("default"))!;
+    expect(stepB).toBeDefined();
+    expect(stepB.args).not.toContain("--strict-mcp-config");
+    expect(stepB.args).not.toContain("--mcp-config");
+    expect(stepB.args).not.toContain("bypassPermissions");
+    expect(stepB.args).toContain("--tools");
+    expect(stepB.args[stepB.args.indexOf("--tools") + 1]).toBe("");
+    expect(stepB.args).toContain("ToolSearch,mcp__claude_ai_Claude_Docs__read,mcp__claude_ai_Claude_Docs__export");
+
+    expect(toolRes.text).toContain('Claude Docs document "Architecture Doc", saved as ');
+    expect(toolRes.text).toContain("## Overview\n\nFirst tab body.");
+  });
+
+  test("Docs connector missing from init tools returns exact error", async () => {
+    const docsUuid = "bbbbbbbb-1111-2222-3333-444444444444";
+    setClaudeSpawner(async (input) => {
+      if (input.args[0] === "--version") return { exitCode: 0, stdout: "2.1.318\n", stderr: "" };
+      if (input.args.includes("--strict-mcp-config")) {
+        return {
+          exitCode: 0,
+          stdout: streamLines([
+            { type: "system", subtype: "init", tools: ["Artifact"] },
+            { type: "assistant", message: { content: [{ type: "tool_use", id: "tu_a", name: "Artifact", input: { action: "read" } }] } },
+            {
+              type: "user",
+              message: {
+                content: [
+                  {
+                    type: "tool_result",
+                    tool_use_id: "tu_a",
+                    is_error: false,
+                    content: `Artifact ${docsUuid} (version 1) — owned by you, private\nan Artifact of type "Docs"`,
+                  },
+                ],
+              },
+            },
+          ]),
+          stderr: "",
+        };
+      }
+      return {
+        exitCode: 0,
+        stdout: streamLines([{ type: "system", subtype: "init", tools: ["ToolSearch"] }]),
+        stderr: "",
+      };
+    });
+
+    const item = addPasted("https://claude.ai/artifact/docs-missing");
+    const res = await readArtifact(item.id);
+    expect(res?.error).toBe("read_failed");
+    expect(res?.errorText).toBe(
+      "Claude Docs isn't connected in Claude Code. Open claude.ai → Settings → Connectors, or run /mcp in Claude Code.",
+    );
+  });
+
+  test("files-type flow reads project/ files into files dir and artifact_read includes canvas.json", async () => {
+    setClaudeSpawner(async (input) => {
+      if (input.args[0] === "--version") return { exitCode: 0, stdout: "2.1.318\n", stderr: "" };
+      const prompt = input.args.at(-1)!;
+      if (prompt.includes('action "list"')) {
+        return {
+          exitCode: 0,
+          stdout: streamLines([
+            { type: "system", subtype: "init", tools: ["Artifact"] },
+            { type: "assistant", message: { content: [{ type: "tool_use", id: "tu_l", name: "Artifact", input: { action: "list" } }] } },
+            {
+              type: "user",
+              message: {
+                content: [
+                  {
+                    type: "tool_result",
+                    tool_use_id: "tu_l",
+                    is_error: false,
+                    content: '- project/canvas.json (42 bytes)\n- project/Home.dc.html (18 bytes)',
+                  },
+                ],
+              },
+            },
+          ]),
+          stderr: "",
+        };
+      }
+      if (prompt.includes("paths ")) {
+        const projDir = path.join(input.cwd, "project");
+        fs.mkdirSync(projDir, { recursive: true });
+        fs.writeFileSync(path.join(projDir, "canvas.json"), '{"v":1,"title":"Mock","boards":["Home"]}', "utf-8");
+        fs.writeFileSync(path.join(projDir, "Home.dc.html"), "<div>Home</div>", "utf-8");
+        return {
+          exitCode: 0,
+          stdout: streamLines([
+            { type: "system", subtype: "init", tools: ["Artifact"] },
+            { type: "assistant", message: { content: [{ type: "tool_use", id: "tu_f", name: "Artifact", input: { action: "read" } }] } },
+            { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu_f", is_error: false, content: "Saved 2 files." }] } },
+          ]),
+          stderr: "",
+        };
+      }
+      // Step A
+      return {
+        exitCode: 0,
+        stdout: streamLines([
+          { type: "system", subtype: "init", tools: ["Artifact"] },
+          { type: "assistant", message: { content: [{ type: "tool_use", id: "tu_a", name: "Artifact", input: { action: "read" } }] } },
+          {
+            type: "user",
+            message: {
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: "tu_a",
+                  is_error: false,
+                  content:
+                    'Artifact cccccccc-1111-2222-3333-444444444444 (version 1) — owned by you, private\nan Artifact of type "Design"',
+                },
+              ],
+            },
+          },
+        ]),
+        stderr: "",
+      };
+    });
+
+    const toolRes = await executeArtifactTool("artifact_read", { url: "https://claude.ai/artifact/des-flow" }, { sessionId: "s_1" });
+    const item = getArtifact("des-flow")!;
+    const expectedFilesDir = path.join(home(), "artifacts", "des-flow", "files");
+
+    expect(item.owner).toBe("mine");
+    expect(item.title).toBe("Mock");
+    expect(item.typeName).toBe("Design");
+    expect(item.intent).toBe("design");
+    expect(item.contentKind).toBe("files");
+    expect(item.contentPath).toBe(expectedFilesDir);
+    expect(toolRes.text).toContain(`Artifact of type "Design" with 2 files saved under ${expectedFilesDir}:`);
+    expect(toolRes.text).toContain("- project/canvas.json");
+    expect(toolRes.text).toContain('{"v":1,"title":"Mock","boards":["Home"]}');
+    expect(toolRes.text).toContain("Read the files with your file tool.");
   });
 });

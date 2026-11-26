@@ -378,6 +378,9 @@ export function migrate(conn: Database): void {
   conn.exec("CREATE INDEX IF NOT EXISTS idx_qa_map_writes_job ON qa_map_writes(job_id, at)");
   addColumn(conn, "qa_runs", "session_id", "TEXT");
   addColumn(conn, "qa_jobs", "failed_units", "TEXT");
+  addColumn(conn, "artifacts", "type_name", "TEXT");
+  addColumn(conn, "artifacts", "content_kind", "TEXT");
+  addColumn(conn, "artifacts", "content_path", "TEXT");
   if ((conn.prepare("PRAGMA table_info(qa_sessions)").all() as Array<{ name: string }>).some((c) => c.name === "run_id")) {
     conn.exec("UPDATE qa_runs SET session_id = (SELECT session_id FROM qa_sessions WHERE qa_sessions.run_id = qa_runs.id) WHERE session_id IS NULL");
   }

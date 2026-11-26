@@ -1,5 +1,6 @@
 export type ArtifactIntent = "document" | "slides" | "design" | "other";
 export type ArtifactOwner = "mine" | "shared" | "unknown";
+export type ArtifactContentKind = "html" | "markdown" | "files" | "summary";
 export type ArtifactError = "not_signed_in" | "no_plan" | "no_access" | "too_old" | "read_failed";
 export interface Artifact {
   id: string;
@@ -7,6 +8,9 @@ export interface Artifact {
   title: string;
   intent: ArtifactIntent;
   owner: ArtifactOwner;
+  typeName: string | null;
+  contentKind: ArtifactContentKind | null;
+  contentPath: string | null;
   source: "created" | "pasted";
   sessionId: string | null;
   sessionTitle: string | null;

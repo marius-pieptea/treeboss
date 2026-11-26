@@ -10,7 +10,7 @@ export function artifactToolDefs() {
     {
       name: "artifact_read",
       description:
-        "Read a claude.ai artifact by its URL. For your own artifacts it saves the HTML and returns its path; for artifacts shared with you it returns a summary.",
+        "Read a claude.ai artifact by its URL. Returns the content (saved locally with its path) for the owner's docs, designs, and pages, or a summary for artifacts shared with you.",
       inputSchema: {
         type: "object",
         properties: {

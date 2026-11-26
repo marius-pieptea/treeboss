@@ -2,11 +2,12 @@
  * Executor for the artifact_read MCP tool.
  */
 import fs from "fs";
+import path from "path";
 import { UserError } from "../util";
 import { artifactIdFromUrl } from "./capture";
 import { ARTIFACT_TOOL_SET } from "./defs";
 import { isReading, readArtifact, waitForRead } from "./reader";
-import { addPasted, getArtifact } from "./store";
+import { addPasted, getArtifact, listArtifactFiles } from "./store";
 
 export { ARTIFACT_TOOL_SET };
 
@@ -14,7 +15,8 @@ export interface ToolResult {
   text: string;
 }
 
-const MAX_INLINE_HTML_CHARS = 4000;
+const MAX_INLINE_HTML_CHARS = 20_000;
+const MAX_INLINE_MD_CHARS = 40_000;
 
 export async function executeArtifactTool(
   name: string,
@@ -38,6 +40,40 @@ export async function executeArtifactTool(
     if (updated.error) {
       return { text: `Error: ${updated.errorText || updated.error}` };
     }
+
+    if (updated.contentKind === "markdown" && updated.contentPath && fs.existsSync(updated.contentPath)) {
+      const md = fs.readFileSync(updated.contentPath, "utf-8");
+      const header = `Claude Docs document "${updated.title}", saved as ${updated.contentPath}.`;
+      if (md.length > MAX_INLINE_MD_CHARS) {
+        return {
+          text: `${header}\n\n${md.slice(0, MAX_INLINE_MD_CHARS)}\n\n[Truncated at ${MAX_INLINE_MD_CHARS} of ${md.length} chars. Read ${updated.contentPath} for the full document.]`,
+        };
+      }
+      return { text: `${header}\n\n${md}` };
+    }
+
+    if (updated.contentKind === "files" && updated.contentPath && fs.existsSync(updated.contentPath)) {
+      const files = listArtifactFiles(updated.contentPath);
+      const typeLabel = updated.typeName || "files";
+      const lines = [
+        `Artifact of type "${typeLabel}" with ${files.length} files saved under ${updated.contentPath}:`,
+        ...files.map((f) => `- ${f.path} (${f.size} bytes)`),
+      ];
+      const indexFile =
+        files.find((f) => f.path === "project/canvas.json") ??
+        files.find((f) => path.posix.basename(f.path) === "canvas.json") ??
+        files.find((f) => f.path.endsWith(".json"));
+      if (indexFile) {
+        const indexAbs = path.join(updated.contentPath, ...indexFile.path.split("/"));
+        if (fs.existsSync(indexAbs)) {
+          const indexText = fs.readFileSync(indexAbs, "utf-8");
+          lines.push("", `${indexFile.path}:`, indexText);
+        }
+      }
+      lines.push("", "Read the files with your file tool.");
+      return { text: lines.join("\n") };
+    }
+
     if (updated.htmlPath && fs.existsSync(updated.htmlPath)) {
       const content = fs.readFileSync(updated.htmlPath, "utf-8");
       const kb = Math.round(Buffer.byteLength(content, "utf-8") / 1024);
@@ -45,6 +81,7 @@ export async function executeArtifactTool(
         text: `Saved ${updated.htmlPath} (${kb} KB). It is self-contained HTML.\n\n${content.slice(0, MAX_INLINE_HTML_CHARS)}`,
       };
     }
+
     if (updated.summary !== null) {
       return { text: `Summary: ${updated.summary}` };
     }
