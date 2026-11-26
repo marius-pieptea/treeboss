@@ -132,6 +132,16 @@ describe("artifacts reader", () => {
   });
 
   test("classify maps every error branch accurately", () => {
+    // usage_limit is checked first across every limit phrasing.
+    expect(classify("You've hit your 5-hour limit")).toBe("usage_limit");
+    expect(classify("Usage limit exceeded")).toBe("usage_limit");
+    expect(classify("Rate limit reached by API")).toBe("usage_limit");
+    expect(classify("Limit reached, please wait")).toBe("usage_limit");
+    expect(classify("You are out of usage until reset")).toBe("usage_limit");
+    expect(classify("You are out of extra usage")).toBe("usage_limit");
+    expect(classify("HTTP 429 Too Many Requests")).toBe("usage_limit");
+    expect(classify("429 rate limit: /login 403", { toolMissing: true })).toBe("usage_limit");
+
     expect(classify("Please run /login to continue")).toBe("not_signed_in");
     expect(classify("Not logged in")).toBe("not_signed_in");
     expect(classify("User is not signed in")).toBe("not_signed_in");
@@ -250,6 +260,68 @@ describe("artifacts reader", () => {
     const a3 = addPasted("https://claude.ai/artifact/err-3");
     expect((await readArtifact(a3.id))?.error).toBe("no_plan");
     expect(getAccount().state).toBe("no_plan");
+  });
+
+  test("usage_limit updates account state from stderr/result, formats artifact_read errors, and resets to ok on later success", async () => {
+    let mode: "limit_result" | "limit_stderr" | "not_signed_in" | "ok" = "limit_result";
+    setClaudeSpawner(async (input) => {
+      if (input.args[0] === "--version") return { exitCode: 0, stdout: "2.1.318\n", stderr: "" };
+      if (mode === "limit_result") {
+        return {
+          exitCode: 1,
+          stdout: streamLines([
+            { type: "system", subtype: "init", tools: ["Artifact"] },
+            { type: "result", is_error: true, result: "You've hit your 5-hour limit · resets 6pm" },
+          ]),
+          stderr: "",
+        };
+      }
+      if (mode === "limit_stderr") {
+        return {
+          exitCode: 1,
+          stdout: streamLines([
+            { type: "system", subtype: "init", tools: ["Artifact"] },
+            { type: "assistant", message: { content: [{ type: "tool_use", id: "tu_u", name: "Artifact", input: { action: "read" } }] } },
+            { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu_u", is_error: true, content: "Request failed" }] } },
+          ]),
+          stderr: "Error: HTTP 429 rate limit",
+        };
+      }
+      if (mode === "not_signed_in") {
+        return {
+          exitCode: 1,
+          stdout: streamLines([
+            { type: "system", subtype: "init", tools: ["Artifact"] },
+            { type: "result", is_error: true, result: "Please run /login" },
+          ]),
+          stderr: "",
+        };
+      }
+      return { exitCode: 0, stdout: sharedReadStream("Recovered summary."), stderr: "" };
+    });
+
+    const limRes = await executeArtifactTool("artifact_read", { url: "https://claude.ai/artifact/lim-1" }, { sessionId: "s_1" });
+    expect(getArtifact("lim-1")?.error).toBe("usage_limit");
+    expect(getAccount().state).toBe("usage_limit");
+    expect(limRes.text).toBe(
+      "Error: Claude's usage limit is reached, so artifacts can't be read right now. artifact_read runs Claude Code on the owner's subscription; try again after the limit resets.",
+    );
+
+    mode = "not_signed_in";
+    const authRes = await executeArtifactTool("artifact_read", { url: "https://claude.ai/artifact/auth-1" }, { sessionId: "s_1" });
+    expect(getArtifact("auth-1")?.error).toBe("not_signed_in");
+    expect(getAccount().state).toBe("not_signed_in");
+    expect(authRes.text).toBe("Error: Claude Code is not signed in to claude.ai, so artifacts can't be read.");
+
+    mode = "limit_stderr";
+    const lim2 = addPasted("https://claude.ai/artifact/lim-2");
+    expect((await readArtifact(lim2.id))?.error).toBe("usage_limit");
+    expect(getAccount().state).toBe("usage_limit");
+
+    mode = "ok";
+    const ok = await readArtifact("lim-2");
+    expect(ok?.error).toBeNull();
+    expect(getAccount().state).toBe("ok");
   });
 
   test("rejects second concurrent read of the same id with 409 error and caps 4 concurrent reads at 2", async () => {

@@ -57,6 +57,8 @@ const MAX_CONTENT_BYTES = 2 * 1024 * 1024;
 const DEFAULT_READ_PROMPT = "Summarize this artifact in 3 sentences: what it is and what it contains.";
 const LIST_LINE_RE = /^- \((mine|shared)\) (.+?) — (https:\/\/claude\.ai\/\S+) — updated (.+)$/;
 
+const USAGE_LIMIT_RE =
+  /\bhit your\b.{0,40}\blimit\b|\busage limit\b|\brate limit\b|\blimit reached\b|\bout of (extra )?usage\b|\b429\b/i;
 const NOT_SIGNED_IN_RE = /\bnot (?:logged|signed) in\b|\/login\b|\bunauthenticated\b|\b401\b/i;
 const NO_ACCESS_RE = /\b403\b|\b404\b|not authorized|forbidden|not found|no access/i;
 const NO_PLAN_RE = /\b(plan|subscription)\b.*\b(not|doesn't|does not)\b|upgrade/i;
@@ -239,6 +241,7 @@ export async function claudeVersion(force = false): Promise<string | null> {
 
 /** Classify a raw error message from Claude Code / claude.ai into an ArtifactError. */
 export function classify(text: string, opts?: { toolMissing?: boolean }): ArtifactError {
+  if (USAGE_LIMIT_RE.test(text)) return "usage_limit";
   if (NOT_SIGNED_IN_RE.test(text)) return "not_signed_in";
   if (opts?.toolMissing) return "too_old";
   if (NO_ACCESS_RE.test(text)) return "no_access";
@@ -247,7 +250,7 @@ export function classify(text: string, opts?: { toolMissing?: boolean }): Artifa
 }
 
 function recordErrorAccountState(err: ArtifactError): void {
-  if (err === "not_signed_in" || err === "no_plan" || err === "too_old") {
+  if (err === "not_signed_in" || err === "no_plan" || err === "too_old" || err === "usage_limit") {
     accountState = err;
   }
 }
@@ -663,7 +666,10 @@ function failFromArtifactStream(id: string, out: SpawnOutput, parsed: ParsedStre
     return saveError(id, "read_failed", out.stderr.trim() || "Timed out reading artifact after 90s.");
   }
   if (parsed.artifactToolResult?.isError) {
-    const err = classify(parsed.artifactToolResult.text);
+    const classifyText = [parsed.artifactToolResult.text, parsed.finalResult?.text, out.stderr.trim()]
+      .filter(Boolean)
+      .join("\n");
+    const err = classify(classifyText);
     recordErrorAccountState(err);
     return saveError(id, err, parsed.artifactToolResult.text);
   }
@@ -802,6 +808,14 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
       return saveError(id, "read_failed", outB.stderr.trim() || "Timed out reading Claude Docs after 90s.");
     }
     const parsedB = parseStreamOutput(outB.stdout);
+    const rawB = [parsedB.finalResult?.text, ...parsedB.assistantTexts, outB.stderr.trim()]
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+    if (classify(rawB) === "usage_limit") {
+      recordErrorAccountState("usage_limit");
+      return saveError(id, "usage_limit", rawB);
+    }
     if (
       parsedB.initTools !== null &&
       (!parsedB.initTools.includes(DOCS_READ_TOOL) || !parsedB.initTools.includes(DOCS_EXPORT_TOOL))
@@ -811,16 +825,12 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
 
     const readRes = parsedB.toolResults.find((r) => r.name === DOCS_READ_TOOL);
     if (!readRes) {
-      const raw = [parsedB.finalResult?.text, ...parsedB.assistantTexts, outB.stderr.trim()]
-        .filter(Boolean)
-        .join("\n")
-        .trim();
-      const err = classify(raw);
+      const err = classify(rawB);
       recordErrorAccountState(err);
-      return saveError(id, err, raw || "Failed to read Claude Docs project.");
+      return saveError(id, err, rawB || "Failed to read Claude Docs project.");
     }
     if (readRes.isError) {
-      const err = classify(readRes.text);
+      const err = classify([readRes.text, rawB].filter(Boolean).join("\n"));
       recordErrorAccountState(err);
       return saveError(id, err, readRes.text);
     }
@@ -829,7 +839,7 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
     const exportResults = parsedB.toolResults.filter((r) => r.name === DOCS_EXPORT_TOOL);
     const failedExport = exportResults.find((r) => r.isError);
     if (failedExport && exportResults.every((r) => r.isError)) {
-      const err = classify(failedExport.text);
+      const err = classify([failedExport.text, rawB].filter(Boolean).join("\n"));
       recordErrorAccountState(err);
       return saveError(id, err, failedExport.text);
     }
@@ -966,7 +976,10 @@ export async function listAccount(opts?: { force?: boolean }): Promise<{ account
   const parsed = parseStreamOutput(out.stdout);
   if (parsed.artifactToolResult) {
     if (parsed.artifactToolResult.isError) {
-      recordErrorAccountState(classify(parsed.artifactToolResult.text));
+      const classifyText = [parsed.artifactToolResult.text, parsed.finalResult?.text, out.stderr.trim()]
+        .filter(Boolean)
+        .join("\n");
+      recordErrorAccountState(classify(classifyText));
       return { account: getAccount(), updated: 0 };
     }
 

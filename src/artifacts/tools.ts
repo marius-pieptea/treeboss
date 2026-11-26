@@ -38,6 +38,16 @@ export async function executeArtifactTool(
     if (!updated) return { text: `Error: artifact "${item.id}" not found.` };
 
     if (updated.error) {
+      if (updated.error === "usage_limit") {
+        return {
+          text: "Error: Claude's usage limit is reached, so artifacts can't be read right now. artifact_read runs Claude Code on the owner's subscription; try again after the limit resets.",
+        };
+      }
+      if (updated.error === "not_signed_in") {
+        return {
+          text: "Error: Claude Code is not signed in to claude.ai, so artifacts can't be read.",
+        };
+      }
       return { text: `Error: ${updated.errorText || updated.error}` };
     }
 
