@@ -231,7 +231,7 @@ export function Detail({
       ) : item.contentKind === "markdown" ? (
         <DocPreview item={item} />
       ) : item.contentKind === "files" ? (
-        <FilesPreview item={item} />
+        <FilesPreview item={item} onRefresh={triggerRefresh} />
       ) : item.contentKind === "html" || (item.contentKind === null && item.htmlPath) ? (
         <>
           <div className="flex h-7 shrink-0 items-center gap-1 border-b border-line px-3 font-mono text-label text-fg-muted">

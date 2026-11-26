@@ -169,12 +169,14 @@ describe("artifacts format", () => {
     );
   });
 
-  test("extractArtifactBoards reads titles from canvas.json boards and falls back to file names", () => {
+  test("extractArtifactBoards orders .dc.html boards from canvas.json, falls back alphabetically, and ignores non-.dc.html files", () => {
     const files = [
       { path: "project/canvas.json", size: 420 },
       { path: "project/Wide-Empty.dc.html", size: 14307 },
       { path: "project/Narrow-Detail.dc.html", size: 12706 },
+      { path: "project/Extra.dc.html", size: 5000 },
       { path: "preview.html", size: 8000 },
+      { path: "project/index.html", size: 1200 },
     ];
 
     expect(
@@ -182,22 +184,68 @@ describe("artifacts format", () => {
         boards: [
           { title: "Wide · Empty", file: "project/Wide-Empty.dc.html" },
           { title: "Narrow · Detail", file: "Narrow-Detail.dc.html" },
+          { title: "Ignored plain html", file: "preview.html" },
+          { title: "Missing board", file: "project/Missing.dc.html" },
         ],
       }),
     ).toEqual([
       { path: "project/Wide-Empty.dc.html", title: "Wide · Empty", size: 14307 },
       { path: "project/Narrow-Detail.dc.html", title: "Narrow · Detail", size: 12706 },
+      { path: "project/Extra.dc.html", title: "Extra", size: 5000 },
     ]);
 
     expect(extractArtifactBoards(files, null)).toEqual([
-      { path: "project/Wide-Empty.dc.html", title: "Wide-Empty", size: 14307 },
+      { path: "project/Extra.dc.html", title: "Extra", size: 5000 },
       { path: "project/Narrow-Detail.dc.html", title: "Narrow-Detail", size: 12706 },
-      { path: "preview.html", title: "preview", size: 8000 },
+      { path: "project/Wide-Empty.dc.html", title: "Wide-Empty", size: 14307 },
     ]);
 
-    expect(extractArtifactBoards([{ path: "data.json", size: 128 }], null)).toEqual([]);
+    expect(
+      extractArtifactBoards(files, {
+        sections: [
+          { title: "Mobile", boards: ["Narrow-Detail"] },
+          { title: "Desktop", boards: [{ file: "project/Wide-Empty.dc.html", title: "Wide · Empty" }] },
+        ],
+      }),
+    ).toEqual([
+      { path: "project/Narrow-Detail.dc.html", title: "Narrow-Detail", size: 12706, section: "Mobile" },
+      { path: "project/Wide-Empty.dc.html", title: "Wide · Empty", size: 14307, section: "Desktop" },
+      { path: "project/Extra.dc.html", title: "Extra", size: 5000 },
+    ]);
+
+    expect(extractArtifactBoards([{ path: "data.json", size: 128 }, { path: "preview.html", size: 400 }], null)).toEqual([]);
     expect(formatFileSize(512)).toBe("512 B");
     expect(formatFileSize(2048)).toBe("2 KB");
     expect(formatFileSize(1536)).toBe("1.5 KB");
+  });
+
+  test("extractArtifactBoards handles 70+ boards via canvas.json order and alphabetical fallback", () => {
+    const files = [
+      { path: "project/canvas.json", size: 4096 },
+      { path: "project/notes.txt", size: 100 },
+      ...Array.from({ length: 70 }, (_, i) => ({
+        path: `project/Screen-${70 - i}.dc.html`,
+        size: 1000 + i,
+      })),
+    ];
+
+    const canvas = {
+      boards: Array.from({ length: 70 }, (_, i) => ({
+        file: `Screen-${i + 1}.dc.html`,
+        title: `Board ${i + 1}`,
+      })),
+    };
+
+    const ordered = extractArtifactBoards(files, canvas);
+    expect(ordered).toHaveLength(70);
+    expect(ordered[0]).toEqual({ path: "project/Screen-1.dc.html", title: "Board 1", size: 1069 });
+    expect(ordered[69]).toEqual({ path: "project/Screen-70.dc.html", title: "Board 70", size: 1000 });
+
+    const fallback = extractArtifactBoards(files, null);
+    expect(fallback).toHaveLength(70);
+    expect(fallback[0]?.path).toBe("project/Screen-1.dc.html");
+    expect(fallback[1]?.path).toBe("project/Screen-2.dc.html");
+    expect(fallback[9]?.path).toBe("project/Screen-10.dc.html");
+    expect(fallback[69]?.path).toBe("project/Screen-70.dc.html");
   });
 });

@@ -13,6 +13,7 @@ export interface ArtifactBoard {
   path: string;
   title: string;
   size: number;
+  section?: string;
 }
 
 export interface IntentCounts {
@@ -195,62 +196,148 @@ export function formatAskAgentDraft(
   return base;
 }
 
-function isHtmlBoardPath(path: string): boolean {
-  const lower = path.toLowerCase();
-  return lower.endsWith(".dc.html") || lower.endsWith(".html");
+function isDcHtmlPath(path: string): boolean {
+  return path.toLowerCase().endsWith(".dc.html");
 }
 
 function boardTitleFromPath(path: string): string {
   const base = path.split("/").pop() ?? path;
-  return base.replace(/(\.dc)?\.html$/i, "") || base;
+  return base.replace(/\.dc\.html$/i, "") || base;
 }
 
 function normalizeRelPath(path: string): string {
   return path.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
 }
 
+function fileNameOf(path: string): string {
+  const norm = normalizeRelPath(path);
+  return norm.split("/").pop() ?? norm;
+}
+
+function compareBoardFiles(a: ArtifactFileEntry, b: ArtifactFileEntry): number {
+  return (
+    fileNameOf(a.path).localeCompare(fileNameOf(b.path), undefined, {
+      numeric: true,
+      sensitivity: "base",
+    }) || a.path.localeCompare(b.path)
+  );
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 /**
- * Derive previewable HTML boards from an artifact's file listing and optional parsed `project/canvas.json`.
- * Board titles come from `canvas.boards` when present, otherwise from file names.
+ * Derive previewable `.dc.html` boards from an artifact's file listing and optional parsed `project/canvas.json`.
+ * Order, titles, and optional sections come from `canvas.json` when present; unlisted `.dc.html` boards (and the
+ * full list when `canvas.json` is absent) are sorted alphabetically by file name. Non-`.dc.html` files are ignored.
  */
 export function extractArtifactBoards(files: ArtifactFileEntry[], canvas?: unknown): ArtifactBoard[] {
+  const dcFiles = files.filter((f) => isDcHtmlPath(f.path));
+  if (dcFiles.length === 0) return [];
+
   const byNorm = new Map<string, ArtifactFileEntry>();
-  for (const f of files) {
+  const byFileName = new Map<string, ArtifactFileEntry | null>();
+  const byStem = new Map<string, ArtifactFileEntry | null>();
+  for (const f of dcFiles) {
     byNorm.set(normalizeRelPath(f.path), f);
+    const nameKey = fileNameOf(f.path).toLowerCase();
+    byFileName.set(nameKey, byFileName.has(nameKey) ? null : f);
+    const stemKey = boardTitleFromPath(f.path).toLowerCase();
+    byStem.set(stemKey, byStem.has(stemKey) ? null : f);
   }
+
+  const resolveBoardFile = (rawRef: string): ArtifactFileEntry | undefined => {
+    const norm = normalizeRelPath(rawRef);
+    const candidates = [norm];
+    if (!norm.startsWith("project/")) candidates.push(`project/${norm}`);
+    if (!norm.toLowerCase().endsWith(".dc.html")) {
+      candidates.push(`${norm}.dc.html`);
+      if (!norm.startsWith("project/")) candidates.push(`project/${norm}.dc.html`);
+    }
+    for (const candidate of candidates) {
+      const hit = byNorm.get(candidate);
+      if (hit) return hit;
+    }
+    if (!norm.includes("/")) {
+      const lower = norm.toLowerCase();
+      return byFileName.get(lower) ?? byStem.get(lower) ?? undefined;
+    }
+    return undefined;
+  };
 
   const boards: ArtifactBoard[] = [];
   const seen = new Set<string>();
-  const rawBoards =
-    canvas && typeof canvas === "object" && Array.isArray((canvas as { boards?: unknown }).boards)
-      ? ((canvas as { boards: unknown[] }).boards ?? [])
-      : null;
 
-  if (rawBoards) {
-    for (const entry of rawBoards) {
-      if (!entry || typeof entry !== "object") continue;
-      const obj = entry as { file?: unknown; path?: unknown; title?: unknown; name?: unknown };
-      const rawFile = typeof obj.file === "string" ? obj.file : typeof obj.path === "string" ? obj.path : null;
-      if (!rawFile) continue;
-      const norm = normalizeRelPath(rawFile);
-      const match = byNorm.get(norm) ?? (!norm.startsWith("project/") ? byNorm.get(`project/${norm}`) : undefined);
-      if (!match || !isHtmlBoardPath(match.path) || seen.has(match.path)) continue;
-      const title =
-        typeof obj.title === "string" && obj.title.trim()
-          ? obj.title.trim()
-          : typeof obj.name === "string" && obj.name.trim()
-            ? obj.name.trim()
-            : boardTitleFromPath(match.path);
-      seen.add(match.path);
-      boards.push({ path: match.path, title, size: match.size });
+  const pushEntry = (entry: unknown, defaultSection?: string) => {
+    let rawRef: string | undefined;
+    let title: string | undefined;
+    let section = defaultSection;
+
+    if (typeof entry === "string") {
+      rawRef = nonEmptyString(entry);
+    } else if (entry && typeof entry === "object") {
+      const obj = entry as {
+        file?: unknown;
+        path?: unknown;
+        src?: unknown;
+        href?: unknown;
+        id?: unknown;
+        title?: unknown;
+        name?: unknown;
+        label?: unknown;
+        section?: unknown;
+        group?: unknown;
+      };
+      rawRef =
+        nonEmptyString(obj.file) ??
+        nonEmptyString(obj.path) ??
+        nonEmptyString(obj.src) ??
+        nonEmptyString(obj.href) ??
+        nonEmptyString(obj.id);
+      title = nonEmptyString(obj.title) ?? nonEmptyString(obj.name) ?? nonEmptyString(obj.label);
+      section = nonEmptyString(obj.section) ?? nonEmptyString(obj.group) ?? defaultSection;
+    }
+
+    if (!rawRef) return;
+    const match = resolveBoardFile(rawRef);
+    if (!match || seen.has(match.path)) return;
+    seen.add(match.path);
+    const board: ArtifactBoard = {
+      path: match.path,
+      title: title ?? boardTitleFromPath(match.path),
+      size: match.size,
+    };
+    if (section) board.section = section;
+    boards.push(board);
+  };
+
+  if (canvas && typeof canvas === "object") {
+    const obj = canvas as { sections?: unknown; boards?: unknown };
+    if (Array.isArray(obj.sections)) {
+      for (const sec of obj.sections) {
+        if (!sec || typeof sec !== "object") continue;
+        const secObj = sec as { title?: unknown; name?: unknown; label?: unknown; boards?: unknown; items?: unknown };
+        const secTitle = nonEmptyString(secObj.title) ?? nonEmptyString(secObj.name) ?? nonEmptyString(secObj.label);
+        const list = Array.isArray(secObj.boards)
+          ? secObj.boards
+          : Array.isArray(secObj.items)
+            ? secObj.items
+            : [];
+        for (const item of list) pushEntry(item, secTitle);
+      }
+    }
+    if (Array.isArray(obj.boards)) {
+      for (const item of obj.boards) pushEntry(item);
     }
   }
 
-  if (boards.length > 0) return boards;
+  const remaining = dcFiles.filter((f) => !seen.has(f.path)).sort(compareBoardFiles);
+  for (const f of remaining) {
+    boards.push({ path: f.path, title: boardTitleFromPath(f.path), size: f.size });
+  }
 
-  return files
-    .filter((f) => isHtmlBoardPath(f.path))
-    .map((f) => ({ path: f.path, title: boardTitleFromPath(f.path), size: f.size }));
+  return boards;
 }
 
 export function formatFileSize(bytes: number): string {

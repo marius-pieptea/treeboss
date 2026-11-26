@@ -16,6 +16,7 @@ export interface ArtifactFileEntry {
 
 export interface ArtifactFilesResponse {
   files: ArtifactFileEntry[];
+  base: string | null;
 }
 
 export interface Artifact {

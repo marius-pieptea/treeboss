@@ -1,14 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { File, ShieldCheck } from "lucide-react";
+import { File, RefreshCw, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Select } from "@/components/ui/form";
+import { Combobox } from "@/components/ui/combobox";
 import { Empty, Skeleton } from "@/components/ui/misc";
 import { get } from "@/lib/api";
-import { artifactFilesUrl, artifactFileUrl, type Artifact, type ArtifactFilesResponse } from "./data";
+import { artifactFilesUrl, type Artifact, type ArtifactFilesResponse } from "./data";
 import { extractArtifactBoards, formatFileSize, formatRelativeTime } from "./format";
 
-export function FilesPreview({ item }: { item: Artifact }) {
+function capabilityFileUrl(base: string, path: string): string {
+  const prefix = base.endsWith("/") ? base : `${base}/`;
+  return prefix + encodeURI(path.replace(/^\/+/, ""));
+}
+
+export function FilesPreview({ item, onRefresh }: { item: Artifact; onRefresh?: () => void }) {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
 
   useEffect(() => {
@@ -22,6 +27,7 @@ export function FilesPreview({ item }: { item: Artifact }) {
   });
 
   const files = filesQuery.data?.files ?? [];
+  const base = filesQuery.data?.base ?? null;
   const canvasPath = useMemo(() => {
     const exact = files.find((f) => f.path.replace(/^\/+/, "") === "project/canvas.json");
     if (exact) return exact.path;
@@ -29,13 +35,10 @@ export function FilesPreview({ item }: { item: Artifact }) {
   }, [files]);
 
   const canvasQuery = useQuery({
-    queryKey: ["artifact-canvas", item.id, item.lastReadAt, canvasPath],
-    enabled: Boolean(canvasPath),
+    queryKey: ["artifact-canvas", item.id, item.lastReadAt, base, canvasPath],
+    enabled: Boolean(base && canvasPath),
     queryFn: async ({ signal }) => {
-      const res = await fetch(artifactFileUrl(item.id, canvasPath!), {
-        credentials: "same-origin",
-        signal,
-      });
+      const res = await fetch(capabilityFileUrl(base!, canvasPath!), { signal });
       if (!res.ok) return null;
       try {
         return (await res.json()) as unknown;
@@ -52,7 +55,7 @@ export function FilesPreview({ item }: { item: Artifact }) {
   );
 
   const activeBoard = boards.find((b) => b.path === selectedPath) ?? boards[0] ?? null;
-  const loading = filesQuery.isPending || (Boolean(canvasPath) && canvasQuery.isPending);
+  const loading = filesQuery.isPending || (Boolean(base && canvasPath) && canvasQuery.isPending);
   const readRel = item.lastReadAt ? formatRelativeTime(item.lastReadAt) : "just now";
   const typeLabel = item.typeName?.trim() || "Design";
 
@@ -90,16 +93,39 @@ export function FilesPreview({ item }: { item: Artifact }) {
             className="h-full"
           />
         </div>
-      ) : activeBoard ? (
+      ) : !base && (boards.length > 0 || item.intent === "design") ? (
+        <div className="min-h-0 flex-1 overflow-auto">
+          <Empty
+            icon={<File />}
+            title="Read this design again to preview it."
+            action={
+              onRefresh ? (
+                <Button variant="subtle" onClick={onRefresh}>
+                  <RefreshCw />
+                  Refresh
+                </Button>
+              ) : undefined
+            }
+            className="h-full"
+          />
+        </div>
+      ) : base && activeBoard ? (
         <>
           {boards.length > 1 && (
             <div className="flex shrink-0 items-center gap-2 border-b border-line bg-panel px-4 py-2">
               <span className="text-label font-medium uppercase tracking-label text-fg-muted">Board</span>
-              <Select
+              <Combobox
                 size="sm"
                 value={activeBoard.path}
                 onChange={setSelectedPath}
-                options={boards.map((b) => ({ value: b.path, label: b.title }))}
+                options={boards.map((b) => ({
+                  value: b.path,
+                  label: b.title,
+                  ...(b.section ? { hint: b.section } : {}),
+                }))}
+                placeholder="Select board…"
+                searchPlaceholder="Filter boards…"
+                emptyText="No matching boards"
                 aria-label="Select board"
                 className="w-auto min-w-48 max-w-md"
               />
@@ -108,11 +134,11 @@ export function FilesPreview({ item }: { item: Artifact }) {
           <div className="min-h-0 flex-1 p-4">
             <div className="h-full overflow-hidden rounded-lg border border-line bg-panel">
               <iframe
-                key={`${item.id}:${item.lastReadAt ?? ""}:${activeBoard.path}`}
+                key={`${item.id}:${item.lastReadAt ?? ""}:${base}:${activeBoard.path}`}
                 title={activeBoard.title}
                 sandbox="allow-scripts"
                 referrerPolicy="no-referrer"
-                src={artifactFileUrl(item.id, activeBoard.path)}
+                src={capabilityFileUrl(base, activeBoard.path)}
                 className="h-full w-full border-0 bg-panel"
               />
             </div>
