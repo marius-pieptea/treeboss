@@ -1,11 +1,14 @@
 import type { ArtifactIntent } from "./types";
 
 const ARTIFACT_URL_RE = /https:\/\/claude\.ai\/(?:code\/)?artifact\/([A-Za-z0-9-]+)/;
+const PUBLISHED_AT_RE = /Published\s+.+?\s+at\s+(https:\/\/claude\.ai\/(?:code\/)?artifact\/[A-Za-z0-9-]+)/;
 const EXACT_ARTIFACT_URL_RE = /^https:\/\/claude\.ai\/(?:code\/)?artifact\/([A-Za-z0-9-]+)(?:[/?#]|$)/;
 
-/** Extract the first published claude.ai artifact URL from a tool result string. */
+/** Extract the published claude.ai artifact URL from a tool result string. */
 export function parsePublished(text: string): string | null {
   if (!text || typeof text !== "string") return null;
+  const preferred = PUBLISHED_AT_RE.exec(text);
+  if (preferred) return preferred[1];
   const match = ARTIFACT_URL_RE.exec(text);
   return match ? match[0] : null;
 }

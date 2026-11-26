@@ -1431,7 +1431,13 @@ function startTurn(s: SessionRecord, prompt: string, opts: { resume: boolean; fo
           recordUsageEvent(s, e);
           if (e.kind === "limits") limitEventReset = resetFromRateLimitEvent(e.info) ?? limitEventReset;
         },
-        onArtifact: (a) => recordPublished({ ...a, sessionId: s.id }),
+        onArtifact: (a) => {
+          try {
+            recordPublished({ ...a, sessionId: s.id });
+          } catch (err: any) {
+            log(`[trb] failed to record artifact: ${err?.message ?? String(err)}`);
+          }
+        },
       });
     } catch (err: any) {
       result = { success: false, output: `Turn crashed: ${err?.message ?? String(err)}`, sessionId: null, resumeRejected: false, aborted: false, timedOut: false, maxTurnsHit: false, usage: null, exitCode: null, stderr: "" };

@@ -28,6 +28,11 @@ describe("artifacts capture helpers", () => {
     expect(parsePublished("at https://claude.ai/code/artifact/550e8400-e29b-41d4-a716-446655440000 done")).toBe(
       "https://claude.ai/code/artifact/550e8400-e29b-41d4-a716-446655440000",
     );
+    expect(
+      parsePublished(
+        "Replaced https://claude.ai/artifact/older-1. Published deck.pptx at https://claude.ai/artifact/newer-2 (Version 2)",
+      ),
+    ).toBe("https://claude.ai/artifact/newer-2");
     expect(artifactIdFromUrl("https://claude.ai/artifact/art-1")).toBe("art-1");
     expect(artifactIdFromUrl("https://claude.ai/code/artifact/550e8400-e29b-41d4-a716-446655440000")).toBe(
       "550e8400-e29b-41d4-a716-446655440000",
@@ -93,6 +98,25 @@ describe("artifacts store", () => {
     expect(purgeRemoved(60_000)).toBe(0);
     expect(purgeRemoved(0)).toBe(1);
     expect(restore("a1")).toBeNull();
+  });
+
+  test("re-publish does not restore a removed row and preserves source='pasted'", () => {
+    recordPublished({ url: "https://claude.ai/artifact/rem-1", title: "V1", filePath: "doc.md", sessionId: null });
+    expect(markRemoved("rem-1")).toBe(true);
+    recordPublished({ url: "https://claude.ai/artifact/rem-1", title: "V2", filePath: "doc.md", sessionId: null });
+    expect(getArtifact("rem-1")).toBeNull();
+    expect(listArtifacts().map((a) => a.id)).not.toContain("rem-1");
+
+    addPasted("https://claude.ai/artifact/pasted-1");
+    const republished = recordPublished({
+      url: "https://claude.ai/artifact/pasted-1",
+      title: "Pasted Title",
+      filePath: "app.html",
+      sessionId: null,
+    });
+    expect(republished.source).toBe("pasted");
+    expect(republished.owner).toBe("mine");
+    expect(republished.title).toBe("Pasted Title");
   });
 
   test("40+ rows return newest createdAt first in order", () => {

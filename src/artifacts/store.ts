@@ -48,6 +48,13 @@ const SELECT_WITH_SESSION = `
   LEFT JOIN sessions s ON s.id = a.session_id
 `;
 
+function getArtifactAny(id: string): Artifact | null {
+  const row = db()
+    .prepare(`${SELECT_WITH_SESSION} WHERE a.id = ?`)
+    .get(id) as ArtifactRow | undefined;
+  return row ? toArtifact(row) : null;
+}
+
 /** Record or update an artifact published by a Claude session. */
 export function recordPublished(input: {
   url: string;
@@ -71,19 +78,17 @@ export function recordPublished(input: {
          title = excluded.title,
          intent = excluded.intent,
          owner = 'mine',
-         source = 'created',
          session_id = COALESCE(excluded.session_id, artifacts.session_id),
          updated_at = excluded.created_at,
          last_read_at = NULL,
          html_path = NULL,
          summary = NULL,
          error = NULL,
-         error_text = NULL,
-         removed_at = NULL`,
+         error_text = NULL`,
     )
     .run(id, input.url.trim(), title, intent, sessionId, now);
 
-  return getArtifact(id)!;
+  return getArtifactAny(id)!;
 }
 
 /** Add a pasted claude.ai artifact link, restoring it if it was soft-removed. */

@@ -111,6 +111,38 @@ describe("cursor", () => {
     expect(ENGINES.cursor.build(input(), "/usr/local/bin/cursor").args[0]).toBe("agent");
     expect(ENGINES.cursor.build(input(), "/usr/local/bin/cursor-agent").args[0]).toBe("-p");
   });
+  test("overlapping writes in one cwd restore the original bytes only on the last cleanup (either order)", () => {
+    for (const firstCleanupFirst of [true, false]) {
+      const ws = fs.mkdtempSync(path.join(os.tmpdir(), "trb-cur-overlap-"));
+      try {
+        const file = path.join(ws, ".cursor", "mcp.json");
+        fs.mkdirSync(path.dirname(file));
+        const original = '{"mine":true}\n';
+        fs.writeFileSync(file, original);
+        const a = ENGINES.cursor.build(input({ cwd: ws, mcp }), "/x/cursor-agent");
+        const b = ENGINES.cursor.build(
+          input({ cwd: ws, mcp: { other: { type: "stdio", command: "/bin/other", args: [] } } }),
+          "/x/cursor-agent",
+        );
+        expect(JSON.parse(fs.readFileSync(file, "utf-8")).mcpServers.other.command).toBe("/bin/other");
+
+        if (firstCleanupFirst) {
+          a.cleanup();
+          a.cleanup(); // idempotent
+          expect(fs.readFileSync(file, "utf-8")).not.toBe(original);
+          b.cleanup();
+        } else {
+          b.cleanup();
+          b.cleanup(); // idempotent
+          expect(fs.readFileSync(file, "utf-8")).not.toBe(original);
+          a.cleanup();
+        }
+        expect(fs.readFileSync(file, "utf-8")).toBe(original);
+      } finally {
+        fs.rmSync(ws, { recursive: true, force: true });
+      }
+    }
+  });
 });
 
 describe("devin", () => {
@@ -184,6 +216,41 @@ describe("agy", () => {
       s.cleanup();
     } finally {
       fs.rmSync(ws, { recursive: true, force: true });
+    }
+  });
+
+  test("overlapping writes in one cwd merge onto the original user file and restore it only on the last cleanup", () => {
+    for (const firstCleanupFirst of [true, false]) {
+      const ws = fs.mkdtempSync(path.join(os.tmpdir(), "trb-agy-overlap-"));
+      try {
+        const file = path.join(ws, ".agents", "mcp_config.json");
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        const original = '{\n  "mcpServers": {\n    "mine": { "command": "my-mcp", "args": [] }\n  }\n}\n';
+        fs.writeFileSync(file, original);
+
+        const a = ENGINES.agy.build(input({ cwd: ws, mcp }), "agy");
+        const b = ENGINES.agy.build(
+          input({ cwd: ws, mcp: { second: { type: "stdio", command: "/bin/second", args: [] } } }),
+          "agy",
+        );
+        const cfgAfterB = JSON.parse(fs.readFileSync(file, "utf-8"));
+        expect(cfgAfterB.mcpServers.mine).toEqual({ command: "my-mcp", args: [] });
+        expect(cfgAfterB.mcpServers.second).toEqual({ command: "/bin/second", args: [] });
+        expect(cfgAfterB.mcpServers.trb).toBeUndefined();
+
+        if (firstCleanupFirst) {
+          a.cleanup();
+          expect(fs.readFileSync(file, "utf-8")).not.toBe(original);
+          b.cleanup();
+        } else {
+          b.cleanup();
+          expect(fs.readFileSync(file, "utf-8")).not.toBe(original);
+          a.cleanup();
+        }
+        expect(fs.readFileSync(file, "utf-8")).toBe(original);
+      } finally {
+        fs.rmSync(ws, { recursive: true, force: true });
+      }
     }
   });
 });

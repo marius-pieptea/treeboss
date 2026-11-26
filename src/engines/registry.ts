@@ -140,25 +140,57 @@ export function codexMcpOverrides(cfg: McpRunConfig): string[] {
 }
 
 /**
+ * Active workspace MCP files, keyed by resolved file path. When two runs share
+ * one cwd, only the first records the user's original bytes and only the last
+ * cleanup restores them (or removes the file and created directory).
+ */
+const workspaceFiles = new Map<string, { original: Buffer | null; dirExisted: boolean; refs: number }>();
+
+function workspaceOriginal(file: string): { known: boolean; content: Buffer | null } {
+  const entry = workspaceFiles.get(path.resolve(file));
+  return entry ? { known: true, content: entry.original } : { known: false, content: null };
+}
+
+/**
  * Write `content` to a workspace file, remembering what was there so cleanup can
  * put it back. The workspace is often the operator's real checkout, and the file
  * may be one they track (`.cursor/mcp.json`): overwriting it for good would be
  * the harness silently editing their repo.
  */
 function writeWorkspaceFile(file: string, content: string): () => void {
-  const existed = fs.existsSync(file);
-  const original = existed ? fs.readFileSync(file) : null;
-  const dirExisted = fs.existsSync(path.dirname(file));
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, content, "utf-8");
+  const key = path.resolve(file);
+  let entry = workspaceFiles.get(key);
+  const isNew = !entry;
+  if (!entry) {
+    entry = {
+      original: fs.existsSync(key) ? fs.readFileSync(key) : null,
+      dirExisted: fs.existsSync(path.dirname(key)),
+      refs: 0,
+    };
+    workspaceFiles.set(key, entry);
+  }
+  entry.refs++;
+  try {
+    fs.mkdirSync(path.dirname(key), { recursive: true });
+    fs.writeFileSync(key, content, "utf-8");
+  } catch (err) {
+    entry.refs--;
+    if (isNew && entry.refs === 0) workspaceFiles.delete(key);
+    throw err;
+  }
   let done = false;
   return () => {
     if (done) return;
     done = true;
+    const cur = workspaceFiles.get(key);
+    if (!cur) return;
+    cur.refs--;
+    if (cur.refs > 0) return;
+    workspaceFiles.delete(key);
     try {
-      if (original !== null) fs.writeFileSync(file, original);
-      else fs.rmSync(file, { force: true });
-      if (!dirExisted) fs.rmdirSync(path.dirname(file));
+      if (cur.original !== null) fs.writeFileSync(key, cur.original);
+      else fs.rmSync(key, { force: true });
+      if (!cur.dirExisted) fs.rmdirSync(path.dirname(key));
     } catch {}
   };
 }
@@ -411,8 +443,14 @@ function agyMcpJson(cfg: McpRunConfig): { mcpServers: Record<string, unknown> } 
 /** Merge `ours` onto an existing `.agents/mcp_config.json` when it has an object `mcpServers`; ours win on clash. */
 function mergeAgyMcpConfig(file: string, ours: { mcpServers: Record<string, unknown> }): { mcpServers: Record<string, unknown> } {
   try {
-    if (!fs.existsSync(file)) return ours;
-    const existing = JSON.parse(fs.readFileSync(file, "utf-8"));
+    const orig = workspaceOriginal(file);
+    const raw = orig.known
+      ? (orig.content?.toString("utf-8") ?? null)
+      : fs.existsSync(file)
+        ? fs.readFileSync(file, "utf-8")
+        : null;
+    if (raw === null) return ours;
+    const existing = JSON.parse(raw);
     if (existing && typeof existing === "object" && !Array.isArray(existing) && existing.mcpServers && typeof existing.mcpServers === "object" && !Array.isArray(existing.mcpServers)) {
       return { ...existing, mcpServers: { ...existing.mcpServers, ...ours.mcpServers } };
     }
