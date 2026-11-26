@@ -53,7 +53,7 @@ function toolDefs() {
   if (process.env.TRB_TREEBOSS === "1") defs.push(...treebossToolDefs());
   if (process.env.TRB_CHECKLISTS === "1") defs.push(...checklistToolDefs());
   if (process.env.TRB_QA === "1") defs.push(...qaToolDefs());
-  defs.push(...artifactToolDefs());
+  if (process.env.TRB_ARTIFACTS === "1") defs.push(...artifactToolDefs());
   return defs;
 }
 

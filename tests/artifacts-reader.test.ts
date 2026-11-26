@@ -17,6 +17,7 @@ import {
 } from "../src/artifacts/reader";
 import { artifactToolDefs } from "../src/artifacts/defs";
 import { executeArtifactTool } from "../src/artifacts/tools";
+import { buildRunMcpConfig } from "../src/mcp/store";
 import { resetState } from "./helpers";
 
 function streamLines(events: unknown[]): string {
@@ -284,5 +285,14 @@ describe("artifacts reader", () => {
     mode = "error";
     const errRes = await executeArtifactTool("artifact_read", { url: "https://claude.ai/artifact/mcp-err" }, { sessionId: "s_1" });
     expect(errRes.text).toBe("Error: 403 Forbidden");
+  });
+
+  test("buildRunMcpConfig with artifacts: true sets TRB_ARTIFACTS to 1 in the trb env", () => {
+    const base = { sessionId: "s_x", subagents: false, daemonUrl: "http://127.0.0.1:1", token: "t" };
+    const cfg = buildRunMcpConfig({ ...base, artifacts: true }).trb;
+    expect(cfg?.type === "stdio" && cfg.env?.TRB_ARTIFACTS).toBe("1");
+    expect(buildRunMcpConfig({ ...base }).trb).toBeUndefined();
+    const withSubagents = buildRunMcpConfig({ ...base, subagents: true }).trb;
+    expect(withSubagents?.type === "stdio" && withSubagents.env?.TRB_ARTIFACTS).toBe("0");
   });
 });
