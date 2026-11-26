@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Bot, ClipboardCheck, Factory, FlaskConical, ListChecks, Files, GitBranch, Kanban, Palette, ScrollText, Search, Settings2, BookText, Fingerprint, Smartphone } from "lucide-react";
+import { Bot, ClipboardCheck, Factory, FlaskConical, Layers, ListChecks, Files, GitBranch, Kanban, Palette, ScrollText, Search, Settings2, BookText, Fingerprint, Smartphone } from "lucide-react";
 import { useUi, useWs, type Activity } from "@/lib/store";
 import { openFactory } from "@/features/factory/open";
 import { openEmulator } from "@/features/emulator/open";
@@ -21,8 +21,8 @@ const ITEMS: Array<{ id: Activity; label: string; icon: React.ReactNode; shortcu
   { id: "docs", label: "Docs", icon: <BookText /> },
 ];
 
-type TabView = "roadmap" | "design" | "findings" | "checklists" | "qa" | "emulator" | "evidence" | "factory";
-const TAB_VIEWS: readonly string[] = ["roadmap", "design", "findings", "checklists", "qa", "emulator", "evidence", "factory"];
+type TabView = "roadmap" | "design" | "findings" | "checklists" | "artifacts" | "qa" | "emulator" | "evidence" | "factory";
+const TAB_VIEWS: readonly string[] = ["roadmap", "design", "findings", "checklists", "artifacts", "qa", "emulator", "evidence", "factory"];
 
 const isTabView = (id: string | null): id is TabView => id !== null && TAB_VIEWS.includes(id);
 
@@ -52,6 +52,7 @@ export function ActivityBar({ changes, runningHeads }: { changes: number; runnin
             else if (id === "design") openTab({ kind: "design", title: "Design" });
             else if (id === "findings") openFindings();
             else if (id === "checklists") openChecklists();
+            else if (id === "artifacts") openTab({ kind: "artifacts", title: "Artifacts" });
             else if (id === "qa") openQa();
             else if (id === "emulator") openEmulator();
             else if (id === "evidence") openTab({ kind: "evidence", title: "Evidence" });
@@ -78,6 +79,7 @@ export function ActivityBar({ changes, runningHeads }: { changes: number; runnin
       {item("design", "Design", <Palette />, undefined)}
       {item("findings", "Findings", <FlaskConical />, undefined, countBadge(labCounts?.open ?? 0))}
       {item("checklists", "Checklists", <ListChecks />, undefined)}
+      {item("artifacts", "Artifacts", <Layers />, undefined)}
       {item("qa", "QA", <ClipboardCheck />, undefined, countBadge(labCounts?.bugs ?? 0))}
       {item("emulator", "Emulator", <Smartphone />, undefined)}
       {item("factory", "Factory", <Factory />, undefined)}

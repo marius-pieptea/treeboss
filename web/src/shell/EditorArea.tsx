@@ -1,6 +1,6 @@
 import { lazy, memo, Suspense, useEffect, useRef } from "react";
 import { PaneBoundary } from "@/components/PaneBoundary";
-import { Brain, ClipboardCheck, FileDiff, Factory, Fingerprint, FlaskConical, Globe, Smartphone, GitCommitHorizontal, Kanban, ListChecks, ScrollText, Settings2, X, BookText, ClipboardList, History, Palette } from "lucide-react";
+import { Brain, ClipboardCheck, FileDiff, Factory, Fingerprint, FlaskConical, Globe, Layers, Smartphone, GitCommitHorizontal, Kanban, ListChecks, ScrollText, Settings2, X, BookText, ClipboardList, History, Palette } from "lucide-react";
 import { useUi, useWs, type Tab } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { ContextMenu } from "@/components/ui/overlay";
@@ -24,6 +24,7 @@ const EmulatorView = lazy(() => import("@/features/emulator/EmulatorView").then(
 const QaTab = lazy(() => import("@/features/qa/QaTab").then((m) => ({ default: m.QaTab })));
 const ChecklistsTab = lazy(() => import("@/features/lab/ChecklistsTab").then((m) => ({ default: m.ChecklistsTab })));
 const EvidenceTab = lazy(() => import("@/features/evidence/EvidenceTab").then((m) => ({ default: m.EvidenceTab })));
+const ArtifactsTab = lazy(() => import("@/features/artifacts/ArtifactsTab").then((m) => ({ default: m.ArtifactsTab })));
 const FactoryView = lazy(() => import("@/features/factory/FactoryView").then((m) => ({ default: m.FactoryView })));
 const MemoryTab = lazy(() => import("@/features/memory/MemoryTab").then((m) => ({ default: m.MemoryTab })));
 const TranscriptsTab = lazy(() => import("@/features/transcripts/TranscriptsTab").then((m) => ({ default: m.TranscriptsTab })));
@@ -72,6 +73,8 @@ function TabIcon({ tab }: { tab: Tab }) {
       return <Brain className="size-3.5 text-accent" />;
     case "evidence":
       return <Fingerprint className="size-3.5 text-accent" />;
+    case "artifacts":
+      return <Layers className="size-3.5 text-accent" />;
     case "factory":
       return <Factory className="size-3.5 text-accent" />;
     case "transcripts":
@@ -138,7 +141,7 @@ function TabStrip() {
   );
 }
 
-const PANE_NAMES: Record<string, string> = { file: "Editor", diff: "Diff", commit: "Commit", browser: "Browser", settings: "Settings", session: "Session", spec: "Spec", doc: "Document", plan: "Plan", roadmap: "Roadmap", design: "Design", memory: "Memory", transcripts: "Session replay", factory: "Factory" };
+const PANE_NAMES: Record<string, string> = { file: "Editor", diff: "Diff", commit: "Commit", browser: "Browser", settings: "Settings", session: "Session", spec: "Spec", doc: "Document", plan: "Plan", roadmap: "Roadmap", design: "Design", memory: "Memory", artifacts: "Artifacts", transcripts: "Session replay", factory: "Factory" };
 
 function TabContent({ tab }: { tab: Tab }) {
   switch (tab.kind) {
@@ -176,6 +179,8 @@ function TabContent({ tab }: { tab: Tab }) {
       return <MemoryTab />;
     case "evidence":
       return <EvidenceTab />;
+    case "artifacts":
+      return <ArtifactsTab />;
     case "factory":
       return <FactoryView tab={tab} />;
     case "transcripts":
