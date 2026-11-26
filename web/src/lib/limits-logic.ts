@@ -66,11 +66,15 @@ export function usageTone(percent: number | null, status: string | null): UsageT
 /** Minutes a known window lasts. Unknown ids sort last, so a new window does not hide the 5-hour one. */
 const WINDOW_MINUTES: Record<string, number> = {
   five_hour: 300,
+  gemini_5h: 300,
+  third_party_5h: 300,
   daily: 1_440,
   weekly: 10_080,
   seven_day: 10_080,
   seven_day_opus: 10_080,
   seven_day_sonnet: 10_080,
+  gemini_weekly: 10_080,
+  third_party_weekly: 10_080,
 };
 
 /** Shortest window first. That is the one that stops work first, and the one the card lists first. */
@@ -87,9 +91,40 @@ export interface UsageRing {
   tone: UsageTone;
 }
 
-/** At most two rings. The longest window is first, so it is drawn on the outside. */
+function durationOf(id: string): number {
+  return WINDOW_MINUTES[id] ?? Number.POSITIVE_INFINITY;
+}
+
+function ringRank(w: LimitWindow, now: number): [number, number, number] {
+  const live = w.resets_at !== null && w.resets_at <= now ? 0 : 1;
+  const limited = w.status !== null && w.status !== "allowed" ? 1 : 0;
+  return [live, limited, w.percent ?? -1];
+}
+
+function tighterRing(a: LimitWindow, b: LimitWindow, now: number): boolean {
+  const ra = ringRank(a, now);
+  const rb = ringRank(b, now);
+  for (let i = 0; i < ra.length; i++) {
+    if (ra[i] !== rb[i]) return ra[i] > rb[i];
+  }
+  return false;
+}
+
+/**
+ * At most two rings. The longest window is first, so it is drawn on the outside.
+ * When windows span multiple durations (e.g. 5-hour and weekly across model groups),
+ * keep the tightest window of each duration so one length never crowds out the other.
+ */
 export function ringWindows(windows: LimitWindow[], now: number): UsageRing[] {
-  return orderedWindows(windows)
+  const ordered = orderedWindows(windows);
+  const byDuration = new Map<number, LimitWindow>();
+  for (const w of ordered) {
+    const dur = durationOf(w.id);
+    const prev = byDuration.get(dur);
+    if (!prev || tighterRing(w, prev, now)) byDuration.set(dur, w);
+  }
+  const chosen = byDuration.size > 1 ? [...byDuration.values()] : ordered;
+  return chosen
     .map((w): UsageRing => {
       const view = windowView(w, now);
       return { id: w.id, left: view.used === null ? null : remainingOf(view.used), tone: usageTone(view.used === null ? null : w.percent, w.status) };
@@ -111,7 +146,7 @@ export function windowView(w: LimitWindow, now: number): WindowView {
 }
 
 /** Engines that report plan usage; mirrors `exposesLimits` in src/engines/limits.ts. */
-const REPORTS = new Set(["claude", "codex", "cursor", "devin", "grok"]);
+const REPORTS = new Set(["agy", "claude", "codex", "cursor", "devin", "grok"]);
 export const exposesLimits = (engine: string): boolean => REPORTS.has(engine);
 
 /** What the card says when there is no window. Only an engine that can report may promise a later turn. */
