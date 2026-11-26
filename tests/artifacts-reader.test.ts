@@ -174,6 +174,10 @@ describe("artifacts reader", () => {
     // Version is cached for 10 min, so a second claudeVersion() does not re-spawn.
     expect(await claudeVersion()).toBe("2.1.317");
     expect(calls).toHaveLength(1);
+
+    // Forced check bypasses the 10-minute version cache.
+    expect(await claudeVersion(true)).toBe("2.1.317");
+    expect(calls).toHaveLength(2);
   });
 
   test("missing Artifact tool in stream classifies as too_old", async () => {

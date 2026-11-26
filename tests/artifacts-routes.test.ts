@@ -200,11 +200,41 @@ describe("artifacts HTTP routes", () => {
     const htmlRes = await callRoute(artifactRoutes, "GET", "/api/artifacts/r-1/html");
     expect(htmlRes.status).toBe(200);
     expect(htmlRes.headers.get("content-type")).toContain("text/html");
+    expect(htmlRes.headers.get("content-security-policy")).toBe(
+      "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' https:; style-src 'unsafe-inline' https:; img-src data: blob: https:; font-src data: https:; media-src data: blob: https:; connect-src 'none'; frame-ancestors 'self'",
+    );
+    expect(htmlRes.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(htmlRes.headers.get("cache-control")).toBe("no-store");
     expect(await htmlRes.text()).toBe("<h1>Rendered</h1>");
+
+    let versionChecks = 0;
+    let currentVersion = "2.1.318";
+    setClaudeSpawner(async (input) => {
+      if (input.args[0] === "--version") {
+        versionChecks++;
+        return { exitCode: 0, stdout: `${currentVersion}\n`, stderr: "" };
+      }
+      return {
+        exitCode: 0,
+        stdout: [
+          JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "tu_l", name: "Artifact", input: { action: "list" } }] } }),
+          JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu_l", is_error: false, content: "- (mine) Updated Name — https://claude.ai/artifact/r-1 — updated 2026-11-26T12:00:00Z" }] } }),
+        ].join("\n") + "\n",
+        stderr: "",
+      };
+    });
 
     const listRes = await callRoute(artifactRoutes, "POST", "/api/artifacts/refresh");
     expect(listRes.status).toBe(200);
     expect(await listRes.json()).toEqual({ account: { state: "ok", version: "2.1.318" }, updated: 1 });
+    expect(versionChecks).toBe(1);
+
+    // Second manual refresh bypasses the 10-min version cache and sees the updated version.
+    currentVersion = "2.1.319";
+    const listRes2 = await callRoute(artifactRoutes, "POST", "/api/artifacts/refresh");
+    expect(listRes2.status).toBe(200);
+    expect(await listRes2.json()).toEqual({ account: { state: "ok", version: "2.1.319" }, updated: 1 });
+    expect(versionChecks).toBe(2);
     expect(getArtifact("r-1")?.title).toBe("Updated Name");
 
     // Verify /api/tools/call in coreRoutes dispatches artifact_read.

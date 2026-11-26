@@ -65,7 +65,7 @@ export const artifactRoutes: RouteModule = async (c: Ctx) => {
   }
 
   if (c.path === "/api/artifacts/refresh" && c.method === "POST") {
-    return json(await listAccount());
+    return json(await listAccount({ force: true }));
   }
 
   let m: RegExpMatchArray | null;
@@ -101,7 +101,8 @@ export const artifactRoutes: RouteModule = async (c: Ctx) => {
       headers: {
         "content-type": "text/html; charset=utf-8",
         "x-content-type-options": "nosniff",
-        "content-security-policy": "sandbox",
+        "content-security-policy":
+          "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' https:; style-src 'unsafe-inline' https:; img-src data: blob: https:; font-src data: https:; media-src data: blob: https:; connect-src 'none'; frame-ancestors 'self'",
         "cache-control": "no-store",
       },
     });

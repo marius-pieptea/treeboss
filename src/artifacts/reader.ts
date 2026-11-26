@@ -187,9 +187,9 @@ export function isVersionTooOld(v: string, min = MIN_CLAUDE_VERSION): boolean {
   return false;
 }
 
-/** Probe `claude --version`, cached for 10 minutes. */
-export async function claudeVersion(): Promise<string | null> {
-  if (versionCache && Date.now() - versionCache.checkedAt < VERSION_CACHE_TTL_MS) {
+/** Probe `claude --version`, cached for 10 minutes unless `force` is true. */
+export async function claudeVersion(force = false): Promise<string | null> {
+  if (!force && versionCache && Date.now() - versionCache.checkedAt < VERSION_CACHE_TTL_MS) {
     return versionCache.value;
   }
   const bin = resolveBinary(ENGINES.claude);
@@ -446,8 +446,8 @@ export async function readArtifact(id: string, opts?: { prompt?: string }): Prom
 /**
  * Refresh metadata of known artifacts from the signed-in claude.ai account (`Artifact` tool `action: "list"`).
  */
-export async function listAccount(): Promise<{ account: AccountInfo; updated: number }> {
-  const version = await claudeVersion();
+export async function listAccount(opts?: { force?: boolean }): Promise<{ account: AccountInfo; updated: number }> {
+  const version = await claudeVersion(Boolean(opts?.force));
   if (version !== null && isVersionTooOld(version, MIN_CLAUDE_VERSION)) {
     accountState = "too_old";
     return { account: getAccount(), updated: 0 };
