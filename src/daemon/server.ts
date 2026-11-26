@@ -46,6 +46,7 @@ import { signalsRoutes, isPublicSignalsPath, feedbackIntake } from "./routes/sig
 import { memoryRoutes } from "./routes/memory";
 import { practicesRoutes } from "./routes/practices";
 import { evidenceRoutes } from "./routes/evidence";
+import { artifactRoutes } from "./routes/artifacts";
 import { reaRoutes } from "./routes/rea";
 import { scaffoldRoutes } from "./routes/scaffold";
 import { designFoldRoutes, designRoutes } from "./routes/design";
@@ -91,7 +92,7 @@ export interface ServerOptions {
 
 export function startServer(opts: ServerOptions) {
   const startedAt = Date.now();
-  const modules: RouteModule[] = [skillsImportRoutes, goalPlanRoutes, sessionModelRoutes, planqRoutes, askRoutes, attachmentsRoutes, specsRoutes, docsRoutes, roadmapRoutes, productRoutes, autopilotRoutes, ciRoutes, deployRoutes, releasesRoutes, checklistsRoutes, mobileRoutes, labRoutes, qaRoutes, signalsRoutes, memoryRoutes, practicesRoutes, evidenceRoutes, reaRoutes, scaffoldRoutes, designRoutes, codegraphRoutes, coreRoutes({ onShutdown: opts.onShutdown }), remoteRoutes, handoffRoutes, secretsRoutes, workspaceRoutes, fsRoutes, gitRoutes, terminalRoutes, streamRoutes, agentRoutes, modelRoutes, sessionsExtRoutes, settingsExtRoutes, gitExtRoutes, fsExtRoutes, browserExtRoutes, emulatorRoutes, lifecycleRoutes, devserverRoutes];
+  const modules: RouteModule[] = [skillsImportRoutes, goalPlanRoutes, sessionModelRoutes, planqRoutes, askRoutes, attachmentsRoutes, specsRoutes, docsRoutes, roadmapRoutes, productRoutes, autopilotRoutes, ciRoutes, deployRoutes, releasesRoutes, checklistsRoutes, mobileRoutes, labRoutes, qaRoutes, signalsRoutes, memoryRoutes, practicesRoutes, evidenceRoutes, artifactRoutes, reaRoutes, scaffoldRoutes, designRoutes, codegraphRoutes, coreRoutes({ onShutdown: opts.onShutdown }), remoteRoutes, handoffRoutes, secretsRoutes, workspaceRoutes, fsRoutes, gitRoutes, terminalRoutes, streamRoutes, agentRoutes, modelRoutes, sessionsExtRoutes, settingsExtRoutes, gitExtRoutes, fsExtRoutes, browserExtRoutes, emulatorRoutes, lifecycleRoutes, devserverRoutes];
   // Context chips are folded into the prompt before the core session routes see the request, so this goes first.
   modules.unshift(contextRoutes, searchRoutes);
   // A design turn is wrapped before the context chips are folded in front of it (see routes/design.ts).

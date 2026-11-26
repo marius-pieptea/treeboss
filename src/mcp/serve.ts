@@ -15,6 +15,7 @@ import { computerToolDefs } from "../computer/defs";
 import { emulatorToolDefs } from "../emulator/defs";
 import { devserverToolDefs } from "../devserver/defs";
 import { evidenceToolDefs } from "../evidence/defs";
+import { artifactToolDefs } from "../artifacts/defs";
 import { planToolDefs } from "../sessions/planq";
 import { titleToolDefs } from "../sessions/title";
 import { treebossToolDefs } from "../treeboss/tools";
@@ -52,6 +53,7 @@ function toolDefs() {
   if (process.env.TRB_TREEBOSS === "1") defs.push(...treebossToolDefs());
   if (process.env.TRB_CHECKLISTS === "1") defs.push(...checklistToolDefs());
   if (process.env.TRB_QA === "1") defs.push(...qaToolDefs());
+  defs.push(...artifactToolDefs());
   return defs;
 }
 
