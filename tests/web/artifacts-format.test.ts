@@ -1,10 +1,18 @@
 import { describe, expect, test } from "bun:test";
+import {
+  boundsOf,
+  fitView,
+  visibleBoards,
+  zoomAt,
+} from "../../web/src/features/artifacts/canvas-math";
 import type { Artifact } from "../../web/src/features/artifacts/data";
 import {
   artifactBadges,
+  capabilityFileUrl,
   countByIntent,
   documentsTabLabel,
   extractArtifactBoards,
+  extractCanvasNotes,
   filterArtifacts,
   formatAskAgentDraft,
   formatFileSize,
@@ -247,5 +255,131 @@ describe("artifacts format", () => {
     expect(fallback[1]?.path).toBe("project/Screen-2.dc.html");
     expect(fallback[9]?.path).toBe("project/Screen-10.dc.html");
     expect(fallback[69]?.path).toBe("project/Screen-70.dc.html");
+  });
+
+  test("extractArtifactBoards supports v3 object-map boards with titles, geometry, order, and drops invalid geometry", () => {
+    const files = [
+      { path: "project/canvas.json", size: 800 },
+      { path: "project/Animale.dc.html", size: 2000 },
+      { path: "project/Main.dc.html", size: 1500 },
+      { path: "project/ExtraInMap.dc.html", size: 1200 },
+      { path: "project/Unlisted.dc.html", size: 900 },
+    ];
+
+    const canvas = {
+      v: 3,
+      boards: {
+        "Animale.dc.html": { x: 470, y: 0, w: 390, h: 844, radius: 40, title: "Proprietar · Animale" },
+        "Main.dc.html": { x: 0, y: -50, w: 390, h: 844, radius: 0, title: "Proprietar · Acasă" },
+        "ExtraInMap.dc.html": { x: Number.NaN, y: 100, w: 0, h: -20, radius: -5, title: "Bad geom" },
+        "Missing.dc.html": { x: 0, y: 0, w: 100, h: 100, title: "Missing" },
+      },
+      order: ["Main.dc.html", "Missing.dc.html", "Animale.dc.html"],
+    };
+
+    expect(extractArtifactBoards(files, canvas)).toEqual([
+      { path: "project/Main.dc.html", title: "Proprietar · Acasă", size: 1500, x: 0, y: -50, w: 390, h: 844, radius: 0 },
+      { path: "project/Animale.dc.html", title: "Proprietar · Animale", size: 2000, x: 470, y: 0, w: 390, h: 844, radius: 40 },
+      { path: "project/ExtraInMap.dc.html", title: "Bad geom", size: 1200, y: 100 },
+      { path: "project/Unlisted.dc.html", title: "Unlisted", size: 900 },
+    ]);
+  });
+
+  test("extractCanvasNotes orders by noteOrder, appends unlisted notes, and skips invalid entries", () => {
+    const canvas = {
+      noteOrder: ["titlu", "missing", "badPos"],
+      notes: {
+        titlu: { kind: "title1", x: 0, y: -300, w: 240, maxW: 1800, text: "PetComplete" },
+        badPos: { x: Number.NaN, y: 0, text: "Invalid x" },
+        emptyText: { x: 10, y: 20, text: "   " },
+        qareverifnota: { x: 1880, y: 20940, w: 320, fill: "teal", text: "Desktop note" },
+        badWidth: { x: 10, y: 20, w: -5, maxW: 0, text: "Keep note, drop bad sizes" },
+      },
+    };
+
+    expect(extractCanvasNotes(canvas)).toEqual([
+      { id: "titlu", kind: "title1", x: 0, y: -300, w: 240, maxW: 1800, text: "PetComplete" },
+      { id: "qareverifnota", x: 1880, y: 20940, w: 320, fill: "teal", text: "Desktop note" },
+      { id: "badWidth", x: 10, y: 20, text: "Keep note, drop bad sizes" },
+    ]);
+    expect(extractCanvasNotes(null)).toEqual([]);
+  });
+
+  test("capabilityFileUrl encodes each path segment individually", () => {
+    expect(capabilityFileUrl("http://127.0.0.1:4123/cap/abc", "/project/My Board #1?.dc.html")).toBe(
+      "http://127.0.0.1:4123/cap/abc/project/My%20Board%20%231%3F.dc.html",
+    );
+  });
+
+  test("canvas-math boundsOf, fitView, zoomAt, and visibleBoards", () => {
+    expect(boundsOf([], [])).toBeNull();
+
+    const boards = [
+      { path: "a.dc.html", x: 0, y: 0, w: 400, h: 800 },
+      { path: "b.dc.html", x: 500, y: 100, w: 300, h: 500 },
+    ];
+    const notes = [{ id: "t1", kind: "title1", x: 0, y: -300, w: 240, maxW: 1000, text: "Title" }];
+    const b = boundsOf(boards, notes);
+    expect(b).toEqual({ minX: 0, minY: -300, maxX: 1000, maxY: 800, width: 1000, height: 1100 });
+
+    // fitView centres bounds and caps at maxZoom = 1
+    const smallBounds = { minX: 100, minY: 200, maxX: 300, maxY: 400, width: 200, height: 200 };
+    expect(fitView(smallBounds, 1000, 800, 48, 1)).toEqual({ x: 300, y: 100, zoom: 1 });
+
+    // fitView scales down and centres large bounds
+    const fitted = fitView(b, 1096, 646, 48, 1);
+    expect(fitted.zoom).toBeCloseTo(0.5, 6);
+    expect(fitted.x).toBeCloseTo(298, 6); // 548 - 500 * 0.5
+    expect(fitted.y).toBeCloseTo(198, 6); // 323 - 250 * 0.5
+
+    // zoomAt keeps cursor board point fixed and clamps to [0.05, 4]
+    const startView = { x: 100, y: 50, zoom: 0.5 };
+    const sx = 300;
+    const sy = 250;
+    const beforeBoardX = (sx - startView.x) / startView.zoom;
+    const beforeBoardY = (sy - startView.y) / startView.zoom;
+    const zoomed = zoomAt(startView, sx, sy, 2);
+    expect(zoomed.zoom).toBe(1);
+    expect((sx - zoomed.x) / zoomed.zoom).toBeCloseTo(beforeBoardX, 6);
+    expect((sy - zoomed.y) / zoomed.zoom).toBeCloseTo(beforeBoardY, 6);
+
+    expect(zoomAt(startView, sx, sy, 0.01).zoom).toBe(0.05);
+    expect(zoomAt(startView, sx, sy, 100).zoom).toBe(4);
+
+    // visibleBoards excludes off-screen boards and honours marginPx
+    const view = { x: 0, y: 0, zoom: 1 };
+    const visTestBoards = [
+      { path: "inside.dc.html", x: 100, y: 100, w: 200, h: 200 },
+      { path: "near.dc.html", x: 1050, y: 100, w: 200, h: 200 },
+      { path: "far.dc.html", x: 2000, y: 100, w: 200, h: 200 },
+    ];
+    expect(visibleBoards(visTestBoards, view, 1000, 800, 0).map((x) => x.path)).toEqual(["inside.dc.html"]);
+    expect(visibleBoards(visTestBoards, view, 1000, 800, 100).map((x) => x.path)).toEqual([
+      "inside.dc.html",
+      "near.dc.html",
+    ]);
+  });
+
+  test("boundsOf estimates note height (64px for title1, 120px for other notes) so bottom notes are not cropped", () => {
+    const boards = [{ path: "a.dc.html", x: 0, y: 0, w: 400, h: 500 }];
+    const bottomTitle = [{ id: "t2", kind: "title1", x: 0, y: 600, maxW: 300, text: "Bottom heading" }];
+    expect(boundsOf(boards, bottomTitle)).toEqual({
+      minX: 0,
+      minY: 0,
+      maxX: 400,
+      maxY: 664,
+      width: 400,
+      height: 664,
+    });
+
+    const bottomNote = [{ id: "n2", x: 0, y: 600, w: 240, text: "Bottom card note" }];
+    expect(boundsOf(boards, bottomNote)).toEqual({
+      minX: 0,
+      minY: 0,
+      maxX: 400,
+      maxY: 720,
+      width: 400,
+      height: 720,
+    });
   });
 });

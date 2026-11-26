@@ -14,6 +14,33 @@ export interface ArtifactBoard {
   title: string;
   size: number;
   section?: string;
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+  radius?: number;
+}
+
+export interface CanvasNote {
+  id: string;
+  x: number;
+  y: number;
+  w?: number;
+  maxW?: number;
+  text: string;
+  kind?: string;
+  fill?: string;
+}
+
+export function capabilityFileUrl(base: string, path: string): string {
+  const prefix = base.endsWith("/") ? base : `${base}/`;
+  const clean = path.replace(/^\/+/, "");
+  const encoded = clean
+    .split("/")
+    .filter((seg) => seg.length > 0)
+    .map((seg) => encodeURIComponent(seg))
+    .join("/");
+  return prefix + encoded;
 }
 
 export interface IntentCounts {
@@ -227,10 +254,23 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function finiteNum(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function positiveNum(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function nonNegativeNum(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 /**
  * Derive previewable `.dc.html` boards from an artifact's file listing and optional parsed `project/canvas.json`.
- * Order, titles, and optional sections come from `canvas.json` when present; unlisted `.dc.html` boards (and the
- * full list when `canvas.json` is absent) are sorted alphabetically by file name. Non-`.dc.html` files are ignored.
+ * Order, titles, optional sections, and board geometry come from `canvas.json` when present; unlisted `.dc.html`
+ * boards (and the full list when `canvas.json` is absent) are sorted alphabetically by file name.
+ * Non-`.dc.html` files are ignored.
  */
 export function extractArtifactBoards(files: ArtifactFileEntry[], canvas?: unknown): ArtifactBoard[] {
   const dcFiles = files.filter((f) => isDcHtmlPath(f.path));
@@ -269,13 +309,18 @@ export function extractArtifactBoards(files: ArtifactFileEntry[], canvas?: unkno
   const boards: ArtifactBoard[] = [];
   const seen = new Set<string>();
 
-  const pushEntry = (entry: unknown, defaultSection?: string) => {
-    let rawRef: string | undefined;
+  const pushEntry = (entry: unknown, defaultSection?: string, rawRefOverride?: string) => {
+    let rawRef: string | undefined = nonEmptyString(rawRefOverride);
     let title: string | undefined;
     let section = defaultSection;
+    let x: number | undefined;
+    let y: number | undefined;
+    let w: number | undefined;
+    let h: number | undefined;
+    let radius: number | undefined;
 
     if (typeof entry === "string") {
-      rawRef = nonEmptyString(entry);
+      rawRef ??= nonEmptyString(entry);
     } else if (entry && typeof entry === "object") {
       const obj = entry as {
         file?: unknown;
@@ -288,8 +333,13 @@ export function extractArtifactBoards(files: ArtifactFileEntry[], canvas?: unkno
         label?: unknown;
         section?: unknown;
         group?: unknown;
+        x?: unknown;
+        y?: unknown;
+        w?: unknown;
+        h?: unknown;
+        radius?: unknown;
       };
-      rawRef =
+      rawRef ??=
         nonEmptyString(obj.file) ??
         nonEmptyString(obj.path) ??
         nonEmptyString(obj.src) ??
@@ -297,6 +347,11 @@ export function extractArtifactBoards(files: ArtifactFileEntry[], canvas?: unkno
         nonEmptyString(obj.id);
       title = nonEmptyString(obj.title) ?? nonEmptyString(obj.name) ?? nonEmptyString(obj.label);
       section = nonEmptyString(obj.section) ?? nonEmptyString(obj.group) ?? defaultSection;
+      x = finiteNum(obj.x);
+      y = finiteNum(obj.y);
+      w = positiveNum(obj.w);
+      h = positiveNum(obj.h);
+      radius = nonNegativeNum(obj.radius);
     }
 
     if (!rawRef) return;
@@ -309,11 +364,16 @@ export function extractArtifactBoards(files: ArtifactFileEntry[], canvas?: unkno
       size: match.size,
     };
     if (section) board.section = section;
+    if (x !== undefined) board.x = x;
+    if (y !== undefined) board.y = y;
+    if (w !== undefined) board.w = w;
+    if (h !== undefined) board.h = h;
+    if (radius !== undefined) board.radius = radius;
     boards.push(board);
   };
 
   if (canvas && typeof canvas === "object") {
-    const obj = canvas as { sections?: unknown; boards?: unknown };
+    const obj = canvas as { sections?: unknown; boards?: unknown; order?: unknown };
     if (Array.isArray(obj.sections)) {
       for (const sec of obj.sections) {
         if (!sec || typeof sec !== "object") continue;
@@ -329,6 +389,18 @@ export function extractArtifactBoards(files: ArtifactFileEntry[], canvas?: unkno
     }
     if (Array.isArray(obj.boards)) {
       for (const item of obj.boards) pushEntry(item);
+    } else if (obj.boards && typeof obj.boards === "object") {
+      const boardsMap = obj.boards as Record<string, unknown>;
+      if (Array.isArray(obj.order)) {
+        for (const ref of obj.order) {
+          if (typeof ref !== "string") continue;
+          const entry = Object.prototype.hasOwnProperty.call(boardsMap, ref) ? boardsMap[ref] : undefined;
+          pushEntry(entry ?? ref, undefined, ref);
+        }
+      }
+      for (const [ref, entry] of Object.entries(boardsMap)) {
+        pushEntry(entry, undefined, ref);
+      }
     }
   }
 
@@ -338,6 +410,58 @@ export function extractArtifactBoards(files: ArtifactFileEntry[], canvas?: unkno
   }
 
   return boards;
+}
+
+/** Extract valid canvas notes from `canvas.notes` (object map), ordered by `canvas.noteOrder` when present. */
+export function extractCanvasNotes(canvas: unknown): CanvasNote[] {
+  if (!canvas || typeof canvas !== "object") return [];
+  const obj = canvas as { notes?: unknown; noteOrder?: unknown };
+  if (!obj.notes || typeof obj.notes !== "object" || Array.isArray(obj.notes)) return [];
+
+  const notesMap = obj.notes as Record<string, unknown>;
+  const notes: CanvasNote[] = [];
+  const seen = new Set<string>();
+
+  const pushNote = (id: string, raw: unknown) => {
+    if (seen.has(id) || !raw || typeof raw !== "object" || Array.isArray(raw)) return;
+    const entry = raw as {
+      x?: unknown;
+      y?: unknown;
+      w?: unknown;
+      maxW?: unknown;
+      text?: unknown;
+      kind?: unknown;
+      fill?: unknown;
+    };
+    const x = finiteNum(entry.x);
+    const y = finiteNum(entry.y);
+    const text = nonEmptyString(entry.text);
+    if (x === undefined || y === undefined || !text) return;
+
+    seen.add(id);
+    const note: CanvasNote = { id, x, y, text };
+    const w = positiveNum(entry.w);
+    const maxW = positiveNum(entry.maxW);
+    const kind = nonEmptyString(entry.kind);
+    const fill = nonEmptyString(entry.fill);
+    if (w !== undefined) note.w = w;
+    if (maxW !== undefined) note.maxW = maxW;
+    if (kind !== undefined) note.kind = kind;
+    if (fill !== undefined) note.fill = fill;
+    notes.push(note);
+  };
+
+  if (Array.isArray(obj.noteOrder)) {
+    for (const id of obj.noteOrder) {
+      if (typeof id !== "string" || !Object.prototype.hasOwnProperty.call(notesMap, id)) continue;
+      pushNote(id, notesMap[id]);
+    }
+  }
+  for (const [id, raw] of Object.entries(notesMap)) {
+    pushNote(id, raw);
+  }
+
+  return notes;
 }
 
 export function formatFileSize(bytes: number): string {
