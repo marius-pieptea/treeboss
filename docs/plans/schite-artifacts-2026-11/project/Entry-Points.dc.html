@@ -1,0 +1,69 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Entry-Points</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#f4f4f5;--surface:#ffffff;--surface-2:#f0f0f1;--overlay:#ffffff;--border:rgba(0,0,0,.1);--border-strong:rgba(0,0,0,.2);
+--text:#1a1a1c;--muted:#55555c;--faint:#85858c;--hover:rgba(0,0,0,.05);--active:rgba(0,0,0,.09);--primary:#1a1a1c;--primary-fg:#fff;
+--primary-soft:rgba(0,0,0,.08);--accent:#6d28d9;--success:#166534;--warning:#9a4608;--danger:#b91c1c;--info:#1d4ed8;
+--shadow-sm:0 1px 3px 0 rgba(0,0,0,.1),0 1px 2px -1px rgba(0,0,0,.1);--shadow-lg:0 8px 30px rgba(0,0,0,.14),0 1px 0 rgba(0,0,0,.04)}
+*{box-sizing:border-box}body{margin:0;font-family:"Geist",ui-sans-serif,system-ui,sans-serif;font-size:13px;line-height:1.45;color:var(--text);font-feature-settings:"cv11","ss01"}
+.mono{font-family:"Geist Mono",ui-monospace,Menlo,monospace}
+.frame{position:relative;overflow:hidden;background:var(--bg);display:flex}
+.rail{width:48px;flex:none;display:flex;flex-direction:column;align-items:center;gap:4px;padding-top:8px;border-right:1px solid var(--border)}
+.rail .it{width:40px;height:40px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--faint);position:relative}
+.rail .it.on{color:var(--text)}.rail .it.on:before{content:"";position:absolute;left:-4px;top:10px;bottom:10px;width:2px;border-radius:2px;background:var(--primary)}
+.col{display:flex;flex-direction:column;min-width:0}
+.tabs{height:36px;flex:none;display:flex;align-items:stretch;border-bottom:1px solid var(--border);background:var(--bg)}
+.tab{display:flex;align-items:center;gap:4px;padding:0 12px;font-size:12px;color:var(--muted);border-right:1px solid var(--border)}
+.tab.on{background:var(--surface);color:var(--text);box-shadow:inset 0 -1px 0 var(--surface)}
+.panel{background:var(--surface)}
+.hd{display:flex;flex-direction:column;gap:8px;padding:12px;border-bottom:1px solid var(--border)}
+.row{display:flex;align-items:center;gap:8px}
+.h1{font-size:14px;font-weight:600;flex:1}
+.input{height:32px;border:1px solid var(--border);background:var(--surface-2);border-radius:6px;padding:0 8px;display:flex;align-items:center;gap:4px;color:var(--muted);font-size:13px;flex:1;min-width:0}
+.input.focus{border-color:rgba(26,26,28,.7);background:var(--surface);color:var(--text)}
+.input.err{border-color:var(--danger);background:var(--surface);color:var(--text)}
+.btn{height:28px;padding:0 10px;border-radius:6px;font-size:12px;font-weight:500;display:inline-flex;align-items:center;gap:4px;white-space:nowrap;flex:none}
+.btn.md{height:32px;padding:0 12px;font-size:13px}
+.subtle{background:var(--surface-2);color:var(--text)}.primary{background:var(--primary);color:var(--primary-fg)}
+.outline{border:1px solid var(--border-strong);color:var(--text)}.ghost{color:var(--muted)}
+.ib{width:28px;height:28px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;color:var(--muted);flex:none}
+.seg{display:flex;background:var(--surface-2);border-radius:8px;padding:2px;gap:2px}
+.seg span{height:24px;padding:0 6px;border-radius:6px;font-size:12px;display:flex;align-items:center;gap:4px;color:var(--muted);flex:1;justify-content:center;white-space:nowrap}
+.seg span.on{background:var(--surface);color:var(--text);box-shadow:var(--shadow-sm),0 0 0 1px var(--border)}
+.seg b{font-weight:400;font-family:"Geist Mono",monospace;font-size:11px;color:var(--muted)}
+.sel{height:28px;border:1px solid var(--border);background:var(--surface-2);border-radius:6px;padding:0 8px;display:flex;align-items:center;gap:4px;font-size:12px;flex:none;white-space:nowrap}
+.gh{height:28px;display:flex;align-items:center;gap:4px;padding:0 12px;font-size:11px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.gh .n{font-family:"Geist Mono",monospace;letter-spacing:0;text-transform:none;margin-left:auto}
+.item{display:flex;gap:8px;align-items:flex-start;padding:8px 12px;border-bottom:1px solid var(--border)}
+.item.on{background:var(--primary-soft)}
+.item .t{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
+.item .m{font-family:"Geist Mono",monospace;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.badge{height:18px;padding:0 6px;border-radius:4px;font-family:"Geist Mono",monospace;font-size:11px;display:inline-flex;align-items:center;background:var(--surface-2);color:var(--muted);white-space:nowrap;flex:none}
+.badge.info{background:rgba(29,78,216,.1);border:1px solid rgba(29,78,216,.25);color:var(--info)}
+.badge.warn{background:rgba(154,70,8,.1);border:1px solid rgba(154,70,8,.25);color:var(--warning)}
+.badge.ok{background:rgba(22,101,52,.1);border:1px solid rgba(22,101,52,.25);color:var(--success)}
+.ico{width:14px;height:14px;flex:none;color:var(--muted);margin-top:2px}
+svg{stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.empty{display:flex;flex-direction:column;align-items:center;text-align:center;padding:40px 24px;gap:8px}
+.tile{width:40px;height:40px;border-radius:12px;background:var(--surface-2);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;color:var(--faint)}
+.et{font-size:13px;font-weight:500}.eh{font-size:12px;color:var(--muted);max-width:40ch}
+.card{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px}
+.banner{display:flex;gap:8px;align-items:flex-start;padding:12px;border-bottom:1px solid var(--border);background:rgba(154,70,8,.06);font-size:12px}
+.lbl{font-size:11px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.note{position:absolute;background:#fde68a;color:#1a1a1c;font-size:12px;line-height:1.4;padding:8px 10px;border-radius:4px;box-shadow:0 2px 6px rgba(0,0,0,.15);max-width:260px;z-index:9}
+.sk{background:var(--active);border-radius:6px}
+.shimmer{background:linear-gradient(90deg,var(--muted) 30%,var(--faint) 50%,var(--muted) 70%);-webkit-background-clip:text;color:transparent}
+.menu{position:absolute;background:var(--overlay);border:1px solid var(--border-strong);border-radius:8px;box-shadow:var(--shadow-lg);padding:4px;z-index:5}
+.menu div{padding:6px 8px;border-radius:6px;font-size:13px;display:flex;align-items:center;gap:8px;white-space:nowrap}
+.toast{position:absolute;background:var(--overlay);border:1px solid var(--border-strong);border-radius:8px;box-shadow:var(--shadow-lg);padding:8px 12px;font-size:13px;display:flex;gap:12px;align-items:center;z-index:5}
+.kbd{font-family:"Geist Mono",monospace;font-size:11px;color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:0 4px}
+a{color:var(--primary);text-decoration:underline;text-underline-offset:2px}
+</style></head><body><div class="frame" style="width:1000px;height:460px"><div style="display:flex;gap:24px;padding:24px;width:100%">
+<div style="display:flex;flex-direction:column;gap:8px"><div class="lbl">Activity rail</div><div style="position:relative;background:var(--bg);border:1px solid var(--border);border-radius:8px;height:400px;width:48px"><div class="rail" style="height:100%;border:0"><div class="it"><svg viewBox="0 0 24 24" width="19" height="19" style="flex:none;"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg></div><div class="it"><svg viewBox="0 0 24 24" width="19" height="19" style="flex:none;"><path d="M20 7h-3a2 2 0 0 1-2-2V2"/><path d="M9 18a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h7l4 4v10a2 2 0 0 1-2 2Z"/><path d="M3 7.6v12.8A1.6 1.6 0 0 0 4.6 22h9.8"/></svg></div><div class="it"><svg viewBox="0 0 24 24" width="19" height="19" style="flex:none;"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg></div><div class="it"><svg viewBox="0 0 24 24" width="19" height="19" style="flex:none;"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></div><div class="it"><svg viewBox="0 0 24 24" width="19" height="19" style="flex:none;"><path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"/><path d="M14 13.12c0 2.38 0 6.38-1 8.88"/><path d="M17.29 21.02c.12-.6.43-2.3.5-3.02"/><path d="M2 12a10 10 0 0 1 18-6"/><path d="M2 16h.01"/><path d="M21.8 16c.2-2 .131-5.354 0-6"/><path d="M5 19.5C5.5 18 6 15 6 12a6 6 0 0 1 .34-2"/><path d="M8.65 22c.21-.66.45-1.32.57-2"/><path d="M9 6.8a6 6 0 0 1 9 5.2v2"/></svg></div><div class="it"><svg viewBox="0 0 24 24" width="19" height="19" style="flex:none;"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg></div><div class="it"><svg viewBox="0 0 24 24" width="19" height="19" style="flex:none;"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div><div class="it on"><svg viewBox="0 0 24 24" width="19" height="19" style="flex:none;"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg></div><div style="flex:1"></div><div class="it"><svg viewBox="0 0 24 24" width="19" height="19" style="flex:none;"><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></div></div>
+<div style="position:absolute;left:56px;top:316px;background:var(--overlay);border:1px solid var(--border-strong);border-radius:6px;box-shadow:var(--shadow-lg);padding:4px 8px;font-size:11px;white-space:nowrap">Artifacts</div></div></div>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px"><div class="lbl">Editor tab strip</div><div style="border:1px solid var(--border);border-radius:8px;overflow:hidden"><div class="tabs"><div class="tab"><svg viewBox="0 0 24 24" width="12" height="12" style="flex:none;"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>Agents</div><div class="tab"><svg viewBox="0 0 24 24" width="12" height="12" style="flex:none;"><path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"/><path d="M14 13.12c0 2.38 0 6.38-1 8.88"/><path d="M17.29 21.02c.12-.6.43-2.3.5-3.02"/><path d="M2 12a10 10 0 0 1 18-6"/><path d="M2 16h.01"/><path d="M21.8 16c.2-2 .131-5.354 0-6"/><path d="M5 19.5C5.5 18 6 15 6 12a6 6 0 0 1 .34-2"/><path d="M8.65 22c.21-.66.45-1.32.57-2"/><path d="M9 6.8a6 6 0 0 1 9 5.2v2"/></svg>Evidence</div><div class="tab"><svg viewBox="0 0 24 24" width="12" height="12" style="flex:none;"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>Design</div><div class="tab"><svg viewBox="0 0 24 24" width="12" height="12" style="flex:none;"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Checklists</div><div class="tab on"><svg viewBox="0 0 24 24" width="12" height="12" style="flex:none;"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg>Artifacts <svg viewBox="0 0 24 24" width="12" height="12" style="flex:none;color:var(--faint);margin-left:4px"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></div><div style="flex:1"></div></div></div>
+<div class="lbl" style="margin-top:16px">Command palette</div>
+<div style="width:600px;background:var(--overlay);border:1px solid var(--border-strong);border-radius:12px;box-shadow:var(--shadow-lg);overflow:hidden">
+<div style="padding:12px;border-bottom:1px solid var(--border);font-size:13px">artif<span style="border-left:1.5px solid var(--text);margin-left:1px"></span></div>
+<div style="padding:4px"><div class="menu" style="position:static;border:0;box-shadow:none;padding:0"><div style="background:var(--hover)"><svg viewBox="0 0 24 24" width="14" height="14" style="flex:none;color:var(--muted)"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg>Open artifacts<span style="flex:1"></span></div><div><svg viewBox="0 0 24 24" width="14" height="14" style="flex:none;color:var(--muted)"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>Add artifact link…</div><div><svg viewBox="0 0 24 24" width="14" height="14" style="flex:none;color:var(--muted)"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>Refresh artifacts</div></div></div></div>
+</div></div><div class="note" style="left:700px;top:300px;width:260px">Rail icon: Layers, after Checklists. The tab is a singleton like Evidence: opening it again focuses the open tab. “Add artifact link…” opens the tab with the link field focused.</div></div></body></html>

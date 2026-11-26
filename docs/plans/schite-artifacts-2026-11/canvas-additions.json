@@ -1,0 +1,77 @@
+{
+  "row": "Artifacts tab · claude.ai artifacts (sketch)",
+  "boards": [
+    {
+      "title": "Wide · Empty (0 artifacts)",
+      "w": 1340,
+      "h": 820,
+      "file": "project/Wide-Empty.dc.html",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "title": "Wide · 3 artifacts, own design open (menu open)",
+      "w": 1340,
+      "h": 820,
+      "file": "project/Wide-Three-Own.dc.html",
+      "x": 1410,
+      "y": 0
+    },
+    {
+      "title": "Wide · 43 artifacts, by session, preview loading",
+      "w": 1340,
+      "h": 820,
+      "file": "project/Wide-Many-Loading.dc.html",
+      "x": 2820,
+      "y": 0
+    },
+    {
+      "title": "Wide · Shared with you: summary + live view button",
+      "w": 1340,
+      "h": 820,
+      "file": "project/Wide-Shared.dc.html",
+      "x": 4230,
+      "y": 0
+    },
+    {
+      "title": "Wide · Live view open (desktop)",
+      "w": 1340,
+      "h": 820,
+      "file": "project/Wide-LiveView.dc.html",
+      "x": 5640,
+      "y": 0
+    },
+    {
+      "title": "Narrow 600 · 1 artifact, wrong link pasted",
+      "w": 600,
+      "h": 820,
+      "file": "project/Narrow-One-BadLink.dc.html",
+      "x": 7050,
+      "y": 0
+    },
+    {
+      "title": "Narrow 600 · Artifact open (back to list)",
+      "w": 600,
+      "h": 820,
+      "file": "project/Narrow-Detail.dc.html",
+      "x": 7720,
+      "y": 0
+    },
+    {
+      "title": "Narrow 600 · Errors (4)",
+      "w": 600,
+      "h": 1140,
+      "file": "project/Narrow-Errors.dc.html",
+      "x": 8390,
+      "y": 0
+    },
+    {
+      "title": "Entry points · rail, tab strip, command palette",
+      "w": 1000,
+      "h": 460,
+      "file": "project/Entry-Points.dc.html",
+      "x": 9060,
+      "y": 0
+    }
+  ]
+}

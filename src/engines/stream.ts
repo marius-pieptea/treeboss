@@ -16,6 +16,7 @@
  *   devin   `acp`: JSON-RPC session/update notifications; the session/prompt response is the terminal event
  */
 import { truncate } from "../util";
+import { parsePublished } from "../artifacts/capture";
 import { compactLine, type ContextSample, type UsageEvent } from "./context";
 
 /** A turn's token consumption, summed. Numbers, not nullables: see `cliUsage()`. */
@@ -173,6 +174,8 @@ export function createStreamAccumulator(
     onText?: (text: string) => void;
     /** Context size readings and compactions, as they happen (see `engines/context.ts`). */
     onUsage?: (e: UsageEvent) => void;
+    /** Fired when a Claude `Artifact` publish tool call succeeds with a claude.ai URL. */
+    onArtifact?: (a: { url: string; title: string; filePath: string }) => void;
   },
 ): StreamAccumulator {
   let buffer = "";
@@ -197,6 +200,8 @@ export function createStreamAccumulator(
   let codexTokenCount = false;
   // tool_use id -> tool name, so a tool_result can be attributed to its call.
   const pendingTools = new Map<string, string>();
+  // tool_use id -> Artifact publish input, so a non-error tool_result can emit onArtifact.
+  const pendingArtifactPublishes = new Map<string, { title: string; filePath: string }>();
   // Context size: the latest reading, the engine's own window (when it says), and a compaction awaiting its "after".
   let lastContext: ContextSample | null = null;
   let streamWindow: number | null = null;
@@ -824,8 +829,16 @@ export function createStreamAccumulator(
       case "tool_use": {
         toolCount++;
         const toolName = event.tool_name || event.name || "tool";
-        if (event.tool_id || event.id) pendingTools.set(event.tool_id || event.id, toolName);
-        const arg = describeToolInput(toolName, event.parameters || event.input);
+        const toolId = event.tool_id || event.id;
+        if (toolId) pendingTools.set(toolId, toolName);
+        const input = event.parameters || event.input;
+        if (toolId && toolName === "Artifact" && input?.action === "publish") {
+          pendingArtifactPublishes.set(toolId, {
+            title: typeof input.title === "string" ? input.title : "",
+            filePath: typeof input.file_path === "string" ? input.file_path : "",
+          });
+        }
+        const arg = describeToolInput(toolName, input);
         onLine(`[${label}] → ${toolName}${arg ? `(${arg})` : ""}`);
         return;
       }
@@ -834,7 +847,13 @@ export function createStreamAccumulator(
         const toolId = event.tool_id || event.tool_use_id;
         const name = (toolId && pendingTools.get(toolId)) || event.tool_name || "tool";
         if (toolId) pendingTools.delete(toolId);
+        const publish = toolId ? pendingArtifactPublishes.get(toolId) : undefined;
+        if (toolId) pendingArtifactPublishes.delete(toolId);
         const raw = typeof event.output === "string" ? event.output : JSON.stringify(event.output ?? "");
+        if (publish && !event.is_error) {
+          const url = parsePublished(raw);
+          if (url) extras?.onArtifact?.({ url, title: publish.title, filePath: publish.filePath });
+        }
         onLine(`[${label}]   ✓ ${name} (${sizeLabel(raw.length)})`);
         return;
       }
@@ -855,6 +874,12 @@ export function createStreamAccumulator(
           if (block?.type === "tool_use") {
             toolCount++;
             if (block.id) pendingTools.set(block.id, block.name || "tool");
+            if (block.id && block.name === "Artifact" && block.input?.action === "publish") {
+              pendingArtifactPublishes.set(block.id, {
+                title: typeof block.input.title === "string" ? block.input.title : "",
+                filePath: typeof block.input.file_path === "string" ? block.input.file_path : "",
+              });
+            }
             const arg = describeToolInput(block.name || "", block.input);
             onLine(`[${label}] → ${block.name || "tool"}${arg ? `(${arg})` : ""}`);
           } else if (block?.type === "text" && typeof block.text === "string" && block.text.trim()) {
@@ -875,7 +900,13 @@ export function createStreamAccumulator(
           if (block?.type !== "tool_result") continue;
           const name = pendingTools.get(block.tool_use_id) || "tool";
           pendingTools.delete(block.tool_use_id);
+          const publish = block.tool_use_id ? pendingArtifactPublishes.get(block.tool_use_id) : undefined;
+          if (block.tool_use_id) pendingArtifactPublishes.delete(block.tool_use_id);
           const raw = typeof block.content === "string" ? block.content : JSON.stringify(block.content ?? "");
+          if (publish && !block.is_error) {
+            const url = parsePublished(raw);
+            if (url) extras?.onArtifact?.({ url, title: publish.title, filePath: publish.filePath });
+          }
           if (block.is_error) onLine(`[${label}]   ✗ ${name}: ${truncate(raw, 160)}`);
           // Size rather than content: a tool result is often thousands of lines.
           else onLine(`[${label}]   ✓ ${name} (${sizeLabel(raw.length)})`);

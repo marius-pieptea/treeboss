@@ -37,6 +37,7 @@ import { refreshMcpTokens } from "../mcp/oauth";
 import { practicesBrief } from "../practices/store";
 import { CODEGRAPH_HINT } from "../codegraph/detect";
 import { evidenceEnabled, evidenceHint } from "../evidence/store";
+import { recordPublished } from "../artifacts/store";
 import { REA_HINT, reaEnabled } from "../evidence/rea";
 import { scheduleKeepInSync } from "../codegraph/autosync";
 import { browserEnabled } from "../browser/chrome";
@@ -1367,7 +1368,7 @@ function startTurn(s: SessionRecord, prompt: string, opts: { resume: boolean; fo
       const reaOn = reaEnabled() && !asking;
       // Signed-in http servers: a token that is expired or about to be is refreshed now, so the engine gets a live one.
       if (!asking) await refreshMcpTokens(agent?.mcp ?? null);
-      const mcp: McpRunConfig = buildRunMcpConfig({ sessionId: s.id, subagents: Boolean(s.subagents) && Boolean(daemon), plan: s.mode === "plan" && Boolean(daemon), title: s.depth === 0 && !asking && Boolean(daemon) && getSetting("session_titles") === "on", ask: asking, daemonUrl: daemon?.url ?? "", token: daemon?.token ?? "", allowed: agent?.mcp ?? null, browser: browserEnabled(), emulator: emulatorEnabled(), computer: computerUseAvailable(), evidence: evidenceOn, rea: reaOn, treeboss: !asking && isTreeboss(s.id) && Boolean(daemon), checklists: !asking && isChecklistAudit(s.id) && Boolean(daemon), qa: !asking && usesQaTools(s.id) && Boolean(daemon), codegraphDir: s.base_cwd });
+      const mcp: McpRunConfig = buildRunMcpConfig({ sessionId: s.id, subagents: Boolean(s.subagents) && Boolean(daemon), plan: s.mode === "plan" && Boolean(daemon), title: s.depth === 0 && !asking && Boolean(daemon) && getSetting("session_titles") === "on", ask: asking, daemonUrl: daemon?.url ?? "", token: daemon?.token ?? "", allowed: agent?.mcp ?? null, browser: browserEnabled(), emulator: emulatorEnabled(), computer: computerUseAvailable(), evidence: evidenceOn, artifacts: Boolean(daemon) && !asking, rea: reaOn, treeboss: !asking && isTreeboss(s.id) && Boolean(daemon), checklists: !asking && isChecklistAudit(s.id) && Boolean(daemon), qa: !asking && usesQaTools(s.id) && Boolean(daemon), codegraphDir: s.base_cwd });
       turnMcp = mcp;
       // One line, once per conversation: a resumed turn already has it.
       if (mcp.codegraph && !opts.resume && !asking) finalPrompt = `${CODEGRAPH_HINT}\n\n` + finalPrompt;
@@ -1429,6 +1430,13 @@ function startTurn(s: SessionRecord, prompt: string, opts: { resume: boolean; fo
           if (e.kind === "turn") liveTurnUsage.set(s.id, e.usage);
           recordUsageEvent(s, e);
           if (e.kind === "limits") limitEventReset = resetFromRateLimitEvent(e.info) ?? limitEventReset;
+        },
+        onArtifact: (a) => {
+          try {
+            recordPublished({ ...a, sessionId: s.id });
+          } catch (err: any) {
+            log(`[trb] failed to record artifact: ${err?.message ?? String(err)}`);
+          }
         },
       });
     } catch (err: any) {

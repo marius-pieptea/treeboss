@@ -46,6 +46,7 @@ import { signalsRoutes, isPublicSignalsPath, feedbackIntake } from "./routes/sig
 import { memoryRoutes } from "./routes/memory";
 import { practicesRoutes } from "./routes/practices";
 import { evidenceRoutes } from "./routes/evidence";
+import { artifactRoutes, isArtifactViewPath, redactArtifactToken, serveArtifactView } from "./routes/artifacts";
 import { reaRoutes } from "./routes/rea";
 import { scaffoldRoutes } from "./routes/scaffold";
 import { designFoldRoutes, designRoutes } from "./routes/design";
@@ -77,7 +78,7 @@ import { SessionError } from "../sessions/manager";
 import { UserError } from "../util";
 import { onSettingChanged } from "../settings";
 
-export { VERSION };
+export { VERSION, isArtifactViewPath, redactArtifactToken };
 
 export interface ServerOptions {
   port: number;
@@ -91,7 +92,7 @@ export interface ServerOptions {
 
 export function startServer(opts: ServerOptions) {
   const startedAt = Date.now();
-  const modules: RouteModule[] = [skillsImportRoutes, goalPlanRoutes, sessionModelRoutes, planqRoutes, askRoutes, attachmentsRoutes, specsRoutes, docsRoutes, roadmapRoutes, productRoutes, autopilotRoutes, ciRoutes, deployRoutes, releasesRoutes, checklistsRoutes, mobileRoutes, labRoutes, qaRoutes, signalsRoutes, memoryRoutes, practicesRoutes, evidenceRoutes, reaRoutes, scaffoldRoutes, designRoutes, codegraphRoutes, coreRoutes({ onShutdown: opts.onShutdown }), remoteRoutes, handoffRoutes, secretsRoutes, workspaceRoutes, fsRoutes, gitRoutes, terminalRoutes, streamRoutes, agentRoutes, modelRoutes, sessionsExtRoutes, settingsExtRoutes, gitExtRoutes, fsExtRoutes, browserExtRoutes, emulatorRoutes, lifecycleRoutes, devserverRoutes];
+  const modules: RouteModule[] = [skillsImportRoutes, goalPlanRoutes, sessionModelRoutes, planqRoutes, askRoutes, attachmentsRoutes, specsRoutes, docsRoutes, roadmapRoutes, productRoutes, autopilotRoutes, ciRoutes, deployRoutes, releasesRoutes, checklistsRoutes, mobileRoutes, labRoutes, qaRoutes, signalsRoutes, memoryRoutes, practicesRoutes, evidenceRoutes, artifactRoutes, reaRoutes, scaffoldRoutes, designRoutes, codegraphRoutes, coreRoutes({ onShutdown: opts.onShutdown }), remoteRoutes, handoffRoutes, secretsRoutes, workspaceRoutes, fsRoutes, gitRoutes, terminalRoutes, streamRoutes, agentRoutes, modelRoutes, sessionsExtRoutes, settingsExtRoutes, gitExtRoutes, fsExtRoutes, browserExtRoutes, emulatorRoutes, lifecycleRoutes, devserverRoutes];
   // Context chips are folded into the prompt before the core session routes see the request, so this goes first.
   modules.unshift(contextRoutes, searchRoutes);
   // A design turn is wrapped before the context chips are folded in front of it (see routes/design.ts).
@@ -153,6 +154,11 @@ export function startServer(opts: ServerOptions) {
 
     // The feedback widget's POST carries its own token in the path, so it is the one API route owners do not authenticate.
     if (isPublicSignalsPath(url.pathname)) return feedbackIntake(req, url, peer);
+
+    // Capability URL for sandboxed artifact previews: the 32-hex view_token in the path is the credential.
+    if ((req.method === "GET" || req.method === "HEAD") && isArtifactViewPath(url.pathname)) {
+      return serveArtifactView(req, url);
+    }
 
     const principal = authenticate(req, peer);
     if (!principal) throw new HttpError(401, "Missing or wrong credentials. The CLI uses ~/.treeboss/token; the browser signs in with `trb ui`.");
@@ -228,7 +234,7 @@ export function startServer(opts: ServerOptions) {
         if (err instanceof GitError) return json({ error: err.message, detail: err.stderr || undefined }, err.status);
         if (err instanceof SessionError || err instanceof UserError) return json({ error: err.message }, 400);
         if (err instanceof ConflictError) return json({ error: err.message, conflict: true, mtime: err.mtime }, 409);
-        console.error(`[trb] ${req.method} ${url.pathname}:`, err);
+        console.error(`[trb] ${req.method} ${redactArtifactToken(url.pathname)}:`, err);
         return json({ error: err?.message ?? "Internal error." }, 500);
       }
     }),

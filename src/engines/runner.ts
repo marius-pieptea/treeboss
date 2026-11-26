@@ -29,6 +29,8 @@ export interface RunTurnOptions extends Omit<LaunchInput, "key"> {
   onSessionId?: (id: string) => void;
   /** Context-size readings and compactions as the stream reports them. */
   onUsage?: (e: UsageEvent) => void;
+  /** Published claude.ai artifacts captured from the stream. */
+  onArtifact?: (a: { url: string; title: string; filePath: string }) => void;
   /** The engine process's pid, which is also its process group id on POSIX. Lets the caller remember the group (sessions/leftovers.ts). */
   onSpawn?: (pid: number) => void;
   signal?: AbortSignal;
@@ -173,7 +175,7 @@ export function runTurn(opts: RunTurnOptions): Promise<TurnResult> {
         `${opts.resumeId ? " — resuming session" : ""} in ${opts.cwd}`,
     );
 
-    const stream = createStreamAccumulator((line) => log(line), opts.onSessionId, opts.engine === "fake" ? "claude" : opts.engine, { onText: opts.onText, onUsage: opts.onUsage });
+    const stream = createStreamAccumulator((line) => log(line), opts.onSessionId, opts.engine === "fake" ? "claude" : opts.engine, { onText: opts.onText, onUsage: opts.onUsage, onArtifact: opts.onArtifact });
     const stdoutKept = boundedText(0, STDOUT_KEEP_CHARS);
     const stderrKept = boundedText(STDERR_HEAD_KEEP_CHARS, STDERR_TAIL_KEEP_CHARS);
     let settled = false;

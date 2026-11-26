@@ -2,7 +2,7 @@ import { openChecklists, openFindings } from "@/features/lab/open";
 import { openQa } from "@/features/qa/open";
 import { openFactory } from "@/features/factory/open";
 import { openEmulator } from "@/features/emulator/open";
-import { ListChecks, ClipboardCheck, Tag,ShieldCheck, Bot, Brain, Factory, FlaskConical, Compass, FolderOpen, FolderPlus, GitBranch, GitPullRequest, Kanban, KeyRound, Layers, Palette, PanelBottom, PanelLeft, PanelRight, Radio, ScrollText, Search, Settings2, Smartphone, SquareTerminal, X, BookText, FilePlus2, Gavel, Sparkles, History, Fingerprint } from "lucide-react";
+import { ListChecks, ClipboardCheck, Tag,ShieldCheck, Bot, Brain, Factory, FlaskConical, Compass, FolderOpen, FolderPlus, GitBranch, GitPullRequest, Kanban, KeyRound, Layers, Link, Palette, PanelBottom, PanelLeft, PanelRight, Radio, RefreshCw, ScrollText, Search, Settings2, Smartphone, SquareTerminal, X, BookText, FilePlus2, Gavel, Sparkles, History, Fingerprint } from "lucide-react";
 import { useRegisterCommands, type Command } from "@/lib/commands";
 import { useUi, useWs } from "@/lib/store";
 import { bus } from "@/lib/bus";
@@ -13,6 +13,7 @@ import { formatCombo } from "@/lib/hooks";
 import { closeManyGuarded, closeTabGuarded } from "./closeTab";
 import { composeDesign } from "@/features/design/composer";
 import { openNewInvestigation } from "@/features/evidence/open";
+import { openArtifactsAddLink, refreshAllArtifacts } from "@/features/artifacts/data";
 
 /** The shell's own commands: panels, navigation, theme, settings pages. Features add theirs separately. */
 export function useShellCommands(): void {
@@ -47,6 +48,9 @@ export function useShellCommands(): void {
     { id: "roadmap", group: "Roadmap", title: "Open roadmap", icon: <Kanban />, keywords: "board lanes timeline plan", run: () => void ui.openTab({ kind: "roadmap", title: "Roadmap" }) },
     { id: "evidence", group: "Evidence", title: "Open evidence", icon: <Fingerprint />, keywords: "captures pages screenshots styles findings notes clone reverse engineer rea website", run: () => void ui.openTab({ kind: "evidence", title: "Evidence" }) },
     { id: "evidence-new-investigation", group: "Evidence", title: "Evidence: new investigation…", icon: <Fingerprint />, keywords: "investigation study site app binary target findings build", run: () => openNewInvestigation() },
+    { id: "artifacts", group: "Artifacts", title: "Open artifacts", icon: <Layers />, keywords: "claude.ai artifact published slides document design", run: () => void ui.openTab({ kind: "artifacts", title: "Artifacts" }) },
+    { id: "artifacts-add", group: "Artifacts", title: "Add artifact link…", icon: <Link />, keywords: "claude.ai artifact paste link url", run: () => openArtifactsAddLink() },
+    { id: "artifacts-refresh", group: "Artifacts", title: "Refresh artifacts", icon: <RefreshCw />, keywords: "claude.ai artifact refresh sync", run: () => void refreshAllArtifacts() },
     { id: "factory", group: "Factory", title: "Open factory", icon: <Factory />, keywords: "portfolio autopilot ship pull request deploy release mobile signals secrets", run: () => openFactory() },
     { id: "factory-portfolio", group: "Factory", title: "Factory: portfolio", icon: <Layers />, keywords: "products repos budget spend", run: () => openFactory("portfolio") },
     { id: "factory-autopilot", group: "Factory", title: "Factory: autopilot runs and schedules", icon: <Bot />, keywords: "runs schedules cron approve gate queue", run: () => openFactory("autopilot") },

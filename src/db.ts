@@ -186,6 +186,25 @@ CREATE TABLE IF NOT EXISTS evidence (
 );
 CREATE INDEX IF NOT EXISTS idx_evidence_workspace ON evidence(workspace, created_at);
 
+CREATE TABLE IF NOT EXISTS artifacts (
+  id TEXT PRIMARY KEY,
+  url TEXT NOT NULL,
+  title TEXT NOT NULL,
+  intent TEXT NOT NULL DEFAULT 'other',
+  owner TEXT NOT NULL DEFAULT 'unknown',
+  source TEXT NOT NULL,
+  session_id TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER,
+  last_read_at INTEGER,
+  html_path TEXT,
+  summary TEXT,
+  error TEXT,
+  error_text TEXT,
+  removed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS artifacts_created ON artifacts(created_at);
+
 -- Investigations: one reverse-engineering run on a target. The captures, saved results and findings made while it
 -- ran are evidence rows that name it (evidence.investigation_id); closing it keeps them.
 CREATE TABLE IF NOT EXISTS investigations (
@@ -359,6 +378,10 @@ export function migrate(conn: Database): void {
   conn.exec("CREATE INDEX IF NOT EXISTS idx_qa_map_writes_job ON qa_map_writes(job_id, at)");
   addColumn(conn, "qa_runs", "session_id", "TEXT");
   addColumn(conn, "qa_jobs", "failed_units", "TEXT");
+  addColumn(conn, "artifacts", "type_name", "TEXT");
+  addColumn(conn, "artifacts", "content_kind", "TEXT");
+  addColumn(conn, "artifacts", "content_path", "TEXT");
+  addColumn(conn, "artifacts", "view_token", "TEXT");
   if ((conn.prepare("PRAGMA table_info(qa_sessions)").all() as Array<{ name: string }>).some((c) => c.name === "run_id")) {
     conn.exec("UPDATE qa_runs SET session_id = (SELECT session_id FROM qa_sessions WHERE qa_sessions.run_id = qa_runs.id) WHERE session_id IS NULL");
   }

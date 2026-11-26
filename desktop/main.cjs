@@ -1,5 +1,5 @@
 // TreeBoss desktop shell: starts the bundled daemon, signs the window in, shows the UI.
-const { app, BrowserWindow, Menu, shell, dialog, ipcMain, nativeTheme } = require("electron");
+const { app, BrowserWindow, Menu, shell, dialog, ipcMain, nativeTheme, session } = require("electron");
 const { execFileSync, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -28,6 +28,28 @@ function glassKind() {
 }
 
 let win = null;
+
+// Keep in sync with isAllowedLiveUrl in web/src/features/artifacts/liveview-guard.ts.
+function isAllowedLiveUrl(raw) {
+  if (typeof raw !== "string" || !raw) return false;
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:") return false;
+  const host = parsed.hostname.toLowerCase();
+  if (!host) return false;
+  return (
+    host === "claude.ai" ||
+    host.endsWith(".claude.ai") ||
+    host === "claude.com" ||
+    host.endsWith(".claude.com") ||
+    host === "accounts.google.com" ||
+    host === "appleid.apple.com"
+  );
+}
 
 /** A GUI app on macOS/Linux gets a bare PATH; the engines (claude, codex…) live on the login shell's. */
 function fixPath() {
@@ -122,7 +144,7 @@ async function openWindow({ fresh = false, dir } = {}) {
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : win32 ? "hidden" : "default",
     // Windows: the app draws its own title bar and the system caption buttons sit over it; their colors follow the theme.
     ...(win32 ? { titleBarOverlay: { color: glass ? "#00000000" : "#090b0e", symbolColor: "#d8dee7", height: 40 } } : {}),
-    webPreferences: { contextIsolation: true, sandbox: true, preload: path.join(__dirname, "preload.cjs"), additionalArguments: [`--trb-glass=${glass}`] },
+    webPreferences: { contextIsolation: true, sandbox: true, preload: path.join(__dirname, "preload.cjs"), additionalArguments: [`--trb-glass=${glass}`], webviewTag: true },
   });
   if (win32) win.removeMenu();
   // Links to other sites open in the browser; the app stays on the daemon's origin.
@@ -135,6 +157,41 @@ async function openWindow({ fresh = false, dir } = {}) {
       e.preventDefault();
       shell.openExternal(url);
     }
+  });
+  // Artifacts live view: strip any preload, lock down sandbox/isolation, pin partition, and restrict hosts.
+  win.webContents.on("will-attach-webview", (e, webPreferences, params) => {
+    delete webPreferences.preload;
+    delete webPreferences.preloadURL;
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+    params.partition = "persist:claude-ai";
+    if (!isAllowedLiveUrl(params.src)) {
+      e.preventDefault();
+      if (typeof params.src === "string" && /^https?:\/\//i.test(params.src)) shell.openExternal(params.src);
+    }
+  });
+  win.webContents.on("did-attach-webview", (_e, contents) => {
+    const guardLiveNav = (e, url) => {
+      if (isAllowedLiveUrl(url)) return;
+      e.preventDefault();
+      if (typeof url === "string" && /^https?:\/\//i.test(url)) shell.openExternal(url);
+    };
+    contents.setWindowOpenHandler(({ url }) => {
+      if (isAllowedLiveUrl(url)) {
+        contents.loadURL(url).catch(() => {});
+      } else if (typeof url === "string" && /^https?:\/\//i.test(url)) {
+        shell.openExternal(url);
+      }
+      return { action: "deny" };
+    });
+    contents.on("will-navigate", guardLiveNav);
+    contents.on("will-redirect", (e, url, _isInPlace, isMainFrame) => {
+      if ((isMainFrame ?? e?.isMainFrame) !== false) guardLiveNav(e, url);
+    });
+    contents.on("will-frame-navigate", (details) => {
+      if (details.isMainFrame) guardLiveNav(details, details.url);
+    });
   });
   win.on("closed", () => (win = null));
   await win.loadURL(await signInUrl(conn, to));
@@ -192,6 +249,10 @@ app.whenReady().then(async () => {
   );
   // Before the window opens, so its page can ask for the update state as soon as it loads.
   startUpdater(() => win);
+  // Non-default sessions grant all permissions by default; deny everything on the webview partition except sanitized clipboard writes.
+  const liveSession = session.fromPartition("persist:claude-ai");
+  liveSession.setPermissionRequestHandler((_wc, perm, cb) => cb(perm === "clipboard-sanitized-write"));
+  liveSession.setPermissionCheckHandler((_wc, perm) => perm === "clipboard-sanitized-write");
   try {
     await openWindow({ fresh: true, dir: folderFrom(pathArgs(process.argv), process.cwd()) });
   } catch (err) {

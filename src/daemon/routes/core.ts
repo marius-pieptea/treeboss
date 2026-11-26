@@ -43,6 +43,7 @@ import { COMPUTER_TOOL_SET } from "../../computer/defs";
 import { executeComputerTool } from "../../computer/tools";
 import { DEVSERVER_TOOL_SET, executeDevserverTool } from "../../devserver/tools";
 import { EVIDENCE_TOOL_SET, executeEvidenceTool } from "../../evidence/tools";
+import { ARTIFACT_TOOL_SET, executeArtifactTool } from "../../artifacts/tools";
 import { QA_TOOL_SET } from "../../qa/defs";
 import { executeQaTool } from "../../qa/tools";
 import { executeTreebossTool, TREEBOSS_TOOL_SET } from "../../treeboss/tools";
@@ -119,6 +120,7 @@ export function coreRoutes(opts: { onShutdown?: () => void }): RouteModule {
       if (EMULATOR_TOOL_SET.has(name)) return json(await executeEmulatorTool(name, (c.body.args ?? {}) as Record<string, unknown>, { sessionId }));
       if (COMPUTER_TOOL_SET.has(name)) return json(await executeComputerTool(name, (c.body.args ?? {}) as Record<string, unknown>, { sessionId }));
       if (EVIDENCE_TOOL_SET.has(name)) return json(await executeEvidenceTool(name, (c.body.args ?? {}) as Record<string, unknown>, { sessionId }));
+      if (ARTIFACT_TOOL_SET.has(name)) return json(await executeArtifactTool(name, (c.body.args ?? {}) as Record<string, unknown>, { sessionId }));
       if (DEVSERVER_TOOL_SET.has(name)) return json(executeDevserverTool(name, (c.body.args ?? {}) as Record<string, unknown>, { sessionId }));
       if ((PLAN_TOOL_NAMES as readonly string[]).includes(name)) return json(await executePlanTool(name, (c.body.args ?? {}) as Record<string, unknown>, sessionId));
       if ((TITLE_TOOL_NAMES as readonly string[]).includes(name)) return json(executeTitleTool(name, (c.body.args ?? {}) as Record<string, unknown>, sessionId));

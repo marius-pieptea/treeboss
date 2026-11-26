@@ -140,25 +140,57 @@ export function codexMcpOverrides(cfg: McpRunConfig): string[] {
 }
 
 /**
+ * Active workspace MCP files, keyed by resolved file path. When two runs share
+ * one cwd, only the first records the user's original bytes and only the last
+ * cleanup restores them (or removes the file and created directory).
+ */
+const workspaceFiles = new Map<string, { original: Buffer | null; dirExisted: boolean; refs: number }>();
+
+function workspaceOriginal(file: string): { known: boolean; content: Buffer | null } {
+  const entry = workspaceFiles.get(path.resolve(file));
+  return entry ? { known: true, content: entry.original } : { known: false, content: null };
+}
+
+/**
  * Write `content` to a workspace file, remembering what was there so cleanup can
  * put it back. The workspace is often the operator's real checkout, and the file
  * may be one they track (`.cursor/mcp.json`): overwriting it for good would be
  * the harness silently editing their repo.
  */
 function writeWorkspaceFile(file: string, content: string): () => void {
-  const existed = fs.existsSync(file);
-  const original = existed ? fs.readFileSync(file) : null;
-  const dirExisted = fs.existsSync(path.dirname(file));
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, content, "utf-8");
+  const key = path.resolve(file);
+  let entry = workspaceFiles.get(key);
+  const isNew = !entry;
+  if (!entry) {
+    entry = {
+      original: fs.existsSync(key) ? fs.readFileSync(key) : null,
+      dirExisted: fs.existsSync(path.dirname(key)),
+      refs: 0,
+    };
+    workspaceFiles.set(key, entry);
+  }
+  entry.refs++;
+  try {
+    fs.mkdirSync(path.dirname(key), { recursive: true });
+    fs.writeFileSync(key, content, "utf-8");
+  } catch (err) {
+    entry.refs--;
+    if (isNew && entry.refs === 0) workspaceFiles.delete(key);
+    throw err;
+  }
   let done = false;
   return () => {
     if (done) return;
     done = true;
+    const cur = workspaceFiles.get(key);
+    if (!cur) return;
+    cur.refs--;
+    if (cur.refs > 0) return;
+    workspaceFiles.delete(key);
     try {
-      if (original !== null) fs.writeFileSync(file, original);
-      else fs.rmSync(file, { force: true });
-      if (!dirExisted) fs.rmdirSync(path.dirname(file));
+      if (cur.original !== null) fs.writeFileSync(key, cur.original);
+      else fs.rmSync(key, { force: true });
+      if (!cur.dirExisted) fs.rmdirSync(path.dirname(key));
     } catch {}
   };
 }
@@ -224,7 +256,7 @@ const claude: EngineDef = {
       cmd: bin,
       args,
       stdin: input.prompt + "\n",
-      env: baseEnv(),
+      env: { ...baseEnv(), CLAUDE_CODE_ARTIFACT: "1" },
       cleanup: () => {
         if (cfgFile) fs.rmSync(cfgFile, { force: true });
       },
@@ -327,7 +359,7 @@ const agy: EngineDef = {
   id: "agy",
   label: "Antigravity",
   binaries: ["agy"],
-  mcp: "none",
+  mcp: "workspace-file",
   skillsDir: ".agents/skills",
   resume: true,
   build(input, bin) {
@@ -337,13 +369,18 @@ const agy: EngineDef = {
     // agy model ids bake effort in (`gemini-3.8-flash-high`); the CLI rejects --effort alongside one.
     if (input.effort && (isDefaultModel(input.model) || !/-(low|medium|high)$/.test(input.model!))) args.push("--effort", input.effort);
     args.push("-p", input.prompt);
+    let restore: () => void = () => {};
+    if (Object.keys(input.mcp).length > 0) {
+      const file = path.join(input.cwd, ".agents", "mcp_config.json");
+      restore = writeWorkspaceFile(file, JSON.stringify(mergeAgyMcpConfig(file, agyMcpJson(input.mcp)), null, 2));
+    }
     return {
       cmd: bin,
       args,
       stdin: null,
       env: baseEnv(),
-      cleanup: () => {},
-      notes: Object.keys(input.mcp).length ? ["agy: trb's MCP servers are not wired; running without them."] : [],
+      cleanup: restore,
+      notes: [],
     };
   },
 };
@@ -390,6 +427,36 @@ const fake: EngineDef = {
     return { ...spec, args: spec.args.filter((a) => a !== "--dangerously-skip-permissions") };
   },
 };
+
+/** `.agents/mcp_config.json`: stdio entries as `{ command, args, env? }`, HTTP entries use `serverUrl`. */
+function agyMcpJson(cfg: McpRunConfig): { mcpServers: Record<string, unknown> } {
+  const mcpServers: Record<string, unknown> = {};
+  for (const [name, s] of Object.entries(cfg)) {
+    mcpServers[name] =
+      s.type === "stdio"
+        ? { command: s.command, args: s.args, ...(s.env && Object.keys(s.env).length ? { env: s.env } : {}) }
+        : { serverUrl: s.url, ...(s.headers && Object.keys(s.headers).length ? { headers: s.headers } : {}) };
+  }
+  return { mcpServers };
+}
+
+/** Merge `ours` onto an existing `.agents/mcp_config.json` when it has an object `mcpServers`; ours win on clash. */
+function mergeAgyMcpConfig(file: string, ours: { mcpServers: Record<string, unknown> }): { mcpServers: Record<string, unknown> } {
+  try {
+    const orig = workspaceOriginal(file);
+    const raw = orig.known
+      ? (orig.content?.toString("utf-8") ?? null)
+      : fs.existsSync(file)
+        ? fs.readFileSync(file, "utf-8")
+        : null;
+    if (raw === null) return ours;
+    const existing = JSON.parse(raw);
+    if (existing && typeof existing === "object" && !Array.isArray(existing) && existing.mcpServers && typeof existing.mcpServers === "object" && !Array.isArray(existing.mcpServers)) {
+      return { ...existing, mcpServers: { ...existing.mcpServers, ...ours.mcpServers } };
+    }
+  } catch {}
+  return ours;
+}
 
 /** `.devin/mcp_config.json`: stdio entries as they are, remote ones name their kind `transport`. */
 function devinMcpJson(cfg: McpRunConfig): { mcpServers: Record<string, unknown> } {

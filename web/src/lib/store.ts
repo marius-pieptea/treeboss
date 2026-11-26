@@ -35,6 +35,7 @@ export type Tab =
   | { id: string; kind: "emulator"; title: string }
   | { id: string; kind: "memory"; title: string }
   | { id: string; kind: "evidence"; title: string }
+  | { id: string; kind: "artifacts"; title: string }
   | { id: string; kind: "factory"; page: FactoryPage; title: string }
   | { id: string; kind: "transcripts"; title: string };
 
@@ -74,6 +75,8 @@ export function tabId(t: NewTab): string {
       return "memory";
     case "evidence":
       return "evidence";
+    case "artifacts":
+      return "artifacts";
     case "factory":
       // One factory tab: its sub-pages switch in place, as the settings page does.
       return "factory";
@@ -132,6 +135,7 @@ interface UiState {
   bottomH: number;
   /** Widths of resizable panes inside pages, by key (e.g. "evidence.list"). */
   panes: Record<string, number>;
+  artifactsGroup: "session" | "date";
   /** Current workspace id, and each workspace's own state. */
   current: string | null;
   byWs: Record<string, WsState>;
@@ -148,6 +152,7 @@ interface UiState {
   setBottomTab(t: BottomTab): void;
   setCurrent(id: string | null): void;
   setPane(key: string, px: number): void;
+  setArtifactsGroup(g: "session" | "date"): void;
   setSize(which: "leftW" | "rightW" | "bottomH", px: number): void;
 
   openTab(tab: NewTab): string;
@@ -218,6 +223,7 @@ export const useUi = create<UiState>()(
         leftW: 280,
         rightW: 440,
         panes: {},
+        artifactsGroup: "session",
         bottomH: 280,
         current: null,
         byWs: {},
@@ -248,6 +254,7 @@ export const useUi = create<UiState>()(
         setRightTab: (rightTab) => set({ rightTab, rightOpen: true }),
         setBottomTab: (bottomTab) => set({ bottomTab, bottomOpen: true }),
         setPane: (key, px) => set((s) => ({ panes: { ...s.panes, [key]: Math.round(px) } })),
+        setArtifactsGroup: (artifactsGroup) => set({ artifactsGroup }),
         setSize: (which, px) => set({ [which]: Math.round(px) } as any),
         setCurrent: (current) => set((s) => ({ current, byWs: current && !s.byWs[current] ? { ...s.byWs, [current]: emptyWs() } : s.byWs })),
 
@@ -312,7 +319,7 @@ export const useUi = create<UiState>()(
       },
       // Theme is owned by localStorage "trb.theme" (read before paint); never let an old persisted copy override it.
       merge: (persisted, current) => ({ ...current, ...(persisted as object), themePref: current.themePref, palette: current.palette, theme: current.theme, glass: current.glass }),
-      partialize: (s) => ({ activity: s.activity, leftOpen: s.leftOpen, rightOpen: s.rightOpen, rightTab: s.rightTab, bottomOpen: s.bottomOpen, bottomTab: s.bottomTab, leftW: s.leftW, rightW: s.rightW, bottomH: s.bottomH, panes: s.panes, byWs: s.byWs }),
+      partialize: (s) => ({ activity: s.activity, leftOpen: s.leftOpen, rightOpen: s.rightOpen, rightTab: s.rightTab, bottomOpen: s.bottomOpen, bottomTab: s.bottomTab, leftW: s.leftW, rightW: s.rightW, bottomH: s.bottomH, panes: s.panes, artifactsGroup: s.artifactsGroup, byWs: s.byWs }),
     },
   ),
 );
