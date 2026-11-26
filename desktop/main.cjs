@@ -1,5 +1,5 @@
 // TreeBoss desktop shell: starts the bundled daemon, signs the window in, shows the UI.
-const { app, BrowserWindow, Menu, shell, dialog, ipcMain, nativeTheme } = require("electron");
+const { app, BrowserWindow, Menu, shell, dialog, ipcMain, nativeTheme, session } = require("electron");
 const { execFileSync, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -172,23 +172,25 @@ async function openWindow({ fresh = false, dir } = {}) {
     }
   });
   win.webContents.on("did-attach-webview", (_e, contents) => {
+    const guardLiveNav = (e, url) => {
+      if (isAllowedLiveUrl(url)) return;
+      e.preventDefault();
+      if (typeof url === "string" && /^https?:\/\//i.test(url)) shell.openExternal(url);
+    };
     contents.setWindowOpenHandler(({ url }) => {
       if (isAllowedLiveUrl(url)) {
-        return {
-          action: "allow",
-          overrideBrowserWindowOptions: {
-            webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, partition: "persist:claude-ai" },
-          },
-        };
+        contents.loadURL(url).catch(() => {});
+      } else if (typeof url === "string" && /^https?:\/\//i.test(url)) {
+        shell.openExternal(url);
       }
-      if (/^https?:\/\//i.test(url)) shell.openExternal(url);
       return { action: "deny" };
     });
-    contents.on("will-navigate", (e, url) => {
-      if (!isAllowedLiveUrl(url)) {
-        e.preventDefault();
-        if (/^https?:\/\//i.test(url)) shell.openExternal(url);
-      }
+    contents.on("will-navigate", guardLiveNav);
+    contents.on("will-redirect", (e, url, _isInPlace, isMainFrame) => {
+      if ((isMainFrame ?? e?.isMainFrame) !== false) guardLiveNav(e, url);
+    });
+    contents.on("will-frame-navigate", (details) => {
+      if (details.isMainFrame) guardLiveNav(details, details.url);
     });
   });
   win.on("closed", () => (win = null));
@@ -247,6 +249,10 @@ app.whenReady().then(async () => {
   );
   // Before the window opens, so its page can ask for the update state as soon as it loads.
   startUpdater(() => win);
+  // Non-default sessions grant all permissions by default; deny everything on the webview partition except sanitized clipboard writes.
+  const liveSession = session.fromPartition("persist:claude-ai");
+  liveSession.setPermissionRequestHandler((_wc, perm, cb) => cb(perm === "clipboard-sanitized-write"));
+  liveSession.setPermissionCheckHandler((_wc, perm) => perm === "clipboard-sanitized-write");
   try {
     await openWindow({ fresh: true, dir: folderFrom(pathArgs(process.argv), process.cwd()) });
   } catch (err) {

@@ -48,14 +48,22 @@ export function LiveView({ url, onClose }: { url: string; onClose: () => void })
     const el = webviewRef.current;
     if (!el) return;
 
+    const syncCanBack = () => {
+      try {
+        setCanBack(Boolean(el.canGoBack?.()));
+      } catch {
+        // Electron <webview> methods throw if called before dom-ready (e.g., on early did-fail-load).
+        setCanBack(false);
+      }
+    };
     const onNavigate = (e: Event & { url?: string }) => {
       if (typeof e.url === "string" && e.url) setCurrentUrl(e.url);
-      setCanBack(Boolean(el.canGoBack?.()));
+      syncCanBack();
     };
     const onStart = () => setLoading(true);
     const onStop = () => {
       setLoading(false);
-      setCanBack(Boolean(el.canGoBack?.()));
+      syncCanBack();
     };
 
     el.addEventListener("did-navigate", onNavigate);
@@ -93,14 +101,22 @@ export function LiveView({ url, onClose }: { url: string; onClose: () => void })
     };
   }, [hasWebview, allowed, sessionId, url]);
 
+  const callWebview = (fn: () => void) => {
+    try {
+      fn();
+    } catch {
+      // Electron <webview> methods throw if invoked before dom-ready.
+    }
+  };
+
   if (hasWebview) {
     return (
       <div className="flex h-full min-h-0 flex-1 flex-col bg-bg">
         <div className="flex h-9 shrink-0 items-center gap-1 border-b border-line bg-panel px-2">
-          <IconButton label="Back" size="icon" disabled={!allowed || !canBack} onClick={() => webviewRef.current?.goBack?.()}>
+          <IconButton label="Back" size="icon" disabled={!allowed || !canBack} onClick={() => callWebview(() => webviewRef.current?.goBack?.())}>
             <ChevronLeft />
           </IconButton>
-          <IconButton label="Reload" size="icon" disabled={!allowed} onClick={() => webviewRef.current?.reload?.()}>
+          <IconButton label="Reload" size="icon" disabled={!allowed} onClick={() => callWebview(() => webviewRef.current?.reload?.())}>
             <RotateCw className={cn(loading && "animate-spin-fast")} />
           </IconButton>
           <Input readOnly value={currentUrl} aria-label="Live view URL" className="h-7 min-w-0 flex-1 font-mono text-xs" />
