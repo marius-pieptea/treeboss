@@ -7,6 +7,16 @@ import { useUi } from "@/lib/store";
 export type ArtifactIntent = "document" | "slides" | "design" | "other";
 export type ArtifactOwner = "mine" | "shared" | "unknown";
 export type ArtifactError = "not_signed_in" | "no_plan" | "no_access" | "too_old" | "read_failed";
+export type ArtifactContentKind = "html" | "markdown" | "files" | "summary";
+
+export interface ArtifactFileEntry {
+  path: string;
+  size: number;
+}
+
+export interface ArtifactFilesResponse {
+  files: ArtifactFileEntry[];
+}
 
 export interface Artifact {
   id: string;
@@ -24,6 +34,9 @@ export interface Artifact {
   summary: string | null;
   error: ArtifactError | null;
   errorText: string | null;
+  typeName: string | null;
+  contentKind: ArtifactContentKind | null;
+  contentPath: string | null;
 }
 
 export type AccountState = "ok" | "not_signed_in" | "no_plan" | "too_old" | "unknown";
@@ -43,6 +56,37 @@ export const artifactsKey = ["artifacts"] as const;
 
 export function artifactHtmlUrl(id: string): string {
   return `/api/artifacts/${encodeURIComponent(id)}/html`;
+}
+
+export function artifactContentUrl(id: string): string {
+  return `/api/artifacts/${encodeURIComponent(id)}/content`;
+}
+
+export function artifactFilesUrl(id: string): string {
+  return `/api/artifacts/${encodeURIComponent(id)}/files`;
+}
+
+export function artifactFileUrl(id: string, filePath: string): string {
+  return `/api/artifacts/${encodeURIComponent(id)}/file?path=${encodeURIComponent(filePath)}`;
+}
+
+export async function fetchArtifactContent(id: string, signal?: AbortSignal): Promise<string> {
+  const res = await fetch(artifactContentUrl(id), {
+    credentials: "same-origin",
+    signal,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let msg = `GET content failed (${res.status})`;
+    try {
+      const parsed = JSON.parse(text) as { error?: string };
+      if (parsed?.error) msg = parsed.error;
+    } catch {
+      if (text) msg = text.slice(0, 300);
+    }
+    throw new Error(msg);
+  }
+  return res.text();
 }
 
 /** Open an external URL in the system browser (desktop intercepts window.open via setWindowOpenHandler). */

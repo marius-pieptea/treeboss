@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { takePendingFocusLink, type AccountStatus, type Artifact, type ArtifactIntent } from "./data";
 import { AccountBanner } from "./ErrorPanel";
 import {
+  artifactBadges,
   countByIntent,
   documentsTabLabel,
   filterArtifacts,
@@ -240,6 +241,7 @@ export function List({
                     <ul className="flex flex-col">
                       {group.items.map((item) => {
                         const selected = item.id === selectedId;
+                        const badges = artifactBadges(item);
                         return (
                           <li key={item.id}>
                             <button
@@ -256,7 +258,8 @@ export function List({
                                   <span title={item.title} className="min-w-0 flex-1 truncate text-base font-medium text-fg">
                                     {item.title || item.url}
                                   </span>
-                                  {item.owner === "shared" && <Badge tone="blue">shared</Badge>}
+                                  {badges.rowType && <Badge>{badges.rowType}</Badge>}
+                                  {badges.shared && <Badge tone="blue">shared</Badge>}
                                 </span>
                                 <span className="block truncate font-mono text-label text-fg-muted">
                                   {formatRowMeta(item, groupMode)}

@@ -21,8 +21,10 @@ import { useSessions } from "@/lib/queries";
 import { useUi, useWs } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { artifactHtmlUrl, openExternal, type AccountStatus, type Artifact } from "./data";
+import { DocPreview } from "./DocPreview";
 import { ErrorPanel } from "./ErrorPanel";
-import { formatRelativeTime, formatShortDateTime, sessionLabel } from "./format";
+import { FilesPreview } from "./FilesPreview";
+import { artifactBadges, formatAskAgentDraft, formatRelativeTime, formatShortDateTime, sessionLabel } from "./format";
 import { LiveView } from "./LiveView";
 
 export function Detail({
@@ -82,8 +84,7 @@ export function Detail({
       return;
     }
     const key = draftKey(current, sid);
-    const base = `About this artifact: ${item.url} `;
-    const addition = item.owner === "shared" && item.summary ? `${base}\n\nSummary: ${item.summary}` : base;
+    const addition = formatAskAgentDraft(item);
     const existing = drafts.get(key);
     drafts.set(key, existing ? `${existing}\n\n${addition}` : addition);
     const ui = useUi.getState();
@@ -109,9 +110,12 @@ export function Detail({
     { label: "Remove from list", icon: <Trash2 />, danger: true, onSelect: () => onRemove(item) },
   ];
 
+  const badges = artifactBadges(item);
+
   const metaLine = (
     <div className="mt-1 flex flex-wrap items-center gap-2">
-      {item.owner === "shared" ? <Badge tone="blue">shared with you</Badge> : <Badge>{item.intent}</Badge>}
+      {badges.detailType && <Badge>{badges.detailType}</Badge>}
+      {badges.shared && <Badge tone="blue">shared with you</Badge>}
       <span className="font-mono text-label text-fg-muted">
         {item.sessionId ? (
           <>
@@ -173,7 +177,7 @@ export function Detail({
             </IconButton>
           )}
           <div className="min-w-0 flex-1">
-            <h2 className="text-lg font-semibold leading-tight text-fg">{item.title || item.url}</h2>
+            <h2 className="text-lg font-semibold leading-tight text-fg">{item.title.trim() || "Untitled artifact"}</h2>
             {metaLine}
           </div>
           <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
@@ -224,7 +228,11 @@ export function Detail({
             retrying={isReading}
           />
         </div>
-      ) : item.htmlPath ? (
+      ) : item.contentKind === "markdown" ? (
+        <DocPreview item={item} />
+      ) : item.contentKind === "files" ? (
+        <FilesPreview item={item} />
+      ) : item.contentKind === "html" || (item.contentKind === null && item.htmlPath) ? (
         <>
           <div className="flex h-7 shrink-0 items-center gap-1 border-b border-line px-3 font-mono text-label text-fg-muted">
             <ShieldCheck className="size-3 shrink-0 text-fg-faint" />
@@ -245,14 +253,14 @@ export function Detail({
             </div>
           </div>
         </>
-      ) : item.summary ? (
+      ) : item.contentKind === "summary" || (item.contentKind === null && item.summary) ? (
         <div className="min-h-0 flex-1 overflow-auto px-8 py-6">
           <div className="flex max-w-[760px] flex-col gap-4">
             <div className="rounded-lg border border-line bg-raised p-3">
               <div className="text-label font-medium uppercase tracking-label text-fg-muted">
                 Summary from claude.ai
               </div>
-              <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-fg">{item.summary}</p>
+              <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-fg">{item.summary ?? ""}</p>
             </div>
             <div className="flex flex-wrap items-start gap-3">
               <p className="min-w-0 flex-1 text-xs leading-relaxed text-fg-muted">

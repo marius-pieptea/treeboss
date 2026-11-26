@@ -1,7 +1,19 @@
-import type { Artifact, ArtifactIntent } from "./data";
+import type { Artifact, ArtifactFileEntry, ArtifactIntent } from "./data";
 
 export type IntentFilter = "all" | ArtifactIntent;
 export type GroupMode = "session" | "date";
+
+export interface ArtifactBadges {
+  rowType: string | null;
+  detailType: string | null;
+  shared: boolean;
+}
+
+export interface ArtifactBoard {
+  path: string;
+  title: string;
+  size: number;
+}
 
 export interface IntentCounts {
   all: number;
@@ -149,4 +161,102 @@ export function groupArtifacts(items: Artifact[], mode: GroupMode, now = Date.no
     items: [...group.items].sort((a, b) => b.createdAt - a.createdAt),
     collapsedByDefault: idx >= 5,
   }));
+}
+
+/** Whether an artifact should be treated as a shared summary-only item. */
+export function isSharedArtifact(item: Pick<Artifact, "owner" | "contentKind">): boolean {
+  if (item.owner === "mine") return false;
+  if (item.contentKind === "summary") return true;
+  if (item.contentKind === "html" || item.contentKind === "markdown" || item.contentKind === "files") return false;
+  return item.owner === "shared";
+}
+
+/** Badges for list rows and detail header. Owned typed artifacts never show `shared`. */
+export function artifactBadges(
+  item: Pick<Artifact, "typeName" | "owner" | "contentKind" | "intent">,
+): ArtifactBadges {
+  const typeName = item.typeName?.trim() || null;
+  const shared = isSharedArtifact(item);
+  return {
+    rowType: typeName,
+    detailType: typeName ?? (shared ? null : item.intent),
+    shared,
+  };
+}
+
+/** Prefilled composer draft when asking an agent about an artifact. */
+export function formatAskAgentDraft(
+  item: Pick<Artifact, "url" | "owner" | "contentKind" | "summary">,
+): string {
+  const base = `Use this artifact: ${item.url} (read it with the artifact_read tool)`;
+  if (isSharedArtifact(item) && item.summary) {
+    return `${base}\n\nSummary: ${item.summary}`;
+  }
+  return base;
+}
+
+function isHtmlBoardPath(path: string): boolean {
+  const lower = path.toLowerCase();
+  return lower.endsWith(".dc.html") || lower.endsWith(".html");
+}
+
+function boardTitleFromPath(path: string): string {
+  const base = path.split("/").pop() ?? path;
+  return base.replace(/(\.dc)?\.html$/i, "") || base;
+}
+
+function normalizeRelPath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
+}
+
+/**
+ * Derive previewable HTML boards from an artifact's file listing and optional parsed `project/canvas.json`.
+ * Board titles come from `canvas.boards` when present, otherwise from file names.
+ */
+export function extractArtifactBoards(files: ArtifactFileEntry[], canvas?: unknown): ArtifactBoard[] {
+  const byNorm = new Map<string, ArtifactFileEntry>();
+  for (const f of files) {
+    byNorm.set(normalizeRelPath(f.path), f);
+  }
+
+  const boards: ArtifactBoard[] = [];
+  const seen = new Set<string>();
+  const rawBoards =
+    canvas && typeof canvas === "object" && Array.isArray((canvas as { boards?: unknown }).boards)
+      ? ((canvas as { boards: unknown[] }).boards ?? [])
+      : null;
+
+  if (rawBoards) {
+    for (const entry of rawBoards) {
+      if (!entry || typeof entry !== "object") continue;
+      const obj = entry as { file?: unknown; path?: unknown; title?: unknown; name?: unknown };
+      const rawFile = typeof obj.file === "string" ? obj.file : typeof obj.path === "string" ? obj.path : null;
+      if (!rawFile) continue;
+      const norm = normalizeRelPath(rawFile);
+      const match = byNorm.get(norm) ?? (!norm.startsWith("project/") ? byNorm.get(`project/${norm}`) : undefined);
+      if (!match || !isHtmlBoardPath(match.path) || seen.has(match.path)) continue;
+      const title =
+        typeof obj.title === "string" && obj.title.trim()
+          ? obj.title.trim()
+          : typeof obj.name === "string" && obj.name.trim()
+            ? obj.name.trim()
+            : boardTitleFromPath(match.path);
+      seen.add(match.path);
+      boards.push({ path: match.path, title, size: match.size });
+    }
+  }
+
+  if (boards.length > 0) return boards;
+
+  return files
+    .filter((f) => isHtmlBoardPath(f.path))
+    .map((f) => ({ path: f.path, title: boardTitleFromPath(f.path), size: f.size }));
+}
+
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb % 1 === 0 ? kb.toFixed(0) : kb.toFixed(1)} KB`;
+  const mb = kb / 1024;
+  return `${mb % 1 === 0 ? mb.toFixed(0) : mb.toFixed(1)} MB`;
 }

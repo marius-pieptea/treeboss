@@ -1,10 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import type { Artifact } from "../../web/src/features/artifacts/data";
 import {
+  artifactBadges,
   countByIntent,
   documentsTabLabel,
+  extractArtifactBoards,
   filterArtifacts,
+  formatAskAgentDraft,
+  formatFileSize,
   groupArtifacts,
+  isSharedArtifact,
   matchesSearch,
 } from "../../web/src/features/artifacts/format";
 
@@ -28,6 +33,9 @@ function makeArtifact(overrides: Partial<Artifact> & { id: string }): Artifact {
     summary: null,
     error: null,
     errorText: null,
+    typeName: null,
+    contentKind: null,
+    contentPath: null,
     ...overrides,
   };
 }
@@ -118,5 +126,74 @@ describe("artifacts format", () => {
     expect(documentsTabLabel(399)).toBe("Docs");
     expect(documentsTabLabel(400)).toBe("Documents");
     expect(documentsTabLabel(600)).toBe("Documents");
+  });
+
+  test("artifactBadges and isSharedArtifact never mark owned typed artifacts as shared", () => {
+    const ownedDoc = makeArtifact({ id: "d1", owner: "mine", typeName: "Docs", contentKind: "markdown" });
+    expect(isSharedArtifact(ownedDoc)).toBe(false);
+    expect(artifactBadges(ownedDoc)).toEqual({ rowType: "Docs", detailType: "Docs", shared: false });
+
+    const ownedDesign = makeArtifact({ id: "d2", owner: "mine", typeName: "Design", contentKind: "files" });
+    expect(artifactBadges(ownedDesign)).toEqual({ rowType: "Design", detailType: "Design", shared: false });
+
+    const unknownSummary = makeArtifact({ id: "d3", owner: "unknown", typeName: "Docs", contentKind: "summary" });
+    expect(isSharedArtifact(unknownSummary)).toBe(true);
+    expect(artifactBadges(unknownSummary)).toEqual({ rowType: "Docs", detailType: "Docs", shared: true });
+
+    const legacyShared = makeArtifact({ id: "d4", owner: "shared", typeName: null, contentKind: null });
+    expect(isSharedArtifact(legacyShared)).toBe(true);
+    expect(artifactBadges(legacyShared)).toEqual({ rowType: null, detailType: null, shared: true });
+
+    const legacyOwned = makeArtifact({ id: "d5", owner: "mine", intent: "slides", typeName: null, contentKind: null });
+    expect(artifactBadges(legacyOwned)).toEqual({ rowType: null, detailType: "slides", shared: false });
+  });
+
+  test("formatAskAgentDraft uses artifact_read tool instruction and appends summary for shared items", () => {
+    const owned = makeArtifact({ id: "a1", owner: "mine", contentKind: "markdown", summary: "ignored" });
+    expect(formatAskAgentDraft(owned)).toBe(
+      "Use this artifact: https://claude.ai/artifact/a1 (read it with the artifact_read tool)",
+    );
+
+    const shared = makeArtifact({
+      id: "a2",
+      owner: "shared",
+      contentKind: "summary",
+      summary: "Three-screen flow.",
+    });
+    expect(formatAskAgentDraft(shared)).toBe(
+      "Use this artifact: https://claude.ai/artifact/a2 (read it with the artifact_read tool)\n\nSummary: Three-screen flow.",
+    );
+  });
+
+  test("extractArtifactBoards reads titles from canvas.json boards and falls back to file names", () => {
+    const files = [
+      { path: "project/canvas.json", size: 420 },
+      { path: "project/Wide-Empty.dc.html", size: 14307 },
+      { path: "project/Narrow-Detail.dc.html", size: 12706 },
+      { path: "preview.html", size: 8000 },
+    ];
+
+    expect(
+      extractArtifactBoards(files, {
+        boards: [
+          { title: "Wide · Empty", file: "project/Wide-Empty.dc.html" },
+          { title: "Narrow · Detail", file: "Narrow-Detail.dc.html" },
+        ],
+      }),
+    ).toEqual([
+      { path: "project/Wide-Empty.dc.html", title: "Wide · Empty", size: 14307 },
+      { path: "project/Narrow-Detail.dc.html", title: "Narrow · Detail", size: 12706 },
+    ]);
+
+    expect(extractArtifactBoards(files, null)).toEqual([
+      { path: "project/Wide-Empty.dc.html", title: "Wide-Empty", size: 14307 },
+      { path: "project/Narrow-Detail.dc.html", title: "Narrow-Detail", size: 12706 },
+      { path: "preview.html", title: "preview", size: 8000 },
+    ]);
+
+    expect(extractArtifactBoards([{ path: "data.json", size: 128 }], null)).toEqual([]);
+    expect(formatFileSize(512)).toBe("512 B");
+    expect(formatFileSize(2048)).toBe("2 KB");
+    expect(formatFileSize(1536)).toBe("1.5 KB");
   });
 });
