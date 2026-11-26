@@ -224,7 +224,7 @@ const claude: EngineDef = {
       cmd: bin,
       args,
       stdin: input.prompt + "\n",
-      env: baseEnv(),
+      env: { ...baseEnv(), CLAUDE_CODE_ARTIFACT: "1" },
       cleanup: () => {
         if (cfgFile) fs.rmSync(cfgFile, { force: true });
       },

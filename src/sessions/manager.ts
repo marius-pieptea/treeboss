@@ -37,6 +37,7 @@ import { refreshMcpTokens } from "../mcp/oauth";
 import { practicesBrief } from "../practices/store";
 import { CODEGRAPH_HINT } from "../codegraph/detect";
 import { evidenceEnabled, evidenceHint } from "../evidence/store";
+import { recordPublished } from "../artifacts/store";
 import { REA_HINT, reaEnabled } from "../evidence/rea";
 import { scheduleKeepInSync } from "../codegraph/autosync";
 import { browserEnabled } from "../browser/chrome";
@@ -1430,6 +1431,7 @@ function startTurn(s: SessionRecord, prompt: string, opts: { resume: boolean; fo
           recordUsageEvent(s, e);
           if (e.kind === "limits") limitEventReset = resetFromRateLimitEvent(e.info) ?? limitEventReset;
         },
+        onArtifact: (a) => recordPublished({ ...a, sessionId: s.id }),
       });
     } catch (err: any) {
       result = { success: false, output: `Turn crashed: ${err?.message ?? String(err)}`, sessionId: null, resumeRejected: false, aborted: false, timedOut: false, maxTurnsHit: false, usage: null, exitCode: null, stderr: "" };

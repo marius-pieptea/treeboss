@@ -336,3 +336,129 @@ describe("other engines", () => {
     expect(lines.some((l) => l.includes("✗ bash: Exit 1"))).toBe(true);
   });
 });
+
+describe("claude Artifact publish capture", () => {
+  const feedArtifacts = (events: unknown[]) => {
+    const artifacts: Array<{ url: string; title: string; filePath: string }> = [];
+    const lines: string[] = [];
+    const acc = createStreamAccumulator((l) => lines.push(l), undefined, "claude", {
+      onArtifact: (a) => artifacts.push(a),
+    });
+    acc.push(events.map((e) => JSON.stringify(e)).join("\n") + "\n");
+    acc.end();
+    return { artifacts, lines };
+  };
+
+  test("a claude stream with an Artifact publish + result calls onArtifact once with the URL", () => {
+    const { artifacts, lines } = feedArtifacts([
+      {
+        type: "assistant",
+        message: {
+          id: "m1",
+          content: [
+            {
+              type: "tool_use",
+              id: "art_1",
+              name: "Artifact",
+              input: { action: "publish", file_path: "deck.pptx", title: "Q4 Review", icon: "slides", description: "Deck" },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "art_1",
+              content: "Published deck.pptx at https://claude.ai/artifact/abc-123 (Version 1, version id v1)",
+            },
+          ],
+        },
+      },
+    ]);
+    expect(artifacts).toEqual([{ url: "https://claude.ai/artifact/abc-123", title: "Q4 Review", filePath: "deck.pptx" }]);
+    expect(lines).toContain("[claude]   ✓ Artifact (84 B)");
+  });
+
+  test("captures a code/artifact/<uuid> URL (including top-level tool_use/tool_result events)", () => {
+    const uuid = "550e8400-e29b-41d4-a716-446655440000";
+    const { artifacts } = feedArtifacts([
+      {
+        type: "tool_use",
+        id: "art_2",
+        name: "Artifact",
+        input: { action: "publish", file_path: "mockup.html", title: "Login UI" },
+      },
+      {
+        type: "tool_result",
+        tool_use_id: "art_2",
+        output: `Published mockup.html at https://claude.ai/code/artifact/${uuid} (Version 1, version id v1)`,
+      },
+    ]);
+    expect(artifacts).toEqual([
+      { url: `https://claude.ai/code/artifact/${uuid}`, title: "Login UI", filePath: "mockup.html" },
+    ]);
+  });
+
+  test("an is_error result does not call onArtifact", () => {
+    const { artifacts } = feedArtifacts([
+      {
+        type: "assistant",
+        message: {
+          id: "m2",
+          content: [
+            { type: "tool_use", id: "art_err", name: "Artifact", input: { action: "publish", file_path: "a.html", title: "Bad" } },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "art_err",
+              is_error: true,
+              content: "Failed after https://claude.ai/artifact/should-not-emit",
+            },
+          ],
+        },
+      },
+    ]);
+    expect(artifacts).toEqual([]);
+  });
+
+  test("an Artifact read result does not call onArtifact", () => {
+    const { artifacts } = feedArtifacts([
+      {
+        type: "assistant",
+        message: {
+          id: "m3",
+          content: [
+            {
+              type: "tool_use",
+              id: "art_read",
+              name: "Artifact",
+              input: { action: "read", url: "https://claude.ai/artifact/existing-1", path: "index.html", out_dir: "/tmp/out" },
+            },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "art_read",
+              content: 'File saved: "/tmp/out/index.html" (100 bytes, "text/html") for https://claude.ai/artifact/existing-1',
+            },
+          ],
+        },
+      },
+    ]);
+    expect(artifacts).toEqual([]);
+  });
+});

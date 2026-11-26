@@ -186,6 +186,25 @@ CREATE TABLE IF NOT EXISTS evidence (
 );
 CREATE INDEX IF NOT EXISTS idx_evidence_workspace ON evidence(workspace, created_at);
 
+CREATE TABLE IF NOT EXISTS artifacts (
+  id TEXT PRIMARY KEY,
+  url TEXT NOT NULL,
+  title TEXT NOT NULL,
+  intent TEXT NOT NULL DEFAULT 'other',
+  owner TEXT NOT NULL DEFAULT 'unknown',
+  source TEXT NOT NULL,
+  session_id TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER,
+  last_read_at INTEGER,
+  html_path TEXT,
+  summary TEXT,
+  error TEXT,
+  error_text TEXT,
+  removed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS artifacts_created ON artifacts(created_at);
+
 -- Investigations: one reverse-engineering run on a target. The captures, saved results and findings made while it
 -- ran are evidence rows that name it (evidence.investigation_id); closing it keeps them.
 CREATE TABLE IF NOT EXISTS investigations (
