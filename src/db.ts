@@ -381,6 +381,7 @@ export function migrate(conn: Database): void {
   addColumn(conn, "artifacts", "type_name", "TEXT");
   addColumn(conn, "artifacts", "content_kind", "TEXT");
   addColumn(conn, "artifacts", "content_path", "TEXT");
+  addColumn(conn, "artifacts", "view_token", "TEXT");
   if ((conn.prepare("PRAGMA table_info(qa_sessions)").all() as Array<{ name: string }>).some((c) => c.name === "run_id")) {
     conn.exec("UPDATE qa_runs SET session_id = (SELECT session_id FROM qa_sessions WHERE qa_sessions.run_id = qa_runs.id) WHERE session_id IS NULL");
   }

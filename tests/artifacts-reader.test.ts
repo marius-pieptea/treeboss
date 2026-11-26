@@ -12,6 +12,7 @@ import {
   getAccount,
   listAccount,
   parseArtifactHeader,
+  parseAssetsList,
   parseFilesList,
   readArtifact,
   setClaudeSpawner,
@@ -517,26 +518,39 @@ describe("artifacts reader", () => {
     expect(parseArtifactHeader("Summary of a shared artifact with a writer.").owned).toBe(false);
   });
 
-  test("parseFilesList extracts project/ paths, skips >2MB binaries, and caps at 60", () => {
+  test("parseFilesList extracts project/ paths, skips >2MB binaries, and caps at 300 / 60 MB", () => {
     const lines = [
-      'Artifact abc (version 1), an Artifact of type "Design", 65 files',
+      'Artifact abc (version 1), an Artifact of type "Design", 305 files',
+      '- "artifact-type/dc-runtime.js"  text/javascript  197599 bytes',
       "- project/canvas.json (512 bytes)",
       "- project/Home.dc.html (12.5 KB)",
       "- project/assets/big-video.mp4 (3.2 MB)",
       "- project/assets/huge-text.json (3.0 MB)",
       "- project/../escape.txt (10 bytes)",
       "- src/ignored.ts (100 bytes)",
-      ...Array.from({ length: 65 }, (_, i) => `- project/board-${i}.dc.html (1 KB)`),
+      ...Array.from({ length: 305 }, (_, i) => `- project/board-${i}.dc.html (1 KB)`),
     ].join("\n");
     const parsed = parseFilesList(lines);
     expect(parsed.typeName).toBe("Design");
-    expect(parsed.paths).toHaveLength(60);
+    expect(parsed.hasDcRuntime).toBe(true);
+    expect(parsed.truncated).toBe(true);
+    expect(parsed.paths).toHaveLength(300);
     expect(parsed.paths).toContain("project/canvas.json");
     expect(parsed.paths).toContain("project/Home.dc.html");
     expect(parsed.paths).toContain("project/assets/huge-text.json");
     expect(parsed.paths).not.toContain("project/assets/big-video.mp4");
-    expect(parsed.paths).not.toContain("project/../escape.txt");
+    expect(parsed.paths.some((p) => p.includes("escape"))).toBe(false);
     expect(parsed.paths).not.toContain("src/ignored.ts");
+
+    // 60 MB total cap preserves project/canvas.json even if listed later.
+    const sizeLines = [
+      ...Array.from({ length: 32 }, (_, i) => `- project/big-${i}.json (2 MB)`),
+      "- project/canvas.json (1 KB)",
+    ].join("\n");
+    const cappedByBytes = parseFilesList(sizeLines);
+    expect(cappedByBytes.truncated).toBe(true);
+    expect(cappedByBytes.paths).toContain("project/canvas.json");
+    expect(cappedByBytes.paths.length).toBeLessThanOrEqual(30);
   });
 
   test("Docs two-step flow writes content.md with tabs, fills title, and artifact_read formats markdown", async () => {
@@ -986,25 +1000,25 @@ describe("artifacts reader", () => {
     expect(md.endsWith("\n\n[truncated at 2 MB]")).toBe(true);
   });
 
-  test("parseFilesList drops injection-like file names and includes project/canvas.json past the 60 cap", () => {
+  test("parseFilesList drops injection-like file names and includes project/canvas.json past the 300 cap", () => {
     const lines = [
-      'Artifact xyz (version 1), an Artifact of type "Design", 70 files',
+      'Artifact xyz (version 1), an Artifact of type "Design", 310 files',
       '- "project/evil; rm -rf /" (10 bytes)',
       "- project/$(whoami).json (10 bytes)",
       "- project/a&b.html (10 bytes)",
       '- "project/good-file (1)@2x.png" (10 bytes)',
-      ...Array.from({ length: 65 }, (_, i) => `- project/board-${i}.dc.html (1 KB)`),
+      ...Array.from({ length: 305 }, (_, i) => `- project/board-${i}.dc.html (1 KB)`),
       "- project/canvas.json (512 bytes)",
     ].join("\n");
     const parsed = parseFilesList(lines);
     expect(parsed.truncated).toBe(true);
-    expect(parsed.paths).toHaveLength(60);
+    expect(parsed.paths).toHaveLength(300);
     expect(parsed.paths).toContain("project/good-file (1)@2x.png");
     expect(parsed.paths).toContain("project/canvas.json");
     expect(parsed.paths.some((p) => p.includes("evil") || p.includes("whoami") || p.includes("&"))).toBe(false);
   });
 
-  test("files read clears stale files dir, notes 60-file cap, and caps inlined index JSON at 20000 chars", async () => {
+  test("files read clears stale files dir, notes 300-file cap, and caps inlined index JSON at 20000 chars", async () => {
     const id = "des-cap";
     const filesDir = path.join(home(), "artifacts", id, "files");
     const staleFile = path.join(filesDir, "project", "stale.txt");
@@ -1014,7 +1028,7 @@ describe("artifacts reader", () => {
     const hugeCanvas = JSON.stringify({ title: "Big", data: "x".repeat(25_000) });
     let mode: "canvas" | "huge_other" | "small_other" = "canvas";
     const listText = [
-      ...Array.from({ length: 62 }, (_, i) => `- project/board-${i}.dc.html (100 bytes)`),
+      ...Array.from({ length: 302 }, (_, i) => `- project/board-${i}.dc.html (100 bytes)`),
       "- project/canvas.json (26 KB)",
     ].join("\n");
 
@@ -1096,7 +1110,7 @@ describe("artifacts reader", () => {
 
     const res = await executeArtifactTool("artifact_read", { url: `https://claude.ai/artifact/${id}` }, { sessionId: "s_1" });
     expect(fs.existsSync(staleFile)).toBe(false);
-    expect(res.text).toContain("Only the first 60 files were read.");
+    expect(res.text).toContain("Only the first 300 files were read.");
     expect(res.text).toContain("project/canvas.json:");
     const afterCanvas = res.text.split("project/canvas.json:\n")[1]!;
     const inlinedJson = afterCanvas.split("\n[truncated]")[0]!;
@@ -1107,10 +1121,222 @@ describe("artifacts reader", () => {
     mode = "huge_other";
     const resNoSmall = await executeArtifactTool("artifact_read", { url: `https://claude.ai/artifact/${id}` }, { sessionId: "s_1" });
     expect(resNoSmall.text).not.toContain("project/huge.json:");
-    expect(resNoSmall.text).not.toContain("Only the first 60 files were read.");
+    expect(resNoSmall.text).not.toContain("Only the first 300 files were read.");
 
     mode = "small_other";
     const resWithSmall = await executeArtifactTool("artifact_read", { url: `https://claude.ai/artifact/${id}` }, { sessionId: "s_1" });
     expect(resWithSmall.text).toContain('project/small.json:\n{"ok":true}');
+  });
+
+  test("parseAssetsList validates 32-hex ids, skips >15 MB, and caps at 200 / 80 MB", () => {
+    const validA = "408e71730f86fb3635996d96af317642";
+    const validB = "4a8fa5bdf99ae45cf0dbe52b28517ce2";
+    const hexId = (i: number) => i.toString(16).padStart(32, "0");
+
+    const parsed = parseAssetsList([
+      [
+        `Assets of https://claude.ai/artifact/x: 4 files`,
+        `- /_blob/${validA}  image/png  42527 bytes  sha256 ${"a".repeat(64)}`,
+        `- /_blob/NOTVALIDHEX123456789012345678901  image/png  100 bytes`,
+        `- /_blob/408e71730f86fb3635996d96af31764  image/png  100 bytes`,
+        `- /_blob/${hexId(999)}  image/png  16 MB`,
+        `- /_blob/${validB}  image/jpeg  5637 bytes`,
+      ].join("\n"),
+      `- /_blob/${validA}  image/png  42527 bytes`,
+    ]);
+    expect(parsed.truncated).toBe(false);
+    expect(parsed.assets).toEqual([
+      { id: validA, sizeBytes: 42527 },
+      { id: validB, sizeBytes: 5637 },
+    ]);
+
+    const many = Array.from({ length: 205 }, (_, i) => `- /_blob/${hexId(i)}  image/png  100 bytes`).join("\n");
+    const cappedCount = parseAssetsList(many);
+    expect(cappedCount.truncated).toBe(true);
+    expect(cappedCount.assets).toHaveLength(200);
+
+    const heavy = Array.from({ length: 10 }, (_, i) => `- /_blob/${hexId(i)}  image/png  10 MB`).join("\n");
+    const cappedBytes = parseAssetsList(heavy);
+    expect(cappedBytes.truncated).toBe(true);
+    expect(cappedBytes.assets).toHaveLength(8);
+  });
+
+  test("Design read batches >25 paths, saves project/support.js from dc-runtime.js, and saves _blob assets", async () => {
+    const assetPng = "408e71730f86fb3635996d96af317642";
+    const assetJpg = "4a8fa5bdf99ae45cf0dbe52b28517ce2";
+    const badAsset = "bad-not-32-hex";
+    const boardPaths = Array.from({ length: 28 }, (_, i) => `project/Board${i}.dc.html`);
+    const calls: SpawnInput[] = [];
+
+    setClaudeSpawner(async (input) => {
+      calls.push(input);
+      if (input.args[0] === "--version") return { exitCode: 0, stdout: "2.1.318\n", stderr: "" };
+      const prompt = input.args.at(-1)!;
+
+      if (prompt.includes('action "list"')) {
+        return {
+          exitCode: 0,
+          stdout: streamLines([
+            { type: "system", subtype: "init", tools: ["Artifact"] },
+            {
+              type: "assistant",
+              message: {
+                content: [
+                  { type: "tool_use", id: "tu_lf", name: "Artifact", input: { action: "list", scope: "files" } },
+                  { type: "tool_use", id: "tu_la", name: "Artifact", input: { action: "list", scope: "assets" } },
+                ],
+              },
+            },
+            {
+              type: "user",
+              message: {
+                content: [
+                  {
+                    type: "tool_result",
+                    tool_use_id: "tu_lf",
+                    is_error: false,
+                    content: [
+                      'Published files, an Artifact of type "Design"',
+                      '- "artifact-type/dc-runtime.js"  text/javascript  197599 bytes',
+                      '- "project/canvas.json"  application/json  50 bytes',
+                      ...boardPaths.map((p) => `- "${p}"  text/html  120 bytes`),
+                    ].join("\n"),
+                  },
+                  {
+                    type: "tool_result",
+                    tool_use_id: "tu_la",
+                    is_error: false,
+                    content: [
+                      "Assets of https://claude.ai/artifact/des-rt: 3 files",
+                      `- /_blob/${assetPng}  image/png  500 bytes`,
+                      `- /_blob/${assetJpg}  image/jpeg  400 bytes`,
+                      `- /_blob/${badAsset}  image/png  100 bytes`,
+                    ].join("\n"),
+                  },
+                ],
+              },
+            },
+          ]),
+          stderr: "",
+        };
+      }
+
+      if (prompt.includes("paths ")) {
+        const projDir = path.join(input.cwd, "project");
+        fs.mkdirSync(projDir, { recursive: true });
+        fs.writeFileSync(path.join(projDir, "canvas.json"), '{"title":"Luna"}', "utf-8");
+        for (const p of boardPaths) {
+          const name = path.basename(p);
+          fs.writeFileSync(
+            path.join(projDir, name),
+            `<html><head><script src="./support.js"></script></head><body><img src="/_blob/${assetPng}"></body></html>`,
+            "utf-8",
+          );
+        }
+        return {
+          exitCode: 0,
+          stdout: streamLines([
+            { type: "system", subtype: "init", tools: ["Artifact"] },
+            {
+              type: "assistant",
+              message: {
+                content: [
+                  { type: "tool_use", id: "tu_b1", name: "Artifact", input: { action: "read", paths: ["project/canvas.json", ...boardPaths.slice(0, 24)] } },
+                  { type: "tool_use", id: "tu_b2", name: "Artifact", input: { action: "read", paths: boardPaths.slice(24) } },
+                ],
+              },
+            },
+            {
+              type: "user",
+              message: {
+                content: [
+                  { type: "tool_result", tool_use_id: "tu_b1", is_error: false, content: "Saved 25." },
+                  { type: "tool_result", tool_use_id: "tu_b2", is_error: false, content: "Saved 4." },
+                ],
+              },
+            },
+          ]),
+          stderr: "",
+        };
+      }
+
+      if (prompt.includes("artifact-type/dc-runtime.js") || prompt.includes(assetPng)) {
+        const runtimeDir = path.join(input.cwd, "artifact-type");
+        const blobDir = path.join(input.cwd, "_blob");
+        fs.mkdirSync(runtimeDir, { recursive: true });
+        fs.mkdirSync(blobDir, { recursive: true });
+        fs.writeFileSync(path.join(runtimeDir, "dc-runtime.js"), "window.DCLogic = class {};", "utf-8");
+        fs.writeFileSync(path.join(blobDir, `${assetPng}.png`), "PNG", "utf-8");
+        fs.writeFileSync(path.join(blobDir, `${assetJpg}.jpg`), "JPG", "utf-8");
+        return {
+          exitCode: 0,
+          stdout: streamLines([
+            { type: "system", subtype: "init", tools: ["Artifact"] },
+            {
+              type: "assistant",
+              message: {
+                content: [
+                  { type: "tool_use", id: "tu_rt", name: "Artifact", input: { action: "read", path: "artifact-type/dc-runtime.js" } },
+                  { type: "tool_use", id: "tu_a1", name: "Artifact", input: { action: "read", path: assetPng } },
+                  { type: "tool_use", id: "tu_a2", name: "Artifact", input: { action: "read", path: assetJpg } },
+                ],
+              },
+            },
+            {
+              type: "user",
+              message: {
+                content: [
+                  { type: "tool_result", tool_use_id: "tu_rt", is_error: false, content: "Saved runtime." },
+                  { type: "tool_result", tool_use_id: "tu_a1", is_error: false, content: "Saved png." },
+                  { type: "tool_result", tool_use_id: "tu_a2", is_error: false, content: "Saved jpg." },
+                ],
+              },
+            },
+          ]),
+          stderr: "",
+        };
+      }
+
+      // Step A
+      return {
+        exitCode: 0,
+        stdout: streamLines([
+          { type: "system", subtype: "init", tools: ["Artifact"] },
+          { type: "assistant", message: { content: [{ type: "tool_use", id: "tu_a", name: "Artifact", input: { action: "read" } }] } },
+          {
+            type: "user",
+            message: {
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: "tu_a",
+                  is_error: false,
+                  content: 'Artifact dddddddd-1111-2222-3333-444444444444 (version 1) — owned by you, private\nan Artifact of type "Design"',
+                },
+              ],
+            },
+          },
+        ]),
+        stderr: "",
+      };
+    });
+
+    const item = addPasted("https://claude.ai/artifact/des-rt");
+    const updated = await readArtifact(item.id);
+    expect(updated?.error).toBeNull();
+    expect(updated?.title).toBe("Luna");
+
+    const filesDir = path.join(home(), "artifacts", "des-rt", "files");
+    expect(fs.readFileSync(path.join(filesDir, "project", "support.js"), "utf-8")).toBe("window.DCLogic = class {};");
+    expect(fs.existsSync(path.join(filesDir, "artifact-type"))).toBe(false);
+    expect(fs.readFileSync(path.join(filesDir, "_blob", `${assetPng}.png`), "utf-8")).toBe("PNG");
+    expect(fs.readFileSync(path.join(filesDir, "_blob", `${assetJpg}.jpg`), "utf-8")).toBe("JPG");
+
+    // Batch prompt splits 29 files into 25 + 4 in one run, and invalid asset id never enters prompt.
+    const batchCall = calls.find((c) => c.args.at(-1)!.includes("paths "))!;
+    expect(batchCall.args.at(-1)!).toContain("batch 1:");
+    expect(batchCall.args.at(-1)!).toContain("batch 2:");
+    const assetCall = calls.find((c) => c.args.at(-1)!.includes(assetPng))!;
+    expect(assetCall.args.at(-1)!).not.toContain(badAsset);
   });
 });

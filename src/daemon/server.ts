@@ -46,7 +46,7 @@ import { signalsRoutes, isPublicSignalsPath, feedbackIntake } from "./routes/sig
 import { memoryRoutes } from "./routes/memory";
 import { practicesRoutes } from "./routes/practices";
 import { evidenceRoutes } from "./routes/evidence";
-import { artifactRoutes } from "./routes/artifacts";
+import { artifactRoutes, isArtifactViewPath, serveArtifactView } from "./routes/artifacts";
 import { reaRoutes } from "./routes/rea";
 import { scaffoldRoutes } from "./routes/scaffold";
 import { designFoldRoutes, designRoutes } from "./routes/design";
@@ -78,7 +78,7 @@ import { SessionError } from "../sessions/manager";
 import { UserError } from "../util";
 import { onSettingChanged } from "../settings";
 
-export { VERSION };
+export { VERSION, isArtifactViewPath };
 
 export interface ServerOptions {
   port: number;
@@ -154,6 +154,11 @@ export function startServer(opts: ServerOptions) {
 
     // The feedback widget's POST carries its own token in the path, so it is the one API route owners do not authenticate.
     if (isPublicSignalsPath(url.pathname)) return feedbackIntake(req, url, peer);
+
+    // Capability URL for sandboxed artifact previews: the 32-hex view_token in the path is the credential.
+    if ((req.method === "GET" || req.method === "HEAD") && isArtifactViewPath(url.pathname)) {
+      return serveArtifactView(req, url);
+    }
 
     const principal = authenticate(req, peer);
     if (!principal) throw new HttpError(401, "Missing or wrong credentials. The CLI uses ~/.treeboss/token; the browser signs in with `trb ui`.");

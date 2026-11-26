@@ -7,6 +7,7 @@ import { home } from "../src/paths";
 import {
   addPasted,
   getArtifact,
+  getArtifactViewToken,
   listArtifacts,
   markRemoved,
   purgeRemoved,
@@ -188,6 +189,7 @@ describe("artifacts store", () => {
     expect(cols.map((c) => c.name)).toContain("type_name");
     expect(cols.map((c) => c.name)).toContain("content_kind");
     expect(cols.map((c) => c.name)).toContain("content_path");
+    expect(cols.map((c) => c.name)).toContain("view_token");
     const indexes = fresh
       .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'artifacts'")
       .all() as Array<{ name: string }>;
@@ -205,12 +207,31 @@ describe("artifacts store", () => {
       .prepare("INSERT INTO artifacts (id, url, title, source, created_at) VALUES (?, ?, ?, 'pasted', ?)")
       .run("old-1", "https://claude.ai/artifact/old-1", "Old", 123);
     migrate(legacy);
-    const oldRow = legacy.prepare("SELECT type_name, content_kind, content_path FROM artifacts WHERE id = 'old-1'").get() as {
+    const oldRow = legacy.prepare("SELECT type_name, content_kind, content_path, view_token FROM artifacts WHERE id = 'old-1'").get() as {
       type_name: string | null;
       content_kind: string | null;
       content_path: string | null;
+      view_token: string | null;
     };
-    expect(oldRow).toEqual({ type_name: null, content_kind: null, content_path: null });
+    expect(oldRow).toEqual({ type_name: null, content_kind: null, content_path: null, view_token: null });
     legacy.close();
+  });
+
+  test("view_token is created on first read, kept across reads, and omitted from Artifact objects", () => {
+    const pasted = addPasted("https://claude.ai/artifact/tok-1");
+    expect(getArtifactViewToken(pasted.id)).toBeNull();
+    expect((pasted as any).viewToken).toBeUndefined();
+
+    const first = saveRead(pasted.id, { contentKind: "files", contentPath: "/tmp/files", owner: "mine" })!;
+    const token = getArtifactViewToken(pasted.id);
+    expect(token).toMatch(/^[0-9a-f]{32}$/);
+    expect((first as any).viewToken).toBeUndefined();
+    expect((getArtifact(pasted.id) as any).viewToken).toBeUndefined();
+
+    saveRead(pasted.id, { title: "Updated" });
+    expect(getArtifactViewToken(pasted.id)).toBe(token);
+
+    expect(markRemoved(pasted.id)).toBe(true);
+    expect(getArtifactViewToken(pasted.id)).toBeNull();
   });
 });

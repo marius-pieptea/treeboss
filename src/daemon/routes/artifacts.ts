@@ -9,8 +9,9 @@
  *   POST   /api/artifacts/:id/refresh  { item }  (409 if already reading)
  *   GET    /api/artifacts/:id/html     text/html body of htmlPath
  *   GET    /api/artifacts/:id/content  text/markdown body of content.md
- *   GET    /api/artifacts/:id/files    { files: [{ path, size }] }
+ *   GET    /api/artifacts/:id/files    { files: [{ path, size }], base }
  *   GET    /api/artifacts/:id/file     one file from files dir (?path=rel)
+ *   GET    /api/artifacts/:id/f/:token/<rest>  capability-URL file serving for sandboxed previews
  */
 import fs from "fs";
 import path from "path";
@@ -25,16 +26,23 @@ import {
 import {
   addPasted,
   getArtifact,
+  getArtifactViewToken,
   listArtifactFiles,
   listArtifacts,
   markRemoved,
   purgeRemoved,
   restore,
 } from "../../artifacts/store";
-import { HttpError, json, type Ctx, type RouteModule } from "../http";
+import { HttpError, json, makeCtx, safeEqual, type Ctx, type RouteModule } from "../http";
 
 const UNDO_KEEP_MS = 35_000;
 const CLAUDE_CHAT_RE = /(?:https:\/\/|(?<![A-Za-z0-9.:/-]))claude\.ai\/chat(?:\/|$|\?|#)/i;
+const ARTIFACT_VIEW_PATH_RE = /^\/api\/artifacts\/[A-Za-z0-9-]+\/f\/[0-9a-f]{32}\//;
+const BLOB_NO_EXT_RE = /^_blob\/([0-9a-f]{32})$/;
+const ASSET_ID_RE = /^[0-9a-f]{32}$/;
+
+/** The capability-URL path shape admitted without owner auth in server.ts. */
+export const isArtifactViewPath = (pathname: string): boolean => ARTIFACT_VIEW_PATH_RE.test(pathname);
 
 const HTML_HEADERS = {
   "content-type": "text/html; charset=utf-8",
@@ -44,12 +52,24 @@ const HTML_HEADERS = {
   "cache-control": "no-store",
 } as const;
 
+const VIEW_HTML_CSP =
+  "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'self'";
+
 const IMAGE_MIME_BY_EXT: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".gif": "image/gif",
   ".webp": "image/webp",
+  ".avif": "image/avif",
+  ".ico": "image/x-icon",
+};
+
+const FONT_MIME_BY_EXT: Record<string, string> = {
+  ".woff2": "font/woff2",
+  ".woff": "font/woff",
+  ".ttf": "font/ttf",
+  ".otf": "font/otf",
 };
 
 const TEXT_PLAIN_EXTS = new Set([".json", ".css", ".js", ".txt", ".md"]);
@@ -57,7 +77,13 @@ const SANDBOX_NONE_CSP = "sandbox; default-src 'none'";
 
 function resolveArtifactFile(filesDir: string, rel: string | null): string {
   const cleanRel = (rel ?? "").replace(/\\/g, "/");
-  if (!cleanRel || cleanRel.startsWith("/") || cleanRel.includes("\0") || /^[A-Za-z]:/.test(cleanRel)) {
+  if (
+    !cleanRel ||
+    cleanRel.startsWith("/") ||
+    cleanRel.includes("\0") ||
+    /^[A-Za-z]:/.test(cleanRel) ||
+    cleanRel.split("/").some((seg) => seg === "." || seg === "..")
+  ) {
     throw new HttpError(404, "File not found.");
   }
   const baseDir = path.resolve(filesDir);
@@ -79,6 +105,118 @@ function resolveArtifactFile(filesDir: string, rel: string | null): string {
     throw new HttpError(404, "File not found.");
   }
   return realTarget;
+}
+
+function resolveBlobAssetFile(filesDir: string, assetId: string): string | null {
+  if (!ASSET_ID_RE.test(assetId)) return null;
+  const baseDir = path.resolve(filesDir);
+  const blobDir = path.join(baseDir, "_blob");
+  if (!fs.existsSync(blobDir)) return null;
+  let realBase: string;
+  let realBlob: string;
+  try {
+    realBase = fs.realpathSync(baseDir);
+    realBlob = fs.realpathSync(blobDir);
+  } catch {
+    return null;
+  }
+  if (path.relative(realBase, realBlob) !== "_blob" || !fs.statSync(realBlob).isDirectory()) {
+    return null;
+  }
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(realBlob, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const match = entries.find(
+    (ent) => !ent.isSymbolicLink() && ent.isFile() && (ent.name === assetId || ent.name.startsWith(`${assetId}.`)),
+  );
+  if (!match) return null;
+  const candidate = path.join(realBlob, match.name);
+  const realTarget = fs.realpathSync(candidate);
+  const realRel = path.relative(realBlob, realTarget);
+  if (!realRel || realRel.startsWith("..") || path.isAbsolute(realRel)) return null;
+  if (!fs.statSync(realTarget).isFile()) return null;
+  return realTarget;
+}
+
+function rewriteBlobUrls(html: string, id: string, token: string): string {
+  const blobBase = `/api/artifacts/${encodeURIComponent(id)}/f/${token}/_blob/`;
+  return html
+    .replaceAll('"/_blob/', `"${blobBase}`)
+    .replaceAll("'/_blob/", `'${blobBase}`)
+    .replace(/url\(\s*\/_blob\//g, `url(${blobBase}`);
+}
+
+function serveCapabilityView(c: Ctx, id: string, token: string, rawRest: string): Response {
+  const item = getArtifact(id);
+  const expected = getArtifactViewToken(id);
+  if (
+    !item ||
+    item.contentKind !== "files" ||
+    !item.contentPath ||
+    !expected ||
+    !safeEqual(token, expected) ||
+    !fs.existsSync(item.contentPath)
+  ) {
+    throw new HttpError(404, "File not found.");
+  }
+
+  let rel: string;
+  try {
+    rel = decodeURIComponent(rawRest);
+  } catch {
+    throw new HttpError(404, "File not found.");
+  }
+
+  let target: string | null = null;
+  const cleanRel = rel.replace(/\\/g, "/");
+  const blobMatch = BLOB_NO_EXT_RE.exec(cleanRel);
+  if (blobMatch) {
+    target = resolveBlobAssetFile(item.contentPath, blobMatch[1]!);
+  }
+  if (!target) {
+    target = resolveArtifactFile(item.contentPath, rel);
+  }
+
+  const ext = path.extname(target).toLowerCase();
+  const headers: Record<string, string> = {
+    "access-control-allow-origin": "*",
+    "x-content-type-options": "nosniff",
+    "cache-control": "no-store",
+  };
+
+  if (ext === ".html" || ext === ".htm") {
+    headers["content-type"] = "text/html; charset=utf-8";
+    headers["content-security-policy"] = VIEW_HTML_CSP;
+    const rewritten = rewriteBlobUrls(fs.readFileSync(target, "utf-8"), id, token);
+    return new Response(c.method === "HEAD" ? null : rewritten, { headers });
+  }
+
+  if (ext === ".js" || ext === ".mjs") {
+    headers["content-type"] = "text/javascript; charset=utf-8";
+  } else if (ext === ".svg") {
+    headers["content-type"] = "image/svg+xml";
+    headers["content-security-policy"] = "sandbox";
+  } else if (IMAGE_MIME_BY_EXT[ext]) {
+    headers["content-type"] = IMAGE_MIME_BY_EXT[ext]!;
+  } else if (FONT_MIME_BY_EXT[ext]) {
+    headers["content-type"] = FONT_MIME_BY_EXT[ext]!;
+  } else {
+    headers["content-type"] = "application/octet-stream";
+    headers["content-disposition"] = "attachment";
+    headers["content-security-policy"] = SANDBOX_NONE_CSP;
+  }
+
+  return new Response(c.method === "HEAD" ? null : Bun.file(target), { headers });
+}
+
+/** Direct handler for capability-URL artifact file requests (called before owner auth in server.ts). */
+export async function serveArtifactView(req: Request, url: URL): Promise<Response> {
+  const m = /^\/api\/artifacts\/([^/]+)\/f\/([^/]+)\/(.*)$/.exec(url.pathname);
+  if (!m) throw new HttpError(404, "File not found.");
+  return serveCapabilityView(makeCtx(req, url, {}), decodeId(m[1]!), m[2]!, m[3]!);
 }
 
 function decodeId(raw: string): string {
@@ -183,7 +321,16 @@ export const artifactRoutes: RouteModule = async (c: Ctx) => {
     ) {
       throw new HttpError(404, "No files for this artifact.");
     }
-    return json({ files: listArtifactFiles(item.contentPath) });
+    const files = listArtifactFiles(item.contentPath).filter(
+      (f) => !f.path.startsWith("_blob/") && f.path !== "project/support.js",
+    );
+    const token = getArtifactViewToken(id);
+    const base = token ? `/api/artifacts/${encodeURIComponent(id)}/f/${token}/` : null;
+    return json({ files, base });
+  }
+
+  if ((m = c.match(/^\/api\/artifacts\/([^/]+)\/f\/([^/]+)\/(.*)$/)) && (c.method === "GET" || c.method === "HEAD")) {
+    return serveCapabilityView(c, decodeId(m[1]!), m[2]!, m[3]!);
   }
 
   if ((m = c.match(/^\/api\/artifacts\/([^/]+)\/file$/)) && c.method === "GET") {

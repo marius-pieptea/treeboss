@@ -1,3 +1,4 @@
+import { randomBytes } from "crypto";
 import fs from "fs";
 import path from "path";
 import { db } from "../db";
@@ -177,6 +178,15 @@ export function purgeRemoved(olderThanMs: number): number {
   return res.changes;
 }
 
+/** Fetch the per-artifact 32-hex view capability token, or null if absent or removed. */
+export function getArtifactViewToken(id: string): string | null {
+  const row = db()
+    .prepare("SELECT view_token FROM artifacts WHERE id = ? AND removed_at IS NULL")
+    .get(id) as { view_token: string | null } | undefined;
+  const token = row?.view_token ?? null;
+  return token && /^[0-9a-f]{32}$/.test(token) ? token : null;
+}
+
 /** Record the result of reading an artifact from claude.ai and clear any prior error. */
 export function saveRead(
   id: string,
@@ -191,8 +201,13 @@ export function saveRead(
     contentPath?: string | null;
   },
 ): Artifact | null {
-  const sets = ["last_read_at = ?", "error = NULL", "error_text = NULL"];
-  const params: Array<string | number | null> = [Date.now()];
+  const sets = [
+    "last_read_at = ?",
+    "error = NULL",
+    "error_text = NULL",
+    "view_token = COALESCE(view_token, ?)",
+  ];
+  const params: Array<string | number | null> = [Date.now(), randomBytes(16).toString("hex")];
   if (data.htmlPath !== undefined) {
     sets.push("html_path = ?");
     params.push(data.htmlPath);

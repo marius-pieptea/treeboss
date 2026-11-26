@@ -73,7 +73,7 @@ export async function executeArtifactTool(
         ...files.map((f) => `- ${f.path} (${f.size} bytes)`),
       ];
       if (fs.existsSync(path.join(path.dirname(updated.contentPath), FILES_TRUNCATED_MARKER))) {
-        lines.push("Only the first 60 files were read.");
+        lines.push("Only the first 300 files were read.");
       }
       const indexFile =
         files.find((f) => f.path === "project/canvas.json") ??

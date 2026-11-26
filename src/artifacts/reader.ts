@@ -46,16 +46,26 @@ export class AlreadyReadingError extends Error {
 }
 
 const READ_TIMEOUT_MS = 90_000;
+const BATCH_READ_TIMEOUT_MS = 300_000;
 const VERSION_TIMEOUT_MS = 10_000;
 const VERSION_CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_CONCURRENT_READS = 2;
 const MAX_SUMMARY_CHARS = 2000;
 const MAX_PROMPT_CHARS = 500;
-const MAX_PROJECT_FILES = 60;
+const MAX_PROJECT_FILES = 300;
+const MAX_PROJECT_TOTAL_BYTES = 60 * 1024 * 1024;
+const MAX_ASSETS = 200;
+const MAX_ASSET_BYTES = 15 * 1024 * 1024;
+const MAX_ASSETS_TOTAL_BYTES = 80 * 1024 * 1024;
+const READ_BATCH_SIZE = 25;
+const ASSET_READ_RUN_SIZE = 40;
 const MAX_BINARY_BYTES = 2 * 1024 * 1024;
 const MAX_CONTENT_BYTES = 2 * 1024 * 1024;
 const DEFAULT_READ_PROMPT = "Summarize this artifact in 3 sentences: what it is and what it contains.";
 const LIST_LINE_RE = /^- \((mine|shared)\) (.+?) — (https:\/\/claude\.ai\/\S+) — updated (.+)$/;
+const ASSET_ID_RE = /^[0-9a-f]{32}$/;
+const DC_RUNTIME_PATH = "artifact-type/dc-runtime.js";
+const DC_RUNTIME_LINE_RE = /(?:^|[\s`"'(])artifact-type\/dc-runtime\.js(?=["'`\s),]|$)/;
 
 const USAGE_LIMIT_RE =
   /\bhit your\b.{0,40}\blimit\b|\busage limit\b|\brate limit\b|\blimit reached\b|\bout of (extra )?usage\b|\b429\b/i;
@@ -279,6 +289,7 @@ interface ToolCallResult {
   input: any;
   text: string;
   isError: boolean;
+  structured?: any;
 }
 
 interface ToolUseCall {
@@ -291,6 +302,7 @@ interface ParsedStream {
   initTools: string[] | null;
   toolUses: ToolUseCall[];
   toolResults: ToolCallResult[];
+  artifactToolResults: ToolCallResult[];
   artifactToolResult: ToolCallResult | null;
   assistantTexts: string[];
   finalResult: { text: string; isError: boolean } | null;
@@ -300,12 +312,13 @@ function parseStreamOutput(stdout: string): ParsedStream {
   const toolCalls = new Map<string, { name: string; input: any }>();
   const toolUses: ToolUseCall[] = [];
   const toolResults: ToolCallResult[] = [];
+  const artifactToolResults: ToolCallResult[] = [];
   let initTools: string[] | null = null;
   let artifactToolResult: ToolCallResult | null = null;
   const assistantTexts: string[] = [];
   let finalResult: { text: string; isError: boolean } | null = null;
 
-  const pushResult = (toolId: string, content: unknown, isError: boolean) => {
+  const pushResult = (toolId: string, content: unknown, isError: boolean, structured?: any) => {
     const call = toolCalls.get(toolId);
     if (!call) return;
     const res: ToolCallResult = {
@@ -314,9 +327,13 @@ function parseStreamOutput(stdout: string): ParsedStream {
       input: call.input,
       text: extractToolResultText(content),
       isError,
+      structured,
     };
     toolResults.push(res);
-    if (call.name === "Artifact") artifactToolResult = res;
+    if (call.name === "Artifact") {
+      artifactToolResult = res;
+      artifactToolResults.push(res);
+    }
   };
 
   for (const rawLine of stdout.split(/\r?\n/)) {
@@ -350,7 +367,7 @@ function parseStreamOutput(stdout: string): ParsedStream {
       case "tool_result": {
         const toolId = event.tool_id || event.tool_use_id;
         if (toolId) {
-          pushResult(toolId, event.output ?? event.content, Boolean(event.is_error));
+          pushResult(toolId, event.output ?? event.content, Boolean(event.is_error), event.tool_use_result);
         }
         break;
       }
@@ -375,9 +392,14 @@ function parseStreamOutput(stdout: string): ParsedStream {
       case "user": {
         const content = event.message?.content;
         if (!Array.isArray(content)) break;
-        for (const block of content) {
-          if (block?.type !== "tool_result" || !block.tool_use_id) continue;
-          pushResult(block.tool_use_id, block.content, Boolean(block.is_error));
+        const resultBlocks = content.filter((b: any) => b?.type === "tool_result" && b.tool_use_id);
+        for (const block of resultBlocks) {
+          pushResult(
+            block.tool_use_id,
+            block.content,
+            Boolean(block.is_error),
+            resultBlocks.length === 1 ? event.tool_use_result : undefined,
+          );
         }
         break;
       }
@@ -392,7 +414,7 @@ function parseStreamOutput(stdout: string): ParsedStream {
     }
   }
 
-  return { initTools, toolUses, toolResults, artifactToolResult, assistantTexts, finalResult };
+  return { initTools, toolUses, toolResults, artifactToolResults, artifactToolResult, assistantTexts, finalResult };
 }
 
 export interface ParsedArtifactHeader {
@@ -476,15 +498,24 @@ function isSafeProjectPath(candidate: string): boolean {
 }
 
 /** Parse `project/` file paths from `Artifact` `list` scope `"files"` output. */
-export function parseFilesList(text: string): { typeName: string | null; paths: string[]; truncated: boolean } {
+export function parseFilesList(text: string): {
+  typeName: string | null;
+  paths: string[];
+  truncated: boolean;
+  hasDcRuntime: boolean;
+} {
   const typeMatch = /\ban?\s+Artifact of type "([^"\r\n]+)"/i.exec(text);
   const typeName = typeMatch ? typeMatch[1]!.trim() || null : null;
   const seen = new Set<string>();
-  const allPaths: string[] = [];
+  const candidates: Array<{ path: string; size: number }> = [];
+  let hasDcRuntime = false;
 
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line) continue;
+    if (DC_RUNTIME_LINE_RE.test(line)) {
+      hasDcRuntime = true;
+    }
     let candidate: string | null = null;
     const quoted = /"(project\/[^"\r\n]+)"/.exec(line);
     if (quoted) {
@@ -501,16 +532,92 @@ export function parseFilesList(text: string): { typeName: string | null; paths: 
     if (sizeBytes !== null && sizeBytes > MAX_BINARY_BYTES && isBinaryFilePath(candidate)) continue;
     if (seen.has(candidate)) continue;
     seen.add(candidate);
-    allPaths.push(candidate);
+    candidates.push({ path: candidate, size: sizeBytes ?? 0 });
   }
 
-  const truncated = allPaths.length > MAX_PROJECT_FILES;
-  let paths = allPaths.slice(0, MAX_PROJECT_FILES);
-  if (truncated && seen.has("project/canvas.json") && !paths.includes("project/canvas.json")) {
-    paths = [...allPaths.slice(0, MAX_PROJECT_FILES - 1), "project/canvas.json"];
+  const selected: Array<{ path: string; size: number }> = [];
+  let totalBytes = 0;
+  let truncated = false;
+  for (const c of candidates) {
+    if (selected.length >= MAX_PROJECT_FILES || totalBytes + c.size > MAX_PROJECT_TOTAL_BYTES) {
+      truncated = true;
+      continue;
+    }
+    selected.push(c);
+    totalBytes += c.size;
   }
 
-  return { typeName, paths, truncated };
+  const canvas = candidates.find((c) => c.path === "project/canvas.json");
+  if (canvas && !selected.some((s) => s.path === "project/canvas.json") && canvas.size <= MAX_PROJECT_TOTAL_BYTES) {
+    while (
+      selected.length > 0 &&
+      (selected.length >= MAX_PROJECT_FILES || totalBytes + canvas.size > MAX_PROJECT_TOTAL_BYTES)
+    ) {
+      const popped = selected.pop()!;
+      totalBytes -= popped.size;
+    }
+    if (selected.length < MAX_PROJECT_FILES && totalBytes + canvas.size <= MAX_PROJECT_TOTAL_BYTES) {
+      selected.push(canvas);
+    }
+  }
+
+  return { typeName, paths: selected.map((s) => s.path), truncated, hasDcRuntime };
+}
+
+export interface ParsedAssetEntry {
+  id: string;
+  sizeBytes: number | null;
+}
+
+/** Parse and cap asset entries (`^[0-9a-f]{32}$`, <=15 MB each, <=200 assets, <=80 MB total) from `list` scope `"assets"`. */
+export function parseAssetsList(
+  input: string | string[],
+  structuredAssets?: Array<{ id?: unknown; size_bytes?: unknown }>,
+): { assets: ParsedAssetEntry[]; truncated: boolean } {
+  const texts = Array.isArray(input) ? input : [input];
+  const seen = new Set<string>();
+  const candidates: ParsedAssetEntry[] = [];
+
+  const pushCandidate = (rawId: unknown, rawSize: number | null) => {
+    if (typeof rawId !== "string") return;
+    const id = rawId.trim();
+    if (!ASSET_ID_RE.test(id)) return;
+    if (rawSize !== null && rawSize > MAX_ASSET_BYTES) return;
+    if (seen.has(id)) return;
+    seen.add(id);
+    candidates.push({ id, sizeBytes: rawSize });
+  };
+
+  if (Array.isArray(structuredAssets)) {
+    for (const a of structuredAssets) {
+      const size = typeof a?.size_bytes === "number" && Number.isFinite(a.size_bytes) ? a.size_bytes : null;
+      pushCandidate(a?.id, size);
+    }
+  }
+
+  for (const text of texts) {
+    for (const rawLine of text.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      const m = /^[-*]?\s*["']?(?:\/_blob\/)?([0-9a-f]{32})["']?(?=$|[\s,;)(\]}])/.exec(line);
+      if (!m) continue;
+      pushCandidate(m[1]!, parseByteSize(line));
+    }
+  }
+
+  const assets: ParsedAssetEntry[] = [];
+  let totalBytes = 0;
+  let truncated = false;
+  for (const c of candidates) {
+    const sz = c.sizeBytes ?? 0;
+    if (assets.length >= MAX_ASSETS || totalBytes + sz > MAX_ASSETS_TOTAL_BYTES) {
+      truncated = true;
+      continue;
+    }
+    assets.push(c);
+    totalBytes += sz;
+  }
+  return { assets, truncated };
 }
 
 function parseLeadingJson(text: string): any {
@@ -699,13 +806,14 @@ function failFromArtifactStream(id: string, out: SpawnOutput, parsed: ParsedStre
   if (out.timedOut) {
     return saveError(id, "read_failed", out.stderr.trim() || "Timed out reading artifact after 90s.");
   }
-  if (parsed.artifactToolResult?.isError) {
-    const classifyText = [parsed.artifactToolResult.text, parsed.finalResult?.text, out.stderr.trim()]
+  const errToolRes = parsed.artifactToolResults.find((r) => r.isError) ?? (parsed.artifactToolResult?.isError ? parsed.artifactToolResult : null);
+  if (errToolRes) {
+    const classifyText = [errToolRes.text, parsed.finalResult?.text, out.stderr.trim()]
       .filter(Boolean)
       .join("\n");
     const err = classify(classifyText);
     recordErrorAccountState(err);
-    return saveError(id, err, parsed.artifactToolResult.text);
+    return saveError(id, err, errToolRes.text);
   }
   const raw = [parsed.finalResult?.text, ...parsed.assistantTexts, out.stderr.trim()]
     .filter(Boolean)
@@ -715,6 +823,116 @@ function failFromArtifactStream(id: string, out: SpawnOutput, parsed: ParsedStre
   const err = classify(raw, { toolMissing });
   recordErrorAccountState(err);
   return saveError(id, err, raw || "Failed to read artifact.");
+}
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    out.push(items.slice(i, i + size));
+  }
+  return out;
+}
+
+function isFilesListResult(r: ToolCallResult): boolean {
+  if (r.input?.scope === "files") return true;
+  if (r.input?.scope === "assets") return false;
+  if (/^Assets of /m.test(r.text) && !/\bproject\//.test(r.text)) return false;
+  return true;
+}
+
+function isAssetsListResult(r: ToolCallResult): boolean {
+  if (r.input?.scope === "assets") return true;
+  if (r.input?.scope === "files") return false;
+  return /^Assets of /m.test(r.text) || Boolean(r.structured?.asset_list);
+}
+
+function boardsReferenceSupportJs(filesDir: string, savedFiles: Array<{ path: string; size: number }>): boolean {
+  for (const f of savedFiles) {
+    if (!f.path.startsWith("project/") || !/\.(?:dc\.html|html|htm)$/i.test(f.path)) continue;
+    try {
+      const html = fs.readFileSync(path.join(filesDir, ...f.path.split("/")), "utf-8");
+      if (html.includes("./support.js")) return true;
+    } catch {}
+  }
+  return false;
+}
+
+function installDcRuntimeAsSupportJs(filesDir: string): boolean {
+  const supportPath = path.join(filesDir, "project", "support.js");
+  if (fs.existsSync(supportPath)) return true;
+  const candidates = [path.join(filesDir, "artifact-type", "dc-runtime.js"), path.join(filesDir, "dc-runtime.js")];
+  const src = candidates.find((p) => fs.existsSync(p) && fs.statSync(p).isFile());
+  if (!src) return false;
+  fs.mkdirSync(path.dirname(supportPath), { recursive: true });
+  fs.copyFileSync(src, supportPath);
+  fs.rmSync(path.join(filesDir, "artifact-type"), { recursive: true, force: true });
+  fs.rmSync(path.join(filesDir, "dc-runtime.js"), { force: true });
+  return true;
+}
+
+function hasSavedBlobAsset(blobDir: string, assetId: string): boolean {
+  if (!ASSET_ID_RE.test(assetId) || !fs.existsSync(blobDir)) return false;
+  try {
+    return fs
+      .readdirSync(blobDir, { withFileTypes: true })
+      .some((ent) => !ent.isSymbolicLink() && ent.isFile() && (ent.name === assetId || ent.name.startsWith(`${assetId}.`)));
+  } catch {
+    return false;
+  }
+}
+
+function enforceBlobCapsOnDisk(blobDir: string): void {
+  if (!fs.existsSync(blobDir)) return;
+  let kept = 0;
+  let totalBytes = 0;
+  try {
+    const entries = fs.readdirSync(blobDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    for (const ent of entries) {
+      if (ent.isSymbolicLink() || !ent.isFile()) continue;
+      const full = path.join(blobDir, ent.name);
+      const size = fs.statSync(full).size;
+      if (size > MAX_ASSET_BYTES || kept >= MAX_ASSETS || totalBytes + size > MAX_ASSETS_TOTAL_BYTES) {
+        fs.rmSync(full, { force: true });
+        continue;
+      }
+      kept++;
+      totalBytes += size;
+    }
+  } catch {}
+  if (kept === 0) {
+    fs.rmSync(blobDir, { recursive: true, force: true });
+  }
+}
+
+function buildProjectReadPrompt(url: string, filesDir: string, batches: string[][]): string {
+  if (batches.length === 1) {
+    return `Use the Artifact tool once with action "read", url ${JSON.stringify(url)}, paths ${JSON.stringify(batches[0])}, out_dir ${JSON.stringify(filesDir)}. Then reply with the single word done.`;
+  }
+  const batchLines = batches.map((b, i) => `batch ${i + 1}: paths ${JSON.stringify(b)}`).join("; ");
+  return `Use the Artifact tool with action "read", url ${JSON.stringify(url)}, out_dir ${JSON.stringify(filesDir)} once for each of these paths arrays (do not skip any): ${batchLines}. Then reply with the single word done.`;
+}
+
+function buildSupportAndAssetsPrompt(
+  url: string,
+  filesDir: string,
+  blobDir: string,
+  includeRuntime: boolean,
+  assetIds: string[],
+): string {
+  const safeIds = assetIds.filter((aid) => ASSET_ID_RE.test(aid));
+  const parts: string[] = [];
+  if (includeRuntime) {
+    parts.push(
+      `Use the Artifact tool with action "read", url ${JSON.stringify(url)}, path ${JSON.stringify(DC_RUNTIME_PATH)}, out_dir ${JSON.stringify(filesDir)}.`,
+    );
+  }
+  if (safeIds.length > 0) {
+    parts.push(
+      `For each asset id in ${JSON.stringify(safeIds)}, use the Artifact tool with action "read", url ${JSON.stringify(url)}, path set to that asset id, out_dir ${JSON.stringify(blobDir)} (one call per asset id).`,
+    );
+  }
+  parts.push("Then reply with the single word done.");
+  return parts.join(" ");
 }
 
 async function executeRead(id: string, url: string, opts?: { prompt?: string }): Promise<Artifact | null> {
@@ -955,14 +1173,20 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
   }
 
   // Owned, files-based typed artifact (Design, Slides, Data, Whiteboard, Design System, ...).
-  const listPrompt = `Use the Artifact tool once with action "list", scope "files", url ${JSON.stringify(parsedUrl.url)}. Reply with its output verbatim.`;
+  const listPrompt = [
+    `Use the Artifact tool with action "list", scope "files", url ${JSON.stringify(parsedUrl.url)}.`,
+    `Also use the Artifact tool with action "list", scope "assets", url ${JSON.stringify(parsedUrl.url)} (if the assets output indicates more pages or a cursor, keep calling action "list", scope "assets" until all assets up to ${MAX_ASSETS} are listed).`,
+    "Reply with the single word done.",
+  ].join(" ");
   const outList = await runClaude(bin ?? "claude", claudeArtifactArgs(listPrompt), outDir, READ_TIMEOUT_MS);
   const parsedList = parseStreamOutput(outList.stdout);
-  if (outList.timedOut || !parsedList.artifactToolResult || parsedList.artifactToolResult.isError) {
+  const filesListResult =
+    parsedList.artifactToolResults.filter(isFilesListResult).at(-1) ?? parsedList.artifactToolResult;
+  if (outList.timedOut || !filesListResult || filesListResult.isError) {
     return failFromArtifactStream(id, outList, parsedList);
   }
 
-  const listed = parseFilesList(parsedList.artifactToolResult.text);
+  const listed = parseFilesList(filesListResult.text);
   const safePaths = listed.paths.filter(isSafeProjectPath);
   const effectiveType = header.typeName ?? listed.typeName;
   if (safePaths.length === 0) {
@@ -981,18 +1205,120 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
   } else {
     fs.rmSync(truncMarker, { force: true });
   }
-  const filesPrompt = `Use the Artifact tool once with action "read", url ${JSON.stringify(parsedUrl.url)}, paths ${JSON.stringify(safePaths)}, out_dir ${JSON.stringify(filesDir)}. Then reply with the single word done.`;
-  const outFiles = await runClaude(bin ?? "claude", claudeArtifactArgs(filesPrompt), filesDir, READ_TIMEOUT_MS);
+
+  const pathBatches = chunkArray(safePaths, READ_BATCH_SIZE);
+  const filesPrompt = buildProjectReadPrompt(parsedUrl.url, filesDir, pathBatches);
+  const filesTimeout = pathBatches.length > 1 ? BATCH_READ_TIMEOUT_MS : READ_TIMEOUT_MS;
+  const outFiles = await runClaude(bin ?? "claude", claudeArtifactArgs(filesPrompt), filesDir, filesTimeout);
   const parsedFiles = parseStreamOutput(outFiles.stdout);
-  if (outFiles.timedOut || !parsedFiles.artifactToolResult || parsedFiles.artifactToolResult.isError) {
+  const fileResults = parsedFiles.artifactToolResults;
+  if (
+    outFiles.timedOut ||
+    fileResults.length === 0 ||
+    (fileResults.every((r) => r.isError) && parsedFiles.artifactToolResult?.isError)
+  ) {
     return failFromArtifactStream(id, outFiles, parsedFiles);
   }
 
-  const savedFiles = listArtifactFiles(filesDir);
-  if (savedFiles.length === 0) {
+  // If Claude used `paths` arrays and skipped any batch, run one follow-up pass for remaining files.
+  if (fileResults.some((r) => Array.isArray(r.input?.paths))) {
+    const coveredPaths = new Set<string>();
+    for (const r of fileResults) {
+      if (r.isError || !Array.isArray(r.input?.paths)) continue;
+      for (const p of r.input.paths) {
+        if (typeof p === "string") coveredPaths.add(p);
+      }
+    }
+    const missingPaths = safePaths.filter(
+      (p) => !coveredPaths.has(p) && !fs.existsSync(path.join(filesDir, ...p.split("/"))),
+    );
+    if (missingPaths.length > 0) {
+      const retryBatches = chunkArray(missingPaths, READ_BATCH_SIZE);
+      const retryPrompt = buildProjectReadPrompt(parsedUrl.url, filesDir, retryBatches);
+      await runClaude(bin ?? "claude", claudeArtifactArgs(retryPrompt), filesDir, BATCH_READ_TIMEOUT_MS);
+    }
+  }
+
+  const savedProjectFiles = listArtifactFiles(filesDir);
+  if (savedProjectFiles.length === 0) {
     return saveError(id, "read_failed", "Artifact files were not saved.");
   }
 
+  const needSupportJs =
+    listed.hasDcRuntime &&
+    !fs.existsSync(path.join(filesDir, "project", "support.js")) &&
+    boardsReferenceSupportJs(filesDir, savedProjectFiles);
+
+  const assetResults = parsedList.artifactToolResults.filter((r) => !r.isError && isAssetsListResult(r));
+  const structuredAssets = assetResults.flatMap((r) =>
+    Array.isArray(r.structured?.asset_list?.assets) ? r.structured.asset_list.assets : [],
+  );
+  let assetsListed = parseAssetsList(
+    assetResults.map((r) => r.text),
+    structuredAssets,
+  );
+
+  // Follow pagination cursor once if the assets list indicates more pages and we are still under the cap.
+  const lastAssetList = assetResults.at(-1);
+  const nextCursor =
+    typeof lastAssetList?.structured?.asset_list?.next_cursor === "string"
+      ? lastAssetList.structured.asset_list.next_cursor.trim()
+      : null;
+  if (nextCursor && !assetsListed.truncated && assetsListed.assets.length < MAX_ASSETS) {
+    const pagePrompt = `Use the Artifact tool with action "list", scope "assets", url ${JSON.stringify(parsedUrl.url)}, starting after cursor ${JSON.stringify(nextCursor)} (continue paging if more pages exist, up to ${MAX_ASSETS} assets). Reply with the single word done.`;
+    const outPage = await runClaude(bin ?? "claude", claudeArtifactArgs(pagePrompt), outDir, READ_TIMEOUT_MS);
+    const parsedPage = parseStreamOutput(outPage.stdout);
+    const moreResults = parsedPage.artifactToolResults.filter((r) => !r.isError && isAssetsListResult(r));
+    if (moreResults.length > 0) {
+      const allResults = [...assetResults, ...moreResults];
+      const allStructured = allResults.flatMap((r) =>
+        Array.isArray(r.structured?.asset_list?.assets) ? r.structured.asset_list.assets : [],
+      );
+      assetsListed = parseAssetsList(
+        allResults.map((r) => r.text),
+        allStructured,
+      );
+    }
+  }
+
+  const assetIds = assetsListed.assets.map((a) => a.id).filter((aid) => ASSET_ID_RE.test(aid));
+  if (needSupportJs || assetIds.length > 0) {
+    const blobDir = path.join(filesDir, "_blob");
+    if (assetIds.length > 0) {
+      fs.mkdirSync(blobDir, { recursive: true });
+    }
+    const assetChunks = assetIds.length > 0 ? chunkArray(assetIds, ASSET_READ_RUN_SIZE) : [[]];
+    let runtimePending = needSupportJs;
+
+    for (const chunk of assetChunks) {
+      let pendingIds = [...chunk];
+      for (let attempt = 0; attempt < 2 && (runtimePending || pendingIds.length > 0); attempt++) {
+        const prompt = buildSupportAndAssetsPrompt(parsedUrl.url, filesDir, blobDir, runtimePending, pendingIds);
+        const outExtra = await runClaude(
+          bin ?? "claude",
+          claudeArtifactArgs(prompt),
+          filesDir,
+          pendingIds.length > 5 ? BATCH_READ_TIMEOUT_MS : READ_TIMEOUT_MS,
+        );
+        if (runtimePending && installDcRuntimeAsSupportJs(filesDir)) {
+          runtimePending = false;
+        }
+        const parsedExtra = parseStreamOutput(outExtra.stdout);
+        const attemptedPaths = new Set<string>();
+        for (const r of parsedExtra.artifactToolResults) {
+          if (typeof r.input?.path === "string") attemptedPaths.add(r.input.path);
+        }
+        // Only retry asset ids that are missing on disk and were not even attempted by the tool.
+        pendingIds = pendingIds.filter(
+          (aid) => !hasSavedBlobAsset(blobDir, aid) && (attemptedPaths.size > 0 ? !attemptedPaths.has(aid) : false),
+        );
+        if (outExtra.timedOut) break;
+      }
+    }
+    enforceBlobCapsOnDisk(blobDir);
+  }
+
+  const savedFiles = listArtifactFiles(filesDir);
   const canvasTitle = readTitleFromCanvasIndex(filesDir, savedFiles);
   accountState = "ok";
   return saveRead(id, {

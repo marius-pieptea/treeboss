@@ -6,8 +6,9 @@ import { home } from "../src/paths";
 import { HttpError, makeCtx, type RouteModule } from "../src/daemon/http";
 import { artifactRoutes } from "../src/daemon/routes/artifacts";
 import { coreRoutes } from "../src/daemon/routes/core";
+import { isArtifactViewPath, startServer } from "../src/daemon/server";
 import { drainReads, setClaudeSpawner } from "../src/artifacts/reader";
-import { addPasted, getArtifact, saveRead } from "../src/artifacts/store";
+import { addPasted, getArtifact, getArtifactViewToken, saveRead } from "../src/artifacts/store";
 import { createLead, interruptAll } from "../src/sessions/manager";
 import { UserError } from "../src/util";
 import { makeDir, resetState, settled } from "./helpers";
@@ -358,5 +359,156 @@ describe("artifacts HTTP routes", () => {
     expect((await callRoute(artifactRoutes, "GET", "/api/artifacts/des-1/file?path=project%2F..%2F..%2Fsecret.txt")).status).toBe(404);
     expect((await callRoute(artifactRoutes, "GET", "/api/artifacts/des-1/file?path=%2Fetc%2Fpasswd")).status).toBe(404);
     expect((await callRoute(artifactRoutes, "GET", "/api/artifacts/des-1/file")).status).toBe(404);
+  });
+
+  test("isArtifactViewPath matches only exact capability view URL shape", () => {
+    const tok = "0123456789abcdef0123456789abcdef";
+    expect(isArtifactViewPath(`/api/artifacts/des-1/f/${tok}/project/Main.dc.html`)).toBe(true);
+    expect(isArtifactViewPath(`/api/artifacts/9SnZPLr4tBkU1qq4bRAcwL/f/${tok}/_blob/408e71730f86fb3635996d96af317642`)).toBe(true);
+    expect(isArtifactViewPath(`/api/artifacts/des-1/f/${tok}/`)).toBe(true);
+
+    expect(isArtifactViewPath(`/api/artifacts/des-1/f/${tok}`)).toBe(false);
+    expect(isArtifactViewPath(`/api/artifacts/des-1/f/${tok.slice(0, 31)}/a.html`)).toBe(false);
+    expect(isArtifactViewPath(`/api/artifacts/des-1/f/${tok}0/a.html`)).toBe(false);
+    expect(isArtifactViewPath(`/api/artifacts/des-1/f/${tok.toUpperCase()}/a.html`)).toBe(false);
+    expect(isArtifactViewPath(`/api/artifacts/des-1/f/wrong-token/a.html`)).toBe(false);
+    expect(isArtifactViewPath(`/api/artifacts/a%2Fb/f/${tok}/a.html`)).toBe(false);
+    expect(isArtifactViewPath(`/api/artifacts/../f/${tok}/a.html`)).toBe(false);
+    expect(isArtifactViewPath(`/api/artifacts/des-1/files`)).toBe(false);
+  });
+
+  test("files base token, capability view route, /_blob/ rewrite, _blob extension mapping, and server auth bypass", async () => {
+    const assetA = "408e71730f86fb3635996d96af317642";
+    const assetB = "4a8fa5bdf99ae45cf0dbe52b28517ce2";
+    const assetC = "76358eccc0f45a5e518eb1e2877ed687";
+
+    // Row inserted without saveRead has no view_token -> base is null.
+    const noTokDir = path.join(home(), "artifacts", "no-tok", "files");
+    fs.mkdirSync(path.join(noTokDir, "project"), { recursive: true });
+    fs.writeFileSync(path.join(noTokDir, "project", "Home.dc.html"), "<p>Hi</p>", "utf-8");
+    db()
+      .prepare(
+        "INSERT INTO artifacts (id, url, title, intent, owner, source, created_at, content_kind, content_path) VALUES (?, ?, 'NoTok', 'design', 'mine', 'pasted', ?, 'files', ?)",
+      )
+      .run("no-tok", "https://claude.ai/artifact/no-tok", Date.now(), noTokDir);
+    const noTokRes = await callRoute(artifactRoutes, "GET", "/api/artifacts/no-tok/files");
+    expect(noTokRes.status).toBe(200);
+    expect((await noTokRes.json()).base).toBeNull();
+
+    // Design artifact with support.js, boards, fonts, and _blob assets.
+    addPasted("https://claude.ai/artifact/view-1");
+    const filesDir = path.join(home(), "artifacts", "view-1", "files");
+    const projDir = path.join(filesDir, "project");
+    const blobDir = path.join(filesDir, "_blob");
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.mkdirSync(blobDir, { recursive: true });
+
+    const boardHtml = [
+      '<!doctype html><html><head><script src="./support.js"></script>',
+      `<style>body{background:url(/_blob/${assetC})}</style></head>`,
+      `<body><img src="/_blob/${assetA}"><img src='/_blob/${assetB}'></body></html>`,
+    ].join("");
+    fs.writeFileSync(path.join(projDir, "Main.dc.html"), boardHtml, "utf-8");
+    fs.writeFileSync(path.join(projDir, "support.js"), "console.log('dc');", "utf-8");
+    fs.writeFileSync(path.join(projDir, "font.woff2"), "WOFF2DATA", "utf-8");
+    fs.writeFileSync(path.join(projDir, "data.xml"), "<root/>", "utf-8");
+    fs.writeFileSync(path.join(blobDir, `${assetA}.png`), "PNGDATA", "utf-8");
+    fs.writeFileSync(path.join(blobDir, `${assetB}.jpg`), "JPGDATA", "utf-8");
+    fs.writeFileSync(path.join(blobDir, `${assetC}.webp`), "WEBPDATA", "utf-8");
+    fs.writeFileSync(path.join(home(), "artifacts", "view-1", "secret.txt"), "top-secret", "utf-8");
+
+    saveRead("view-1", {
+      owner: "mine",
+      typeName: "Design",
+      intent: "design",
+      contentKind: "files",
+      contentPath: filesDir,
+      title: "PetComplete",
+    });
+
+    const token = getArtifactViewToken("view-1")!;
+    expect(token).toMatch(/^[0-9a-f]{32}$/);
+
+    // /files returns base and excludes _blob/ and project/support.js.
+    const filesRes = await callRoute(artifactRoutes, "GET", "/api/artifacts/view-1/files");
+    expect(filesRes.status).toBe(200);
+    const filesBody = await filesRes.json();
+    expect(filesBody.base).toBe(`/api/artifacts/view-1/f/${token}/`);
+    expect(filesBody.files.map((f: any) => f.path)).toEqual([
+      "project/data.xml",
+      "project/font.woff2",
+      "project/Main.dc.html",
+    ]);
+
+    // Good token serves HTML with CORS, CSP, and rewritten /_blob/ URLs.
+    const htmlRes = await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/${token}/project/Main.dc.html`);
+    expect(htmlRes.status).toBe(200);
+    expect(htmlRes.headers.get("access-control-allow-origin")).toBe("*");
+    expect(htmlRes.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(htmlRes.headers.get("cache-control")).toBe("no-store");
+    expect(htmlRes.headers.get("content-type")).toContain("text/html");
+    expect(htmlRes.headers.get("content-security-policy")).toBe(
+      "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'self'",
+    );
+    const servedHtml = await htmlRes.text();
+    const expectedBlobBase = `/api/artifacts/view-1/f/${token}/_blob/`;
+    expect(servedHtml).toContain(`src="${expectedBlobBase}${assetA}"`);
+    expect(servedHtml).toContain(`src='${expectedBlobBase}${assetB}'`);
+    expect(servedHtml).toContain(`url(${expectedBlobBase}${assetC})`);
+    expect(servedHtml).not.toContain('"/_blob/');
+    expect(servedHtml).not.toContain("'/_blob/");
+    expect(servedHtml).not.toContain("url(/_blob/");
+
+    // .js, fonts, _blob/<id> extension mapping, and other attachments.
+    const jsRes = await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/${token}/project/support.js`);
+    expect(jsRes.status).toBe(200);
+    expect(jsRes.headers.get("access-control-allow-origin")).toBe("*");
+    expect(jsRes.headers.get("content-type")).toContain("text/javascript");
+    expect(await jsRes.text()).toBe("console.log('dc');");
+
+    const fontRes = await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/${token}/project/font.woff2`);
+    expect(fontRes.status).toBe(200);
+    expect(fontRes.headers.get("content-type")).toBe("font/woff2");
+
+    const blobPngRes = await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/${token}/_blob/${assetA}`);
+    expect(blobPngRes.status).toBe(200);
+    expect(blobPngRes.headers.get("content-type")).toBe("image/png");
+    expect(await blobPngRes.text()).toBe("PNGDATA");
+
+    const blobJpgRes = await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/${token}/_blob/${assetB}`);
+    expect(blobJpgRes.status).toBe(200);
+    expect(blobJpgRes.headers.get("content-type")).toBe("image/jpeg");
+    expect(await blobJpgRes.text()).toBe("JPGDATA");
+
+    const xmlRes = await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/${token}/project/data.xml`);
+    expect(xmlRes.status).toBe(200);
+    expect(xmlRes.headers.get("content-type")).toBe("application/octet-stream");
+    expect(xmlRes.headers.get("content-disposition")).toBe("attachment");
+
+    // Bad token and ../ traversal return 404.
+    const badToken = "0".repeat(32) === token ? "1".repeat(32) : "0".repeat(32);
+    expect((await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/${badToken}/project/Main.dc.html`)).status).toBe(404);
+    expect((await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/wrong-token/project/Main.dc.html`)).status).toBe(404);
+    expect((await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/${token}/..%2Fsecret.txt`)).status).toBe(404);
+    expect((await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/${token}/project%2F..%2F..%2Fsecret.txt`)).status).toBe(404);
+
+    // Server auth bypass admits ONLY exact isArtifactViewPath shape without credentials.
+    const srv = startServer({ port: 0, token: "daemon-secret" });
+    try {
+      const pubOk = await fetch(`${srv.url}/api/artifacts/view-1/f/${token}/project/Main.dc.html`);
+      expect(pubOk.status).toBe(200);
+      expect(pubOk.headers.get("access-control-allow-origin")).toBe("*");
+
+      const pubWrongTok = await fetch(`${srv.url}/api/artifacts/view-1/f/${badToken}/project/Main.dc.html`);
+      expect(pubWrongTok.status).toBe(404);
+
+      const pubBadShape = await fetch(`${srv.url}/api/artifacts/view-1/f/not-32-hex/project/Main.dc.html`);
+      expect(pubBadShape.status).toBe(401);
+
+      const authedOnly = await fetch(`${srv.url}/api/artifacts/view-1/files`);
+      expect(authedOnly.status).toBe(401);
+    } finally {
+      srv.stop();
+    }
   });
 });
