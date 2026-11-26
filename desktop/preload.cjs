@@ -4,6 +4,8 @@ const glass = (process.argv.find((a) => a.startsWith("--trb-glass=")) || "").sli
 contextBridge.exposeInMainWorld("treebossDesktop", {
   /** "mac" | "win" when the window has an OS frosted material behind it, "" otherwise. */
   glass,
+  /** Embedded Electron <webview> tag is enabled in the main window (used by Artifacts live view). */
+  webview: true,
   setAppearance: (source) => ipcRenderer.send("appearance", source),
   setTitleBarColors: (colors) => ipcRenderer.send("titlebar-colors", colors),
   /** A PNG (base64) of a rectangle of the window in CSS pixels, or null when it could not be taken. */

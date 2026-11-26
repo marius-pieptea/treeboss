@@ -29,6 +29,28 @@ function glassKind() {
 
 let win = null;
 
+// Keep in sync with isAllowedLiveUrl in web/src/features/artifacts/liveview-guard.ts.
+function isAllowedLiveUrl(raw) {
+  if (typeof raw !== "string" || !raw) return false;
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:") return false;
+  const host = parsed.hostname.toLowerCase();
+  if (!host) return false;
+  return (
+    host === "claude.ai" ||
+    host.endsWith(".claude.ai") ||
+    host === "claude.com" ||
+    host.endsWith(".claude.com") ||
+    host === "accounts.google.com" ||
+    host === "appleid.apple.com"
+  );
+}
+
 /** A GUI app on macOS/Linux gets a bare PATH; the engines (claude, codex…) live on the login shell's. */
 function fixPath() {
   if (win32) return;
@@ -122,7 +144,7 @@ async function openWindow({ fresh = false, dir } = {}) {
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : win32 ? "hidden" : "default",
     // Windows: the app draws its own title bar and the system caption buttons sit over it; their colors follow the theme.
     ...(win32 ? { titleBarOverlay: { color: glass ? "#00000000" : "#090b0e", symbolColor: "#d8dee7", height: 40 } } : {}),
-    webPreferences: { contextIsolation: true, sandbox: true, preload: path.join(__dirname, "preload.cjs"), additionalArguments: [`--trb-glass=${glass}`] },
+    webPreferences: { contextIsolation: true, sandbox: true, preload: path.join(__dirname, "preload.cjs"), additionalArguments: [`--trb-glass=${glass}`], webviewTag: true },
   });
   if (win32) win.removeMenu();
   // Links to other sites open in the browser; the app stays on the daemon's origin.
@@ -135,6 +157,39 @@ async function openWindow({ fresh = false, dir } = {}) {
       e.preventDefault();
       shell.openExternal(url);
     }
+  });
+  // Artifacts live view: strip any preload, lock down sandbox/isolation, pin partition, and restrict hosts.
+  win.webContents.on("will-attach-webview", (e, webPreferences, params) => {
+    delete webPreferences.preload;
+    delete webPreferences.preloadURL;
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+    params.partition = "persist:claude-ai";
+    if (!isAllowedLiveUrl(params.src)) {
+      e.preventDefault();
+      if (typeof params.src === "string" && /^https?:\/\//i.test(params.src)) shell.openExternal(params.src);
+    }
+  });
+  win.webContents.on("did-attach-webview", (_e, contents) => {
+    contents.setWindowOpenHandler(({ url }) => {
+      if (isAllowedLiveUrl(url)) {
+        return {
+          action: "allow",
+          overrideBrowserWindowOptions: {
+            webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, partition: "persist:claude-ai" },
+          },
+        };
+      }
+      if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+      return { action: "deny" };
+    });
+    contents.on("will-navigate", (e, url) => {
+      if (!isAllowedLiveUrl(url)) {
+        e.preventDefault();
+        if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+      }
+    });
   });
   win.on("closed", () => (win = null));
   await win.loadURL(await signInUrl(conn, to));
