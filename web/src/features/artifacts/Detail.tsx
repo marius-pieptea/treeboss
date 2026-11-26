@@ -16,10 +16,11 @@ import { Badge, Skeleton } from "@/components/ui/misc";
 import { DropdownMenu } from "@/components/ui/overlay";
 import { bus } from "@/lib/bus";
 import { draftKey, drafts } from "@/lib/drafts";
+import { useElementSize } from "@/lib/hooks";
 import { useSessions } from "@/lib/queries";
 import { useUi, useWs } from "@/lib/store";
 import { cn } from "@/lib/utils";
-import { openExternal, useArtifactHtml, type AccountStatus, type Artifact } from "./data";
+import { artifactHtmlUrl, openExternal, type AccountStatus, type Artifact } from "./data";
 import { ErrorPanel } from "./ErrorPanel";
 import { formatRelativeTime, formatShortDateTime, sessionLabel } from "./format";
 import { LiveView } from "./LiveView";
@@ -29,6 +30,7 @@ export function Detail({
   account,
   narrow,
   reading,
+  readError,
   onBack,
   onRefresh,
   onAutoRead,
@@ -38,18 +40,20 @@ export function Detail({
   account: AccountStatus;
   narrow: boolean;
   reading: boolean;
+  readError: string | null;
   onBack?: () => void;
   onRefresh: (id: string) => void;
   onAutoRead: (id: string) => void;
   onRemove: (item: Artifact) => void;
 }) {
+  const [containerRef, containerSize] = useElementSize<HTMLDivElement>();
   const current = useUi((s) => s.current);
   const ws = useWs();
   const sessions = useSessions(current).data;
   const [liveOpen, setLiveOpen] = useState(false);
 
-  const isReading = reading || (item.lastReadAt === null && !item.error);
-  const htmlQuery = useArtifactHtml(item.id, !isReading && !item.error ? item.htmlPath : null, item.lastReadAt);
+  const isReading = reading;
+  const compactHeader = narrow || (containerSize.width > 0 && containerSize.width < 520);
 
   useEffect(() => {
     setLiveOpen(false);
@@ -77,9 +81,11 @@ export function Detail({
       toast("Open a session first.");
       return;
     }
+    const key = draftKey(current, sid);
     const base = `About this artifact: ${item.url} `;
-    const text = item.owner === "shared" && item.summary ? `${base}\n\nSummary: ${item.summary}` : base;
-    drafts.set(draftKey(current, sid), text);
+    const addition = item.owner === "shared" && item.summary ? `${base}\n\nSummary: ${item.summary}` : base;
+    const existing = drafts.get(key);
+    drafts.set(key, existing ? `${existing}\n\n${addition}` : addition);
     const ui = useUi.getState();
     ui.setActiveSession(sid);
     ui.setRightTab("agent");
@@ -158,7 +164,7 @@ export function Detail({
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg">
+    <div ref={containerRef} className="flex h-full min-h-0 flex-col bg-bg">
       <div className="shrink-0 border-b border-line bg-panel px-4 py-3">
         <div className="flex items-start gap-2">
           {narrow && onBack && (
@@ -170,12 +176,12 @@ export function Detail({
             <h2 className="text-lg font-semibold leading-tight text-fg">{item.title || item.url}</h2>
             {metaLine}
           </div>
-          <div className="flex shrink-0 items-center gap-1">
-            {!narrow && primaryActions}
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
+            {!compactHeader && primaryActions}
             {iconActions}
           </div>
         </div>
-        {narrow && <div className="mt-2 flex flex-wrap items-center gap-2">{primaryActions}</div>}
+        {compactHeader && <div className="mt-2 flex flex-wrap items-center gap-2">{primaryActions}</div>}
       </div>
 
       {liveOpen ? (
@@ -194,6 +200,18 @@ export function Detail({
             </div>
           </div>
         </>
+      ) : readError ? (
+        <div className="min-h-0 flex-1 overflow-auto">
+          <ErrorPanel
+            error="read_failed"
+            errorText={readError}
+            url={item.url}
+            version={account.version}
+            onRetry={triggerRefresh}
+            onRemove={() => onRemove(item)}
+            retrying={isReading}
+          />
+        </div>
       ) : item.error ? (
         <div className="min-h-0 flex-1 overflow-auto">
           <ErrorPanel
@@ -215,32 +233,16 @@ export function Detail({
             </span>
           </div>
           <div className="min-h-0 flex-1 p-4">
-            {htmlQuery.isLoading ? (
-              <div className="flex h-full flex-col gap-3 rounded-lg border border-line bg-panel p-6">
-                <Skeleton className="h-4 w-2/5" />
-                <Skeleton className="h-3 w-3/4" />
-                <Skeleton className="min-h-32 flex-1" />
-              </div>
-            ) : htmlQuery.error ? (
-              <ErrorPanel
-                error="read_failed"
-                errorText={(htmlQuery.error as Error).message}
-                url={item.url}
-                version={account.version}
-                onRetry={triggerRefresh}
-                onRemove={() => onRemove(item)}
-                retrying={isReading}
+            <div className="h-full overflow-hidden rounded-lg border border-line bg-panel">
+              <iframe
+                key={`${item.id}:${item.lastReadAt ?? ""}`}
+                title={item.title || "Artifact preview"}
+                sandbox="allow-scripts"
+                referrerPolicy="no-referrer"
+                src={artifactHtmlUrl(item.id)}
+                className="h-full w-full border-0 bg-panel"
               />
-            ) : (
-              <div className="h-full overflow-hidden rounded-lg border border-line bg-panel">
-                <iframe
-                  title={item.title || "Artifact preview"}
-                  sandbox="allow-scripts"
-                  srcDoc={htmlQuery.data ?? ""}
-                  className="h-full w-full border-0 bg-panel"
-                />
-              </div>
-            )}
+            </div>
           </div>
         </>
       ) : item.summary ? (

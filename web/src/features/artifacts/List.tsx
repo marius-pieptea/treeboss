@@ -79,7 +79,10 @@ export function List({
 
   useEffect(() => {
     if (takePendingFocusLink()) linkRef.current?.focus();
-    const onFocus = () => linkRef.current?.focus();
+    const onFocus = () => {
+      takePendingFocusLink();
+      linkRef.current?.focus();
+    };
     window.addEventListener("trb:artifacts-focus-link", onFocus);
     return () => window.removeEventListener("trb:artifacts-focus-link", onFocus);
   }, []);

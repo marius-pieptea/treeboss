@@ -271,7 +271,16 @@ export function AgentPanel() {
   const key = draftKey(useUi((s) => s.current), sid);
   const [draft, setDraftState] = useState(() => drafts.get(key));
   useEffect(() => setDraftState(drafts.get(key)), [key]);
-  useEffect(() => drafts.subscribe(() => setDraftState(drafts.get(key))), [key]);
+  useEffect(
+    () =>
+      drafts.subscribe(() =>
+        setDraftState((prev) => {
+          const v = drafts.get(key);
+          return v === prev.trim() ? prev : v;
+        }),
+      ),
+    [key],
+  );
   const setDraft = useCallback(
     (v: string) => {
       drafts.set(key, v);

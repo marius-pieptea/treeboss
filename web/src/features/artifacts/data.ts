@@ -85,19 +85,6 @@ export function useArtifacts(polling = false) {
   });
 }
 
-export function useArtifactHtml(id: string | null, htmlPath: string | null, lastReadAt: number | null) {
-  return useQuery({
-    queryKey: [...artifactsKey, "html", id, htmlPath, lastReadAt] as const,
-    enabled: Boolean(id && htmlPath),
-    retry: false,
-    queryFn: async ({ signal }) => {
-      const res = await fetch(artifactHtmlUrl(id!), { credentials: "same-origin", signal });
-      if (!res.ok) throw new Error(`Could not load artifact HTML (${res.status})`);
-      return res.text();
-    },
-  });
-}
-
 export function useArtifactActions() {
   const qc = useQueryClient();
   const invalidate = () => qc.invalidateQueries({ queryKey: artifactsKey });

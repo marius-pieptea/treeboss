@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import type { Artifact } from "../web/src/features/artifacts/data";
+import type { Artifact } from "../../web/src/features/artifacts/data";
 import {
   countByIntent,
   documentsTabLabel,
   filterArtifacts,
   groupArtifacts,
   matchesSearch,
-} from "../web/src/features/artifacts/format";
+} from "../../web/src/features/artifacts/format";
 
 const NOW = new Date("2026-11-26T15:00:00").getTime();
 const HOUR = 3_600_000;
