@@ -17,6 +17,9 @@ export interface ToolResult {
 
 const MAX_INLINE_HTML_CHARS = 20_000;
 const MAX_INLINE_MD_CHARS = 40_000;
+const MAX_INLINE_INDEX_CHARS = 20_000;
+const MAX_OTHER_INDEX_BYTES = 64 * 1024;
+const FILES_TRUNCATED_MARKER = ".files-truncated";
 
 export async function executeArtifactTool(
   name: string,
@@ -69,14 +72,21 @@ export async function executeArtifactTool(
         `Artifact of type "${typeLabel}" with ${files.length} files saved under ${updated.contentPath}:`,
         ...files.map((f) => `- ${f.path} (${f.size} bytes)`),
       ];
+      if (fs.existsSync(path.join(path.dirname(updated.contentPath), FILES_TRUNCATED_MARKER))) {
+        lines.push("Only the first 60 files were read.");
+      }
       const indexFile =
         files.find((f) => f.path === "project/canvas.json") ??
-        files.find((f) => path.posix.basename(f.path) === "canvas.json") ??
-        files.find((f) => f.path.endsWith(".json"));
+        files.find((f) => path.posix.basename(f.path) === "canvas.json" && f.size < MAX_OTHER_INDEX_BYTES) ??
+        files.find((f) => f.path.endsWith(".json") && f.size < MAX_OTHER_INDEX_BYTES);
       if (indexFile) {
         const indexAbs = path.join(updated.contentPath, ...indexFile.path.split("/"));
         if (fs.existsSync(indexAbs)) {
-          const indexText = fs.readFileSync(indexAbs, "utf-8");
+          const rawIndex = fs.readFileSync(indexAbs, "utf-8");
+          const indexText =
+            rawIndex.length > MAX_INLINE_INDEX_CHARS
+              ? `${rawIndex.slice(0, MAX_INLINE_INDEX_CHARS)}\n[truncated]`
+              : rawIndex;
           lines.push("", `${indexFile.path}:`, indexText);
         }
       }

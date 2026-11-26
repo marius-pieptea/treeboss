@@ -646,6 +646,8 @@ describe("artifacts reader", () => {
     expect(stepB.args).not.toContain("--strict-mcp-config");
     expect(stepB.args).not.toContain("--mcp-config");
     expect(stepB.args).not.toContain("bypassPermissions");
+    expect(stepB.args).toContain("--setting-sources");
+    expect(stepB.args[stepB.args.indexOf("--setting-sources") + 1]).toBe("project");
     expect(stepB.args).toContain("--tools");
     expect(stepB.args[stepB.args.indexOf("--tools") + 1]).toBe("");
     expect(stepB.args).toContain("ToolSearch,mcp__claude_ai_Claude_Docs__read,mcp__claude_ai_Claude_Docs__export");
@@ -777,5 +779,338 @@ describe("artifacts reader", () => {
     expect(toolRes.text).toContain("- project/canvas.json");
     expect(toolRes.text).toContain('{"v":1,"title":"Mock","boards":["Home"]}');
     expect(toolRes.text).toContain("Read the files with your file tool.");
+  });
+
+  test("Docs run discards result when a disallowed tool is used", async () => {
+    const docsUuid = "cccccccc-2222-3333-4444-555555555555";
+    setClaudeSpawner(async (input) => {
+      if (input.args[0] === "--version") return { exitCode: 0, stdout: "2.1.318\n", stderr: "" };
+      if (input.args.includes("--strict-mcp-config")) {
+        return {
+          exitCode: 0,
+          stdout: streamLines([
+            { type: "system", subtype: "init", tools: ["Artifact"] },
+            { type: "assistant", message: { content: [{ type: "tool_use", id: "tu_a", name: "Artifact", input: { action: "read" } }] } },
+            {
+              type: "user",
+              message: {
+                content: [
+                  {
+                    type: "tool_result",
+                    tool_use_id: "tu_a",
+                    is_error: false,
+                    content: `Artifact ${docsUuid} (version 1) — owned by you, private\nan Artifact of type "Docs"`,
+                  },
+                ],
+              },
+            },
+          ]),
+          stderr: "",
+        };
+      }
+      return {
+        exitCode: 0,
+        stdout: streamLines([
+          {
+            type: "system",
+            subtype: "init",
+            tools: ["ToolSearch", "mcp__claude_ai_Claude_Docs__read", "mcp__claude_ai_Claude_Docs__export"],
+          },
+          {
+            type: "assistant",
+            message: {
+              content: [
+                { type: "tool_use", id: "tu_bad", name: "Bash", input: { command: "echo pwned" } },
+                { type: "tool_use", id: "tu_r", name: "mcp__claude_ai_Claude_Docs__read", input: { ref: { id: docsUuid } } },
+                { type: "tool_use", id: "tu_e", name: "mcp__claude_ai_Claude_Docs__export", input: { container: { id: docsUuid }, file: "t1", format: "markdown" } },
+              ],
+            },
+          },
+          {
+            type: "user",
+            message: {
+              content: [
+                { type: "tool_result", tool_use_id: "tu_r", is_error: false, content: JSON.stringify({ files: [{ id: "t1", name: "Tab" }] }) },
+                { type: "tool_result", tool_use_id: "tu_e", is_error: false, content: "Body" },
+              ],
+            },
+          },
+        ]),
+        stderr: "",
+      };
+    });
+
+    const item = addPasted("https://claude.ai/artifact/docs-disallowed");
+    const res = await readArtifact(item.id);
+    expect(res?.error).toBe("read_failed");
+    expect(res?.errorText).toBe("The Claude Docs read used a tool it was not allowed to use, so its result was discarded.");
+    expect(fs.existsSync(path.join(home(), "artifacts", "docs-disallowed", "content.md"))).toBe(false);
+  });
+
+  test("Docs run ignores mismatched read/export containers and notes failed tabs", async () => {
+    const docsUuid = "dddddddd-1111-2222-3333-444444444444";
+    const otherUuid = "eeeeeeee-1111-2222-3333-444444444444";
+    setClaudeSpawner(async (input) => {
+      if (input.args[0] === "--version") return { exitCode: 0, stdout: "2.1.318\n", stderr: "" };
+      if (input.args.includes("--strict-mcp-config")) {
+        return {
+          exitCode: 0,
+          stdout: streamLines([
+            { type: "system", subtype: "init", tools: ["Artifact"] },
+            { type: "assistant", message: { content: [{ type: "tool_use", id: "tu_a", name: "Artifact", input: { action: "read" } }] } },
+            {
+              type: "user",
+              message: {
+                content: [
+                  {
+                    type: "tool_result",
+                    tool_use_id: "tu_a",
+                    is_error: false,
+                    content: `Artifact ${docsUuid} (version 1) — owned by you, private\nan Artifact of type "Docs"`,
+                  },
+                ],
+              },
+            },
+          ]),
+          stderr: "",
+        };
+      }
+      return {
+        exitCode: 0,
+        stdout: streamLines([
+          {
+            type: "system",
+            subtype: "init",
+            tools: ["ToolSearch", "mcp__claude_ai_Claude_Docs__read", "mcp__claude_ai_Claude_Docs__export"],
+          },
+          {
+            type: "assistant",
+            message: {
+              content: [
+                { type: "tool_use", id: "tu_r_wrong", name: "mcp__claude_ai_Claude_Docs__read", input: { ref: { id: otherUuid } } },
+                { type: "tool_use", id: "tu_r_ok", name: "mcp__claude_ai_Claude_Docs__read", input: { ref: { id: docsUuid } } },
+                { type: "tool_use", id: "tu_e_wrong_id", name: "mcp__claude_ai_Claude_Docs__export", input: { container: { id: otherUuid }, file: "tab-2", format: "markdown" } },
+                { type: "tool_use", id: "tu_e_wrong_fmt", name: "mcp__claude_ai_Claude_Docs__export", input: { container: { id: docsUuid }, file: "tab-2", format: "html" } },
+                { type: "tool_use", id: "tu_e_ok", name: "mcp__claude_ai_Claude_Docs__export", input: { container: { id: docsUuid }, file: "tab-1", format: "markdown" } },
+              ],
+            },
+          },
+          {
+            type: "user",
+            message: {
+              content: [
+                { type: "tool_result", tool_use_id: "tu_r_wrong", is_error: false, content: JSON.stringify({ value: { name: "Wrong Doc" }, files: [{ id: "tab-x", name: "Wrong" }] }) },
+                { type: "tool_result", tool_use_id: "tu_r_ok", is_error: false, content: JSON.stringify({ value: { name: "Right Doc" }, files: [{ id: "tab-1", name: "Intro" }, { id: "tab-2", name: "MissingTab" }] }) },
+                { type: "tool_result", tool_use_id: "tu_e_wrong_id", is_error: false, content: "Leaked other doc content" },
+                { type: "tool_result", tool_use_id: "tu_e_wrong_fmt", is_error: false, content: "<p>Wrong format</p>" },
+                { type: "tool_result", tool_use_id: "tu_e_ok", is_error: false, content: "Valid tab content." },
+              ],
+            },
+          },
+        ]),
+        stderr: "",
+      };
+    });
+
+    const item = addPasted("https://claude.ai/artifact/docs-mismatch");
+    const res = await readArtifact(item.id);
+    expect(res?.error).toBeNull();
+    const md = fs.readFileSync(res!.contentPath!, "utf-8");
+    expect(md).toContain("# Right Doc");
+    expect(md).toContain("## Intro\n\nValid tab content.");
+    expect(md).not.toContain("Leaked other doc content");
+    expect(md).not.toContain("Wrong format");
+    expect(md).toEndWith("\n\n> Some tabs could not be read: MissingTab\n");
+  });
+
+  test("Docs content.md cut at 2 MB appends truncation marker", async () => {
+    const docsUuid = "eeeeeeee-2222-3333-4444-555555555555";
+    const bigBody = "A".repeat(2 * 1024 * 1024 + 5000);
+    setClaudeSpawner(async (input) => {
+      if (input.args[0] === "--version") return { exitCode: 0, stdout: "2.1.318\n", stderr: "" };
+      if (input.args.includes("--strict-mcp-config")) {
+        return {
+          exitCode: 0,
+          stdout: streamLines([
+            { type: "system", subtype: "init", tools: ["Artifact"] },
+            { type: "assistant", message: { content: [{ type: "tool_use", id: "tu_a", name: "Artifact", input: { action: "read" } }] } },
+            {
+              type: "user",
+              message: {
+                content: [
+                  {
+                    type: "tool_result",
+                    tool_use_id: "tu_a",
+                    is_error: false,
+                    content: `Artifact ${docsUuid} (version 1) — owned by you, private\nan Artifact of type "Docs"`,
+                  },
+                ],
+              },
+            },
+          ]),
+          stderr: "",
+        };
+      }
+      return {
+        exitCode: 0,
+        stdout: streamLines([
+          { type: "system", subtype: "init", tools: ["ToolSearch", "mcp__claude_ai_Claude_Docs__read", "mcp__claude_ai_Claude_Docs__export"] },
+          {
+            type: "assistant",
+            message: {
+              content: [
+                { type: "tool_use", id: "tu_r", name: "mcp__claude_ai_Claude_Docs__read", input: { ref: { id: docsUuid } } },
+                { type: "tool_use", id: "tu_e", name: "mcp__claude_ai_Claude_Docs__export", input: { container: { id: docsUuid }, file: "t1", format: "markdown" } },
+              ],
+            },
+          },
+          {
+            type: "user",
+            message: {
+              content: [
+                { type: "tool_result", tool_use_id: "tu_r", is_error: false, content: JSON.stringify({ value: { name: "Huge Doc" }, files: [{ id: "t1", name: "Main" }] }) },
+                { type: "tool_result", tool_use_id: "tu_e", is_error: false, content: bigBody },
+              ],
+            },
+          },
+        ]),
+        stderr: "",
+      };
+    });
+
+    const item = addPasted("https://claude.ai/artifact/docs-huge");
+    const res = await readArtifact(item.id);
+    expect(res?.error).toBeNull();
+    const md = fs.readFileSync(res!.contentPath!, "utf-8");
+    expect(Buffer.byteLength(md, "utf-8")).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(md.endsWith("\n\n[truncated at 2 MB]")).toBe(true);
+  });
+
+  test("parseFilesList drops injection-like file names and includes project/canvas.json past the 60 cap", () => {
+    const lines = [
+      'Artifact xyz (version 1), an Artifact of type "Design", 70 files',
+      '- "project/evil; rm -rf /" (10 bytes)',
+      "- project/$(whoami).json (10 bytes)",
+      "- project/a&b.html (10 bytes)",
+      '- "project/good-file (1)@2x.png" (10 bytes)',
+      ...Array.from({ length: 65 }, (_, i) => `- project/board-${i}.dc.html (1 KB)`),
+      "- project/canvas.json (512 bytes)",
+    ].join("\n");
+    const parsed = parseFilesList(lines);
+    expect(parsed.truncated).toBe(true);
+    expect(parsed.paths).toHaveLength(60);
+    expect(parsed.paths).toContain("project/good-file (1)@2x.png");
+    expect(parsed.paths).toContain("project/canvas.json");
+    expect(parsed.paths.some((p) => p.includes("evil") || p.includes("whoami") || p.includes("&"))).toBe(false);
+  });
+
+  test("files read clears stale files dir, notes 60-file cap, and caps inlined index JSON at 20000 chars", async () => {
+    const id = "des-cap";
+    const filesDir = path.join(home(), "artifacts", id, "files");
+    const staleFile = path.join(filesDir, "project", "stale.txt");
+    fs.mkdirSync(path.dirname(staleFile), { recursive: true });
+    fs.writeFileSync(staleFile, "old-stale-content", "utf-8");
+
+    const hugeCanvas = JSON.stringify({ title: "Big", data: "x".repeat(25_000) });
+    let mode: "canvas" | "huge_other" | "small_other" = "canvas";
+    const listText = [
+      ...Array.from({ length: 62 }, (_, i) => `- project/board-${i}.dc.html (100 bytes)`),
+      "- project/canvas.json (26 KB)",
+    ].join("\n");
+
+    setClaudeSpawner(async (input) => {
+      if (input.args[0] === "--version") return { exitCode: 0, stdout: "2.1.318\n", stderr: "" };
+      const prompt = input.args.at(-1)!;
+      if (prompt.includes('action "list"')) {
+        return {
+          exitCode: 0,
+          stdout: streamLines([
+            { type: "system", subtype: "init", tools: ["Artifact"] },
+            { type: "assistant", message: { content: [{ type: "tool_use", id: "tu_l", name: "Artifact", input: { action: "list" } }] } },
+            {
+              type: "user",
+              message: {
+                content: [
+                  {
+                    type: "tool_result",
+                    tool_use_id: "tu_l",
+                    is_error: false,
+                    content:
+                      mode === "canvas"
+                        ? listText
+                        : mode === "huge_other"
+                          ? "- project/huge.json (66 KB)"
+                          : "- project/huge.json (66 KB)\n- project/small.json (11 bytes)",
+                  },
+                ],
+              },
+            },
+          ]),
+          stderr: "",
+        };
+      }
+      if (prompt.includes("paths ")) {
+        const projDir = path.join(input.cwd, "project");
+        fs.mkdirSync(projDir, { recursive: true });
+        if (mode === "canvas") {
+          fs.writeFileSync(path.join(projDir, "canvas.json"), hugeCanvas, "utf-8");
+          fs.writeFileSync(path.join(projDir, "board-0.dc.html"), "<div>0</div>", "utf-8");
+        } else if (mode === "huge_other") {
+          fs.writeFileSync(path.join(projDir, "huge.json"), JSON.stringify({ big: "y".repeat(66_000) }), "utf-8");
+        } else {
+          fs.writeFileSync(path.join(projDir, "huge.json"), JSON.stringify({ big: "y".repeat(66_000) }), "utf-8");
+          fs.writeFileSync(path.join(projDir, "small.json"), JSON.stringify({ ok: true }), "utf-8");
+        }
+        return {
+          exitCode: 0,
+          stdout: streamLines([
+            { type: "system", subtype: "init", tools: ["Artifact"] },
+            { type: "assistant", message: { content: [{ type: "tool_use", id: "tu_f", name: "Artifact", input: { action: "read" } }] } },
+            { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu_f", is_error: false, content: "Saved." }] } },
+          ]),
+          stderr: "",
+        };
+      }
+      return {
+        exitCode: 0,
+        stdout: streamLines([
+          { type: "system", subtype: "init", tools: ["Artifact"] },
+          { type: "assistant", message: { content: [{ type: "tool_use", id: "tu_a", name: "Artifact", input: { action: "read" } }] } },
+          {
+            type: "user",
+            message: {
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: "tu_a",
+                  is_error: false,
+                  content: 'Artifact ffffffff-1111-2222-3333-444444444444 (version 1) — owned by you, private\nan Artifact of type "Design"',
+                },
+              ],
+            },
+          },
+        ]),
+        stderr: "",
+      };
+    });
+
+    const res = await executeArtifactTool("artifact_read", { url: `https://claude.ai/artifact/${id}` }, { sessionId: "s_1" });
+    expect(fs.existsSync(staleFile)).toBe(false);
+    expect(res.text).toContain("Only the first 60 files were read.");
+    expect(res.text).toContain("project/canvas.json:");
+    const afterCanvas = res.text.split("project/canvas.json:\n")[1]!;
+    const inlinedJson = afterCanvas.split("\n[truncated]")[0]!;
+    expect(inlinedJson).toHaveLength(20_000);
+    expect(afterCanvas).toContain("\n[truncated]");
+
+    // Without project/canvas.json, a >= 64 KB .json is skipped, and a < 64 KB .json is inlined.
+    mode = "huge_other";
+    const resNoSmall = await executeArtifactTool("artifact_read", { url: `https://claude.ai/artifact/${id}` }, { sessionId: "s_1" });
+    expect(resNoSmall.text).not.toContain("project/huge.json:");
+    expect(resNoSmall.text).not.toContain("Only the first 60 files were read.");
+
+    mode = "small_other";
+    const resWithSmall = await executeArtifactTool("artifact_read", { url: `https://claude.ai/artifact/${id}` }, { sessionId: "s_1" });
+    expect(resWithSmall.text).toContain('project/small.json:\n{"ok":true}');
   });
 });

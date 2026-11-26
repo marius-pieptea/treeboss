@@ -295,6 +295,9 @@ describe("artifacts HTTP routes", () => {
     const canvasJson = JSON.stringify({ v: 1, title: "App", boards: ["Home"] });
     fs.writeFileSync(path.join(projDir, "canvas.json"), canvasJson, "utf-8");
     fs.writeFileSync(path.join(projDir, "sub", "Home.dc.html"), "<div>Home</div>", "utf-8");
+    fs.writeFileSync(path.join(projDir, "a.xml"), "<root/>", "utf-8");
+    fs.writeFileSync(path.join(projDir, "pic.png"), "PNGDATA", "utf-8");
+    fs.writeFileSync(path.join(projDir, "vec.svg"), "<svg/>", "utf-8");
     // Secret file outside filesDir to verify ../ traversal is refused.
     fs.writeFileSync(path.join(home(), "artifacts", "des-1", "secret.txt"), "top-secret", "utf-8");
 
@@ -311,14 +314,37 @@ describe("artifacts HTTP routes", () => {
     expect(filesRes.status).toBe(200);
     const filesBody = await filesRes.json();
     expect(filesBody.files).toEqual([
+      { path: "project/a.xml", size: Buffer.byteLength("<root/>", "utf-8") },
       { path: "project/canvas.json", size: Buffer.byteLength(canvasJson, "utf-8") },
+      { path: "project/pic.png", size: Buffer.byteLength("PNGDATA", "utf-8") },
       { path: "project/sub/Home.dc.html", size: Buffer.byteLength("<div>Home</div>", "utf-8") },
+      { path: "project/vec.svg", size: Buffer.byteLength("<svg/>", "utf-8") },
     ]);
 
     const jsonRes = await callRoute(artifactRoutes, "GET", "/api/artifacts/des-1/file?path=project%2Fcanvas.json");
     expect(jsonRes.status).toBe(200);
-    expect(jsonRes.headers.get("content-type")).toContain("application/json");
+    expect(jsonRes.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(jsonRes.headers.get("content-security-policy")).toBe("sandbox; default-src 'none'");
+    expect(jsonRes.headers.get("x-content-type-options")).toBe("nosniff");
     expect(await jsonRes.text()).toBe(canvasJson);
+
+    const xmlRes = await callRoute(artifactRoutes, "GET", "/api/artifacts/des-1/file?path=project%2Fa.xml");
+    expect(xmlRes.status).toBe(200);
+    expect(xmlRes.headers.get("content-type")).toBe("application/octet-stream");
+    expect(xmlRes.headers.get("content-disposition")).toBe("attachment");
+    expect(xmlRes.headers.get("content-security-policy")).toBe("sandbox; default-src 'none'");
+    expect(xmlRes.headers.get("x-content-type-options")).toBe("nosniff");
+
+    const pngRes = await callRoute(artifactRoutes, "GET", "/api/artifacts/des-1/file?path=project%2Fpic.png");
+    expect(pngRes.status).toBe(200);
+    expect(pngRes.headers.get("content-type")).toBe("image/png");
+    expect(pngRes.headers.get("x-content-type-options")).toBe("nosniff");
+
+    const svgRes = await callRoute(artifactRoutes, "GET", "/api/artifacts/des-1/file?path=project%2Fvec.svg");
+    expect(svgRes.status).toBe(200);
+    expect(svgRes.headers.get("content-type")).toBe("image/svg+xml");
+    expect(svgRes.headers.get("content-security-policy")).toBe("sandbox");
+    expect(svgRes.headers.get("x-content-type-options")).toBe("nosniff");
 
     const boardRes = await callRoute(artifactRoutes, "GET", "/api/artifacts/des-1/file?path=project%2Fsub%2FHome.dc.html");
     expect(boardRes.status).toBe(200);

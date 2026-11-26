@@ -44,29 +44,16 @@ const HTML_HEADERS = {
   "cache-control": "no-store",
 } as const;
 
-const MIME_BY_EXT: Record<string, string> = {
-  ".json": "application/json; charset=utf-8",
-  ".js": "application/javascript; charset=utf-8",
-  ".mjs": "application/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".md": "text/markdown; charset=utf-8",
-  ".txt": "text/plain; charset=utf-8",
-  ".csv": "text/csv; charset=utf-8",
-  ".xml": "application/xml; charset=utf-8",
-  ".yaml": "text/yaml; charset=utf-8",
-  ".yml": "text/yaml; charset=utf-8",
-  ".svg": "image/svg+xml",
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".gif": "image/gif",
   ".webp": "image/webp",
-  ".ico": "image/x-icon",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-  ".ttf": "font/ttf",
-  ".pdf": "application/pdf",
 };
+
+const TEXT_PLAIN_EXTS = new Set([".json", ".css", ".js", ".txt", ".md"]);
+const SANDBOX_NONE_CSP = "sandbox; default-src 'none'";
 
 function resolveArtifactFile(filesDir: string, rel: string | null): string {
   const cleanRel = (rel ?? "").replace(/\\/g, "/");
@@ -216,12 +203,21 @@ export const artifactRoutes: RouteModule = async (c: Ctx) => {
       return new Response(Bun.file(target), { headers: HTML_HEADERS });
     }
     const headers: Record<string, string> = {
-      "content-type": MIME_BY_EXT[ext] ?? "application/octet-stream",
       "x-content-type-options": "nosniff",
       "cache-control": "no-store",
     };
     if (ext === ".svg") {
+      headers["content-type"] = "image/svg+xml";
       headers["content-security-policy"] = "sandbox";
+    } else if (IMAGE_MIME_BY_EXT[ext]) {
+      headers["content-type"] = IMAGE_MIME_BY_EXT[ext]!;
+    } else if (TEXT_PLAIN_EXTS.has(ext)) {
+      headers["content-type"] = "text/plain; charset=utf-8";
+      headers["content-security-policy"] = SANDBOX_NONE_CSP;
+    } else {
+      headers["content-type"] = "application/octet-stream";
+      headers["content-disposition"] = "attachment";
+      headers["content-security-policy"] = SANDBOX_NONE_CSP;
     }
     return new Response(Bun.file(target), { headers });
   }

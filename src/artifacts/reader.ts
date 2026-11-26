@@ -65,8 +65,15 @@ const NO_PLAN_RE = /\b(plan|subscription)\b.*\b(not|doesn't|does not)\b|upgrade/
 
 const DOCS_READ_TOOL = "mcp__claude_ai_Claude_Docs__read";
 const DOCS_EXPORT_TOOL = "mcp__claude_ai_Claude_Docs__export";
+const ALLOWED_DOCS_TOOLS = new Set(["ToolSearch", DOCS_READ_TOOL, DOCS_EXPORT_TOOL]);
+const DOCS_DISALLOWED_TOOL_ERROR =
+  "The Claude Docs read used a tool it was not allowed to use, so its result was discarded.";
 const DOCS_NOT_CONNECTED_ERROR =
   "Claude Docs isn't connected in Claude Code. Open claude.ai → Settings → Connectors, or run /mcp in Claude Code.";
+const CONTENT_TRUNCATED_NOTE = "\n\n[truncated at 2 MB]";
+const FILES_TRUNCATED_MARKER = ".files-truncated";
+const SAFE_PROJECT_PATH_RE =
+  /^project\/[A-Za-z0-9._@+() -]{1,200}(\/[A-Za-z0-9._@+() -]{1,200})*$/;
 
 const TEXT_EXTS = new Set([
   ".html",
@@ -274,8 +281,15 @@ interface ToolCallResult {
   isError: boolean;
 }
 
+interface ToolUseCall {
+  toolId: string | null;
+  name: string;
+  input: any;
+}
+
 interface ParsedStream {
   initTools: string[] | null;
+  toolUses: ToolUseCall[];
   toolResults: ToolCallResult[];
   artifactToolResult: ToolCallResult | null;
   assistantTexts: string[];
@@ -284,6 +298,7 @@ interface ParsedStream {
 
 function parseStreamOutput(stdout: string): ParsedStream {
   const toolCalls = new Map<string, { name: string; input: any }>();
+  const toolUses: ToolUseCall[] = [];
   const toolResults: ToolCallResult[] = [];
   let initTools: string[] | null = null;
   let artifactToolResult: ToolCallResult | null = null;
@@ -323,9 +338,12 @@ function parseStreamOutput(stdout: string): ParsedStream {
       }
       case "tool_use": {
         const name = event.tool_name || event.name;
-        const toolId = event.tool_id || event.id;
-        if (toolId && typeof name === "string") {
-          toolCalls.set(toolId, { name, input: event.input });
+        const toolId = event.tool_id || event.id || null;
+        if (typeof name === "string") {
+          toolUses.push({ toolId, name, input: event.input });
+          if (toolId) {
+            toolCalls.set(toolId, { name, input: event.input });
+          }
         }
         break;
       }
@@ -341,8 +359,12 @@ function parseStreamOutput(stdout: string): ParsedStream {
         if (!Array.isArray(content)) break;
         for (const block of content) {
           if (block?.type === "tool_use") {
-            if (block.id && typeof block.name === "string") {
-              toolCalls.set(block.id, { name: block.name, input: block.input });
+            if (typeof block.name === "string") {
+              const toolId = typeof block.id === "string" ? block.id : null;
+              toolUses.push({ toolId, name: block.name, input: block.input });
+              if (toolId) {
+                toolCalls.set(toolId, { name: block.name, input: block.input });
+              }
             }
           } else if (block?.type === "text" && typeof block.text === "string" && block.text.trim()) {
             assistantTexts.push(block.text.trim());
@@ -370,7 +392,7 @@ function parseStreamOutput(stdout: string): ParsedStream {
     }
   }
 
-  return { initTools, toolResults, artifactToolResult, assistantTexts, finalResult };
+  return { initTools, toolUses, toolResults, artifactToolResult, assistantTexts, finalResult };
 }
 
 export interface ParsedArtifactHeader {
@@ -447,12 +469,18 @@ function isBinaryFilePath(relPath: string): boolean {
   return !TEXT_EXTS.has(ext);
 }
 
+function isSafeProjectPath(candidate: string): boolean {
+  if (!SAFE_PROJECT_PATH_RE.test(candidate)) return false;
+  if (candidate.includes("..") || candidate.includes("\\") || /[\x00-\x1f]/.test(candidate)) return false;
+  return candidate.split("/").every((seg) => seg !== "." && seg !== "..");
+}
+
 /** Parse `project/` file paths from `Artifact` `list` scope `"files"` output. */
-export function parseFilesList(text: string): { typeName: string | null; paths: string[] } {
+export function parseFilesList(text: string): { typeName: string | null; paths: string[]; truncated: boolean } {
   const typeMatch = /\ban?\s+Artifact of type "([^"\r\n]+)"/i.exec(text);
   const typeName = typeMatch ? typeMatch[1]!.trim() || null : null;
   const seen = new Set<string>();
-  const paths: string[] = [];
+  const allPaths: string[] = [];
 
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -468,17 +496,21 @@ export function parseFilesList(text: string): { typeName: string | null; paths: 
         );
       if (unquoted) candidate = unquoted[1]!.trim();
     }
-    if (!candidate) continue;
-    if (candidate.includes("..") || candidate.includes("\\") || /[\x00-\x1f]/.test(candidate)) continue;
+    if (!candidate || !isSafeProjectPath(candidate)) continue;
     const sizeBytes = parseByteSize(line);
     if (sizeBytes !== null && sizeBytes > MAX_BINARY_BYTES && isBinaryFilePath(candidate)) continue;
     if (seen.has(candidate)) continue;
     seen.add(candidate);
-    paths.push(candidate);
-    if (paths.length >= MAX_PROJECT_FILES) break;
+    allPaths.push(candidate);
   }
 
-  return { typeName, paths };
+  const truncated = allPaths.length > MAX_PROJECT_FILES;
+  let paths = allPaths.slice(0, MAX_PROJECT_FILES);
+  if (truncated && seen.has("project/canvas.json") && !paths.includes("project/canvas.json")) {
+    paths = [...allPaths.slice(0, MAX_PROJECT_FILES - 1), "project/canvas.json"];
+  }
+
+  return { typeName, paths, truncated };
 }
 
 function parseLeadingJson(text: string): any {
@@ -654,6 +686,8 @@ function claudeDocsArgs(prompt: string): string[] {
     `ToolSearch,${DOCS_READ_TOOL},${DOCS_EXPORT_TOOL}`,
     "--permission-mode",
     "default",
+    "--setting-sources",
+    "project",
     "--output-format",
     "stream-json",
     "--verbose",
@@ -808,6 +842,9 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
       return saveError(id, "read_failed", outB.stderr.trim() || "Timed out reading Claude Docs after 90s.");
     }
     const parsedB = parseStreamOutput(outB.stdout);
+    if (parsedB.toolUses.some((t) => !ALLOWED_DOCS_TOOLS.has(t.name))) {
+      return saveError(id, "read_failed", DOCS_DISALLOWED_TOOL_ERROR);
+    }
     const rawB = [parsedB.finalResult?.text, ...parsedB.assistantTexts, outB.stderr.trim()]
       .filter(Boolean)
       .join("\n")
@@ -823,7 +860,11 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
       return saveError(id, "read_failed", DOCS_NOT_CONNECTED_ERROR);
     }
 
-    const readRes = parsedB.toolResults.find((r) => r.name === DOCS_READ_TOOL);
+    const readRes = parsedB.toolResults.find(
+      (r) =>
+        r.name === DOCS_READ_TOOL &&
+        (r.input?.ref?.id === docsId || r.input?.container?.id === docsId),
+    );
     if (!readRes) {
       const err = classify(rawB);
       recordErrorAccountState(err);
@@ -836,7 +877,12 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
     }
 
     const { title: docTitle, files: tabs } = parseDocsReadPayload(readRes.text);
-    const exportResults = parsedB.toolResults.filter((r) => r.name === DOCS_EXPORT_TOOL);
+    const exportResults = parsedB.toolResults.filter(
+      (r) =>
+        r.name === DOCS_EXPORT_TOOL &&
+        r.input?.container?.id === docsId &&
+        r.input?.format === "markdown",
+    );
     const failedExport = exportResults.find((r) => r.isError);
     if (failedExport && exportResults.every((r) => r.isError)) {
       const err = classify([failedExport.text, rawB].filter(Boolean).join("\n"));
@@ -856,17 +902,25 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
 
     const headingTitle = docTitle || header.title || existing?.title || "Untitled artifact";
     const sections: string[] = [`# ${headingTitle}`];
+    const failedTabNames: string[] = [];
     if (tabs.length > 0) {
       for (let i = 0; i < tabs.length; i++) {
         const tab = tabs[i]!;
         const md = byTabId.get(tab.id) ?? (byTabId.size === 0 ? orderedExports[i] : undefined);
         if (md !== undefined) {
           sections.push(`## ${tab.name}\n\n${md.trim()}`);
+        } else {
+          failedTabNames.push(tab.name);
         }
       }
     } else if (orderedExports.length > 0) {
       for (const md of orderedExports) {
         sections.push(md.trim());
+      }
+      for (const exp of exportResults) {
+        if (!exp.isError) continue;
+        const tabName = typeof exp.input?.file === "string" && exp.input.file.trim() ? exp.input.file.trim() : "unknown";
+        failedTabNames.push(tabName);
       }
     }
 
@@ -874,7 +928,15 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
       return saveError(id, "read_failed", "No exported markdown returned from Claude Docs.");
     }
 
-    const contentMd = truncateUtf8(`${sections.join("\n\n")}\n`, MAX_CONTENT_BYTES);
+    if (failedTabNames.length > 0) {
+      sections.push(`> Some tabs could not be read: ${failedTabNames.join(", ")}`);
+    }
+
+    const rawMd = `${sections.join("\n\n")}\n`;
+    const contentMd =
+      Buffer.byteLength(rawMd, "utf-8") > MAX_CONTENT_BYTES
+        ? `${truncateUtf8(rawMd, MAX_CONTENT_BYTES - Buffer.byteLength(CONTENT_TRUNCATED_NOTE, "utf-8"))}${CONTENT_TRUNCATED_NOTE}`
+        : rawMd;
     const mdPath = path.join(outDir, "content.md");
     fs.writeFileSync(mdPath, contentMd, "utf-8");
 
@@ -901,14 +963,25 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
   }
 
   const listed = parseFilesList(parsedList.artifactToolResult.text);
+  const safePaths = listed.paths.filter(isSafeProjectPath);
   const effectiveType = header.typeName ?? listed.typeName;
-  if (listed.paths.length === 0) {
+  if (safePaths.length === 0) {
     return saveError(id, "read_failed", "No project/ files found in artifact.");
   }
 
+  if (!ARTIFACT_ID_RE.test(id)) {
+    return saveError(id, "read_failed", "Invalid artifact id.");
+  }
   const filesDir = path.join(outDir, "files");
+  fs.rmSync(filesDir, { recursive: true, force: true });
   fs.mkdirSync(filesDir, { recursive: true });
-  const filesPrompt = `Use the Artifact tool once with action "read", url ${JSON.stringify(parsedUrl.url)}, paths ${JSON.stringify(listed.paths)}, out_dir ${JSON.stringify(filesDir)}. Then reply with the single word done.`;
+  const truncMarker = path.join(outDir, FILES_TRUNCATED_MARKER);
+  if (listed.truncated) {
+    fs.writeFileSync(truncMarker, "1", "utf-8");
+  } else {
+    fs.rmSync(truncMarker, { force: true });
+  }
+  const filesPrompt = `Use the Artifact tool once with action "read", url ${JSON.stringify(parsedUrl.url)}, paths ${JSON.stringify(safePaths)}, out_dir ${JSON.stringify(filesDir)}. Then reply with the single word done.`;
   const outFiles = await runClaude(bin ?? "claude", claudeArtifactArgs(filesPrompt), filesDir, READ_TIMEOUT_MS);
   const parsedFiles = parseStreamOutput(outFiles.stdout);
   if (outFiles.timedOut || !parsedFiles.artifactToolResult || parsedFiles.artifactToolResult.isError) {
