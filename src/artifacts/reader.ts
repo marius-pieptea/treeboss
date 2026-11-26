@@ -6,7 +6,7 @@ import { ENGINES, resolveBinary } from "../engines/registry";
 import { shimInvocation } from "../engines/win-shim";
 import { home } from "../paths";
 import { DETACH_GROUP, killTree } from "../proctree";
-import { artifactIdFromUrl } from "./capture";
+import { ARTIFACT_ID_RE, artifactIdFromUrl, parseArtifactUrl } from "./capture";
 import { getArtifact, saveError, saveRead } from "./store";
 import {
   MIN_CLAUDE_VERSION,
@@ -50,7 +50,13 @@ const VERSION_TIMEOUT_MS = 10_000;
 const VERSION_CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_CONCURRENT_READS = 2;
 const MAX_SUMMARY_CHARS = 2000;
+const MAX_PROMPT_CHARS = 500;
+const DEFAULT_READ_PROMPT = "Summarize this artifact in 3 sentences: what it is and what it contains.";
 const LIST_LINE_RE = /^- \((mine|shared)\) (.+?) — (https:\/\/claude\.ai\/\S+) — updated (.+)$/;
+
+const NOT_SIGNED_IN_RE = /\bnot (?:logged|signed) in\b|\/login\b|\bunauthenticated\b|\b401\b/i;
+const NO_ACCESS_RE = /\b403\b|\b404\b|not authorized|forbidden|not found|no access/i;
+const NO_PLAN_RE = /\b(plan|subscription)\b.*\b(not|doesn't|does not)\b|upgrade/i;
 
 let customSpawner: ClaudeSpawner | null = null;
 let versionCache: { value: string | null; checkedAt: number } | null = null;
@@ -128,12 +134,20 @@ async function defaultClaudeSpawner(input: SpawnInput): Promise<SpawnOutput> {
     let stderr = "";
     let timedOut = false;
     let settled = false;
+    let killTimer: ReturnType<typeof setTimeout> | null = null;
     const timer = setTimeout(() => {
       timedOut = true;
       killTree(child.pid, "SIGTERM");
-      setTimeout(() => killTree(child.pid, "SIGKILL"), 1500).unref?.();
+      killTimer = setTimeout(() => killTree(child.pid, "SIGKILL"), 1500);
+      killTimer.unref?.();
     }, input.timeoutMs);
     timer.unref?.();
+
+    const clearTimers = () => {
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+    };
+
     child.stdout?.on("data", (d: Buffer) => {
       stdout += d.toString("utf-8");
     });
@@ -143,13 +157,13 @@ async function defaultClaudeSpawner(input: SpawnInput): Promise<SpawnOutput> {
     child.on("error", (err) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      clearTimers();
       resolve({ exitCode: 1, stdout, stderr: stderr || String(err?.message ?? err), timedOut });
     });
     child.on("close", (code) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      clearTimers();
       resolve({ exitCode: code, stdout, stderr, timedOut });
     });
   });
@@ -194,25 +208,16 @@ export async function claudeVersion(): Promise<string | null> {
 
 /** Classify a raw error message from Claude Code / claude.ai into an ArtifactError. */
 export function classify(text: string, opts?: { toolMissing?: boolean }): ArtifactError {
-  if (/login|auth|not logged in|not signed in|\/login/i.test(text)) return "not_signed_in";
-  if (/plan|subscription|upgrade/i.test(text)) return "no_plan";
-  if (
-    opts?.toolMissing ||
-    /artifact\s*tool.*(?:missing|unavailable|not available|not found|don't have|do not have|cannot|no )|no (?:such )?tool.*artifact|unknown tool.*artifact|missing.*artifact\s*tool/i.test(
-      text,
-    )
-  ) {
-    return "too_old";
-  }
-  if (/403|404|not found|access|permission/i.test(text)) return "no_access";
+  if (NOT_SIGNED_IN_RE.test(text)) return "not_signed_in";
+  if (opts?.toolMissing) return "too_old";
+  if (NO_ACCESS_RE.test(text)) return "no_access";
+  if (NO_PLAN_RE.test(text)) return "no_plan";
   return "read_failed";
 }
 
-function updateAccountState(err: ArtifactError | null): void {
+function recordErrorAccountState(err: ArtifactError): void {
   if (err === "not_signed_in" || err === "no_plan" || err === "too_old") {
     accountState = err;
-  } else {
-    accountState = "ok";
   }
 }
 
@@ -315,21 +320,63 @@ function parseStreamOutput(stdout: string): ParsedStream {
   return { initTools, artifactToolIds, toolResult, assistantTexts, finalResult };
 }
 
-async function withReadSlot<T>(fn: () => Promise<T>): Promise<T> {
-  if (activeReads >= MAX_CONCURRENT_READS) {
-    await new Promise<void>((resolve) => waitQueue.push(resolve));
+async function acquireSlot(): Promise<void> {
+  if (activeReads < MAX_CONCURRENT_READS) {
+    activeReads++;
+    return;
   }
-  activeReads++;
-  try {
-    return await fn();
-  } finally {
+  await new Promise<void>((resolve) => waitQueue.push(resolve));
+}
+
+function releaseSlot(): void {
+  const next = waitQueue.shift();
+  if (next) {
+    next();
+  } else {
     activeReads--;
-    const next = waitQueue.shift();
-    if (next) next();
   }
 }
 
+async function withReadSlot<T>(fn: () => Promise<T>): Promise<T> {
+  await acquireSlot();
+  try {
+    return await fn();
+  } finally {
+    releaseSlot();
+  }
+}
+
+function sanitizePrompt(raw?: string): string {
+  const clean = (raw ?? "").replace(/[\x00-\x1f]/g, "").trim().slice(0, MAX_PROMPT_CHARS);
+  return clean || DEFAULT_READ_PROMPT;
+}
+
+function claudeArtifactArgs(prompt: string): string[] {
+  return [
+    "-p",
+    "--tools",
+    "Artifact",
+    "--allowedTools",
+    "Artifact",
+    "--strict-mcp-config",
+    "--permission-mode",
+    "bypassPermissions",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    prompt,
+  ];
+}
+
 async function executeRead(id: string, url: string, opts?: { prompt?: string }): Promise<Artifact | null> {
+  if (!ARTIFACT_ID_RE.test(id)) {
+    return saveError(id, "read_failed", "Invalid artifact id.");
+  }
+  const parsedUrl = parseArtifactUrl(url);
+  if (!parsedUrl || parsedUrl.id !== id) {
+    return saveError(id, "read_failed", "Invalid artifact URL.");
+  }
+
   const version = await claudeVersion();
   if (version !== null && isVersionTooOld(version, MIN_CLAUDE_VERSION)) {
     accountState = "too_old";
@@ -338,26 +385,18 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
 
   const bin = resolveBinary(ENGINES.claude);
   if (!bin && !customSpawner) {
-    accountState = "ok";
     return saveError(id, "read_failed", "Claude Code is not installed.");
   }
 
   const outDir = path.join(home(), "artifacts", id);
   fs.mkdirSync(outDir, { recursive: true });
 
-  const summaryPrompt =
-    opts?.prompt?.trim() || "Summarize this artifact in 3 sentences: what it is and what it contains.";
-  const prompt = `Use the Artifact tool once with action "read", url "${url}", path "index.html", out_dir "${outDir}", prompt ${JSON.stringify(summaryPrompt)} Then reply with the single word done.`;
+  const summaryPrompt = sanitizePrompt(opts?.prompt);
+  const prompt = `Use the Artifact tool once with action "read", url ${JSON.stringify(parsedUrl.url)}, path "index.html", out_dir ${JSON.stringify(outDir)}, prompt ${JSON.stringify(summaryPrompt)} Then reply with the single word done.`;
 
-  const out = await runClaude(
-    bin ?? "claude",
-    ["-p", "--permission-mode", "bypassPermissions", "--output-format", "stream-json", "--verbose", prompt],
-    outDir,
-    READ_TIMEOUT_MS,
-  );
+  const out = await runClaude(bin ?? "claude", claudeArtifactArgs(prompt), outDir, READ_TIMEOUT_MS);
 
   if (out.timedOut) {
-    accountState = "ok";
     return saveError(id, "read_failed", out.stderr.trim() || "Timed out reading artifact after 90s.");
   }
 
@@ -365,7 +404,7 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
   if (parsed.toolResult) {
     if (parsed.toolResult.isError) {
       const err = classify(parsed.toolResult.text);
-      updateAccountState(err);
+      recordErrorAccountState(err);
       return saveError(id, err, parsed.toolResult.text);
     }
     const htmlPath = path.join(outDir, "index.html");
@@ -381,11 +420,9 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
     .filter(Boolean)
     .join("\n")
     .trim();
-  const toolMissing =
-    (parsed.initTools !== null && !parsed.initTools.includes("Artifact")) ||
-    (parsed.artifactToolIds.size === 0 && (out.exitCode === 0 || /artifact/i.test(raw)));
+  const toolMissing = parsed.initTools !== null && !parsed.initTools.includes("Artifact");
   const err = classify(raw, { toolMissing });
-  updateAccountState(err);
+  recordErrorAccountState(err);
   return saveError(id, err, raw || "Failed to read artifact.");
 }
 
@@ -394,6 +431,7 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
  * Only one read runs per artifact id at a time, and at most 2 reads run concurrently overall.
  */
 export async function readArtifact(id: string, opts?: { prompt?: string }): Promise<Artifact | null> {
+  if (!ARTIFACT_ID_RE.test(id)) return null;
   if (inFlightById.has(id)) throw new AlreadyReadingError();
   const existing = getArtifact(id);
   if (!existing) return null;
@@ -421,22 +459,16 @@ export async function listAccount(): Promise<{ account: AccountInfo; updated: nu
   }
 
   const prompt = 'Use the Artifact tool once with action "list". Reply with its output verbatim.';
-  const out = await runClaude(
-    bin ?? "claude",
-    ["-p", "--permission-mode", "bypassPermissions", "--output-format", "stream-json", "--verbose", prompt],
-    home(),
-    READ_TIMEOUT_MS,
-  );
+  const out = await runClaude(bin ?? "claude", claudeArtifactArgs(prompt), home(), READ_TIMEOUT_MS);
 
   if (out.timedOut) {
-    accountState = "ok";
     return { account: getAccount(), updated: 0 };
   }
 
   const parsed = parseStreamOutput(out.stdout);
   if (parsed.toolResult) {
     if (parsed.toolResult.isError) {
-      updateAccountState(classify(parsed.toolResult.text));
+      recordErrorAccountState(classify(parsed.toolResult.text));
       return { account: getAccount(), updated: 0 };
     }
 
@@ -468,9 +500,7 @@ export async function listAccount(): Promise<{ account: AccountInfo; updated: nu
     .filter(Boolean)
     .join("\n")
     .trim();
-  const toolMissing =
-    (parsed.initTools !== null && !parsed.initTools.includes("Artifact")) ||
-    (parsed.artifactToolIds.size === 0 && (out.exitCode === 0 || /artifact/i.test(raw)));
-  updateAccountState(classify(raw, { toolMissing }));
+  const toolMissing = parsed.initTools !== null && !parsed.initTools.includes("Artifact");
+  recordErrorAccountState(classify(raw, { toolMissing }));
   return { account: getAccount(), updated: 0 };
 }

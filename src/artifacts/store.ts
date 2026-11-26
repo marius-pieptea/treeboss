@@ -1,6 +1,9 @@
+import fs from "fs";
+import path from "path";
 import { db } from "../db";
+import { home } from "../paths";
 import { UserError } from "../util";
-import { artifactIdFromUrl, intentFromPath } from "./capture";
+import { ARTIFACT_ID_RE, intentFromPath, parseArtifactUrl } from "./capture";
 import type { Artifact, ArtifactError, ArtifactIntent, ArtifactOwner } from "./types";
 
 interface ArtifactRow {
@@ -62,8 +65,9 @@ export function recordPublished(input: {
   filePath: string;
   sessionId?: string | null;
 }): Artifact {
-  const id = artifactIdFromUrl(input.url);
-  if (!id) throw new UserError(`Invalid artifact URL: ${input.url}`);
+  const parsed = parseArtifactUrl(input.url);
+  if (!parsed) throw new UserError(`Invalid artifact URL: ${input.url}`);
+  const { id, url } = parsed;
   const now = Date.now();
   const title = (input.title || "").trim() || "Untitled artifact";
   const intent = intentFromPath(input.filePath || "", title);
@@ -86,16 +90,16 @@ export function recordPublished(input: {
          error = NULL,
          error_text = NULL`,
     )
-    .run(id, input.url.trim(), title, intent, sessionId, now);
+    .run(id, url, title, intent, sessionId, now);
 
   return getArtifactAny(id)!;
 }
 
 /** Add a pasted claude.ai artifact link, restoring it if it was soft-removed. */
 export function addPasted(url: string): Artifact {
-  const trimmed = url.trim();
-  const id = artifactIdFromUrl(trimmed);
-  if (!id) throw new UserError("Paste a link that starts with claude.ai/artifact/.");
+  const parsed = parseArtifactUrl(url);
+  if (!parsed) throw new UserError("Paste a link that starts with claude.ai/artifact/.");
+  const { id, url: canonicalUrl } = parsed;
 
   const existing = db().prepare("SELECT id, removed_at FROM artifacts WHERE id = ?").get(id) as
     | { id: string; removed_at: number | null }
@@ -112,7 +116,7 @@ export function addPasted(url: string): Artifact {
       `INSERT INTO artifacts (id, url, title, intent, owner, source, created_at)
        VALUES (?, ?, ?, 'other', 'unknown', 'pasted', ?)`,
     )
-    .run(id, trimmed, "Untitled artifact", Date.now());
+    .run(id, canonicalUrl, "Untitled artifact", Date.now());
 
   return getArtifact(id)!;
 }
@@ -147,12 +151,20 @@ export function restore(id: string): Artifact | null {
   return getArtifact(id);
 }
 
-/** Permanently delete rows soft-removed at least `olderThanMs` ago. */
+/** Permanently delete rows soft-removed at least `olderThanMs` ago and remove their local directories. */
 export function purgeRemoved(olderThanMs: number): number {
   const cutoff = Date.now() - olderThanMs;
+  const rows = db()
+    .prepare("SELECT id FROM artifacts WHERE removed_at IS NOT NULL AND removed_at <= ?")
+    .all(cutoff) as Array<{ id: string }>;
+  if (rows.length === 0) return 0;
   const res = db()
     .prepare("DELETE FROM artifacts WHERE removed_at IS NOT NULL AND removed_at <= ?")
     .run(cutoff);
+  for (const { id } of rows) {
+    if (!ARTIFACT_ID_RE.test(id)) continue;
+    fs.rmSync(path.join(home(), "artifacts", id), { recursive: true, force: true });
+  }
   return res.changes;
 }
 

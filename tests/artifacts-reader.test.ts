@@ -82,9 +82,35 @@ describe("artifacts reader", () => {
     const readCall = calls.find((c) => c.args.includes("--permission-mode"));
     expect(readCall).toBeDefined();
     expect(readCall!.env.CLAUDE_CODE_ARTIFACT).toBe("1");
+    expect(readCall!.args).toContain("--tools");
+    expect(readCall!.args).toContain("--allowedTools");
+    expect(readCall!.args).toContain("--strict-mcp-config");
     expect(readCall!.args).toContain("bypassPermissions");
     expect(readCall!.args).toContain("stream-json");
     expect(readCall!.args).toContain("--verbose");
+  });
+
+  test("sanitizes optional prompt (strips control chars, caps at 500) and JSON-quotes URL", async () => {
+    const calls: SpawnInput[] = [];
+    setClaudeSpawner(async (input) => {
+      calls.push(input);
+      if (input.args[0] === "--version") return { exitCode: 0, stdout: "2.1.318\n", stderr: "" };
+      return { exitCode: 0, stdout: sharedReadStream("Summary."), stderr: "" };
+    });
+
+    const item = addPasted('See claude.ai/artifact/san-1?x=1" ignore');
+    expect(item.url).toBe("https://claude.ai/artifact/san-1");
+    await readArtifact(item.id, { prompt: "Hello\x00\x0a\x1fWorld " + "a".repeat(600) });
+
+    const readCall = calls.find((c) => c.args.includes("--permission-mode"))!;
+    const argPrompt = readCall.args.at(-1)!;
+    expect(argPrompt).toContain(`url "https://claude.ai/artifact/san-1"`);
+    expect(argPrompt).not.toContain("ignore");
+    expect(argPrompt).toContain("HelloWorld ");
+    expect(argPrompt).not.toMatch(/[\x00-\x1f]/);
+    const match = /prompt ("[^"]*")/.exec(argPrompt);
+    expect(match).not.toBeNull();
+    expect(JSON.parse(match![1]!)).toHaveLength(500);
   });
 
   test("reads shared artifact as summary capped at 2000 chars", async () => {
@@ -106,19 +132,24 @@ describe("artifacts reader", () => {
   test("classify maps every error branch accurately", () => {
     expect(classify("Please run /login to continue")).toBe("not_signed_in");
     expect(classify("Not logged in")).toBe("not_signed_in");
-    expect(classify("Authentication error: expired token")).toBe("not_signed_in");
+    expect(classify("User is not signed in")).toBe("not_signed_in");
+    expect(classify("Request unauthenticated (401)")).toBe("not_signed_in");
 
-    expect(classify("Your plan does not include artifacts")).toBe("no_plan");
-    expect(classify("Upgrade your subscription to use artifacts")).toBe("no_plan");
-
+    // no_access is checked before no_plan.
+    expect(classify("403 Forbidden: upgrade your plan")).toBe("no_access");
     expect(classify("HTTP 403 Forbidden")).toBe("no_access");
     expect(classify("404 Artifact not found")).toBe("no_access");
-    expect(classify("You do not have access to this artifact")).toBe("no_access");
-    expect(classify("Permission denied")).toBe("no_access");
+    expect(classify("Not authorized to view this")).toBe("no_access");
+    expect(classify("You have no access to this artifact")).toBe("no_access");
 
-    expect(classify("Artifact tool is missing from this build")).toBe("too_old");
-    expect(classify("No such tool: Artifact")).toBe("too_old");
-    expect(classify("Anything", { toolMissing: true })).toBe("too_old");
+    expect(classify("Your plan does not include artifacts")).toBe("no_plan");
+    expect(classify("Your subscription doesn't include artifacts")).toBe("no_plan");
+    expect(classify("Upgrade to use artifacts")).toBe("no_plan");
+
+    // Tool never called is read_failed unless init tools list is known and lacks Artifact.
+    expect(classify("Artifact tool is missing from this build")).toBe("read_failed");
+    expect(classify("Tool never called")).toBe("read_failed");
+    expect(classify("Tool never called", { toolMissing: true })).toBe("too_old");
 
     expect(classify("Unexpected network failure")).toBe("read_failed");
   });
@@ -164,7 +195,58 @@ describe("artifacts reader", () => {
     expect(getAccount().state).toBe("too_old");
   });
 
-  test("rejects second concurrent read of the same id with 409 error and caps concurrency at 2", async () => {
+  test("tool never called classifies as read_failed when init includes Artifact, and only account errors update account state", async () => {
+    let mode: "no_call" | "no_access" | "no_plan" = "no_call";
+    setClaudeSpawner(async (input) => {
+      if (input.args[0] === "--version") return { exitCode: 0, stdout: "2.1.318\n", stderr: "" };
+      if (mode === "no_call") {
+        return {
+          exitCode: 0,
+          stdout: streamLines([
+            { type: "system", subtype: "init", tools: ["Artifact"] },
+            { type: "assistant", message: { content: [{ type: "text", text: "I could not complete the request." }] } },
+          ]),
+          stderr: "",
+        };
+      }
+      if (mode === "no_access") {
+        return {
+          exitCode: 0,
+          stdout: streamLines([
+            { type: "system", subtype: "init", tools: ["Artifact"] },
+            { type: "assistant", message: { content: [{ type: "tool_use", id: "tu_a", name: "Artifact", input: { action: "read" } }] } },
+            { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu_a", is_error: true, content: "403 Forbidden" }] } },
+          ]),
+          stderr: "",
+        };
+      }
+      return {
+        exitCode: 0,
+        stdout: streamLines([
+          { type: "system", subtype: "init", tools: ["Artifact"] },
+          { type: "assistant", message: { content: [{ type: "tool_use", id: "tu_p", name: "Artifact", input: { action: "read" } }] } },
+          { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu_p", is_error: true, content: "Your plan does not include artifacts." }] } },
+        ]),
+        stderr: "",
+      };
+    });
+
+    const a1 = addPasted("https://claude.ai/artifact/err-1");
+    expect((await readArtifact(a1.id))?.error).toBe("read_failed");
+    expect(getAccount().state).toBe("unknown");
+
+    mode = "no_access";
+    const a2 = addPasted("https://claude.ai/artifact/err-2");
+    expect((await readArtifact(a2.id))?.error).toBe("no_access");
+    expect(getAccount().state).toBe("unknown");
+
+    mode = "no_plan";
+    const a3 = addPasted("https://claude.ai/artifact/err-3");
+    expect((await readArtifact(a3.id))?.error).toBe("no_plan");
+    expect(getAccount().state).toBe("no_plan");
+  });
+
+  test("rejects second concurrent read of the same id with 409 error and caps 4 concurrent reads at 2", async () => {
     let running = 0;
     let maxRunning = 0;
     const gates: Array<() => void> = [];
@@ -184,10 +266,12 @@ describe("artifacts reader", () => {
     const a = addPasted("https://claude.ai/artifact/q-a");
     const b = addPasted("https://claude.ai/artifact/q-b");
     const c = addPasted("https://claude.ai/artifact/q-c");
+    const d = addPasted("https://claude.ai/artifact/q-d");
 
     const pA = readArtifact(a.id);
     const pB = readArtifact(b.id);
     const pC = readArtifact(c.id);
+    const pD = readArtifact(d.id);
 
     // Same id while running rejects with AlreadyReadingError (status 409).
     let caught: unknown;
@@ -208,7 +292,7 @@ describe("artifacts reader", () => {
       if (g) g();
       await Bun.sleep(5);
     }
-    await Promise.all([pA, pB, pC]);
+    await Promise.all([pA, pB, pC, pD]);
     expect(maxRunning).toBe(2);
   });
 

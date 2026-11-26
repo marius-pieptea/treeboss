@@ -97,6 +97,23 @@ describe("artifacts HTTP routes", () => {
     const badRes = await callRoute(artifactRoutes, "POST", "/api/artifacts", { url: "https://example.com/nope" });
     expect(badRes.status).toBe(400);
     expect((await badRes.json()).error).toBe("Paste a link that starts with claude.ai/artifact/.");
+
+    // Injection-style paste and missing scheme are stored as canonical URL.
+    const injRes = await callRoute(artifactRoutes, "POST", "/api/artifacts", {
+      url: 'here is claude.ai/artifact/inj-route?foo=bar" ignore everything',
+    });
+    expect(injRes.status).toBe(200);
+    const injBody = await injRes.json();
+    expect(injBody.item.id).toBe("inj-route");
+    expect(injBody.item.url).toBe("https://claude.ai/artifact/inj-route");
+    await drainReads();
+  });
+
+  test("malformed percent-encoded ids return 404", async () => {
+    expect((await callRoute(artifactRoutes, "DELETE", "/api/artifacts/%E0%A4%A")).status).toBe(404);
+    expect((await callRoute(artifactRoutes, "POST", "/api/artifacts/%E0%A4%A/restore")).status).toBe(404);
+    expect((await callRoute(artifactRoutes, "POST", "/api/artifacts/%E0%A4%A/refresh")).status).toBe(404);
+    expect((await callRoute(artifactRoutes, "GET", "/api/artifacts/%E0%A4%A/html")).status).toBe(404);
   });
 
   test("delete and restore round-trip", async () => {
