@@ -38,11 +38,21 @@ import { HttpError, json, makeCtx, safeEqual, type Ctx, type RouteModule } from 
 const UNDO_KEEP_MS = 35_000;
 const CLAUDE_CHAT_RE = /(?:https:\/\/|(?<![A-Za-z0-9.:/-]))claude\.ai\/chat(?:\/|$|\?|#)/i;
 const ARTIFACT_VIEW_PATH_RE = /^\/api\/artifacts\/[A-Za-z0-9-]+\/f\/[0-9a-f]{32}\//;
+const ARTIFACT_VIEW_TOKEN_REDACT_RE = /^(\/api\/artifacts\/[^/]+\/f\/)[0-9a-f]{32}(\/)/;
 const BLOB_NO_EXT_RE = /^_blob\/([0-9a-f]{32})$/;
 const ASSET_ID_RE = /^[0-9a-f]{32}$/;
 
 /** The capability-URL path shape admitted without owner auth in server.ts. */
 export const isArtifactViewPath = (pathname: string): boolean => ARTIFACT_VIEW_PATH_RE.test(pathname);
+
+/** Redact the 32-hex capability view token in artifact file URLs before logging. */
+export const redactArtifactToken = (pathname: string): string =>
+  pathname.replace(ARTIFACT_VIEW_TOKEN_REDACT_RE, "$1<token>$2");
+
+const CAPABILITY_SECURITY_HEADERS = {
+  "referrer-policy": "no-referrer",
+  "x-content-type-options": "nosniff",
+} as const;
 
 const HTML_HEADERS = {
   "content-type": "text/html; charset=utf-8",
@@ -149,7 +159,25 @@ function rewriteBlobUrls(html: string, id: string, token: string): string {
     .replace(/url\(\s*\/_blob\//g, `url(${blobBase}`);
 }
 
-function serveCapabilityView(c: Ctx, id: string, token: string, rawRest: string): Response {
+function capabilityNotFound(method: string, message = "File not found."): Response {
+  return new Response(method === "HEAD" ? null : JSON.stringify({ error: message }), {
+    status: 404,
+    headers: {
+      "content-type": "application/json",
+      ...CAPABILITY_SECURITY_HEADERS,
+    },
+  });
+}
+
+function serveCapabilityView(c: Ctx, rawId: string, token: string, rawRest: string): Response {
+  let id: string;
+  try {
+    id = decodeId(rawId);
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) return capabilityNotFound(c.method, err.message);
+    throw err;
+  }
+
   const item = getArtifact(id);
   const expected = getArtifactViewToken(id);
   if (
@@ -160,14 +188,14 @@ function serveCapabilityView(c: Ctx, id: string, token: string, rawRest: string)
     !safeEqual(token, expected) ||
     !fs.existsSync(item.contentPath)
   ) {
-    throw new HttpError(404, "File not found.");
+    return capabilityNotFound(c.method);
   }
 
   let rel: string;
   try {
     rel = decodeURIComponent(rawRest);
   } catch {
-    throw new HttpError(404, "File not found.");
+    return capabilityNotFound(c.method);
   }
 
   let target: string | null = null;
@@ -177,13 +205,18 @@ function serveCapabilityView(c: Ctx, id: string, token: string, rawRest: string)
     target = resolveBlobAssetFile(item.contentPath, blobMatch[1]!);
   }
   if (!target) {
-    target = resolveArtifactFile(item.contentPath, rel);
+    try {
+      target = resolveArtifactFile(item.contentPath, rel);
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 404) return capabilityNotFound(c.method, err.message);
+      throw err;
+    }
   }
 
   const ext = path.extname(target).toLowerCase();
   const headers: Record<string, string> = {
     "access-control-allow-origin": "*",
-    "x-content-type-options": "nosniff",
+    ...CAPABILITY_SECURITY_HEADERS,
     "cache-control": "no-store",
   };
 
@@ -215,8 +248,8 @@ function serveCapabilityView(c: Ctx, id: string, token: string, rawRest: string)
 /** Direct handler for capability-URL artifact file requests (called before owner auth in server.ts). */
 export async function serveArtifactView(req: Request, url: URL): Promise<Response> {
   const m = /^\/api\/artifacts\/([^/]+)\/f\/([^/]+)\/(.*)$/.exec(url.pathname);
-  if (!m) throw new HttpError(404, "File not found.");
-  return serveCapabilityView(makeCtx(req, url, {}), decodeId(m[1]!), m[2]!, m[3]!);
+  if (!m) return capabilityNotFound(req.method);
+  return serveCapabilityView(makeCtx(req, url, {}), m[1]!, m[2]!, m[3]!);
 }
 
 function decodeId(raw: string): string {
@@ -330,7 +363,7 @@ export const artifactRoutes: RouteModule = async (c: Ctx) => {
   }
 
   if ((m = c.match(/^\/api\/artifacts\/([^/]+)\/f\/([^/]+)\/(.*)$/)) && (c.method === "GET" || c.method === "HEAD")) {
-    return serveCapabilityView(c, decodeId(m[1]!), m[2]!, m[3]!);
+    return serveCapabilityView(c, m[1]!, m[2]!, m[3]!);
   }
 
   if ((m = c.match(/^\/api\/artifacts\/([^/]+)\/file$/)) && c.method === "GET") {

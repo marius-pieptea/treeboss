@@ -46,7 +46,7 @@ import { signalsRoutes, isPublicSignalsPath, feedbackIntake } from "./routes/sig
 import { memoryRoutes } from "./routes/memory";
 import { practicesRoutes } from "./routes/practices";
 import { evidenceRoutes } from "./routes/evidence";
-import { artifactRoutes, isArtifactViewPath, serveArtifactView } from "./routes/artifacts";
+import { artifactRoutes, isArtifactViewPath, redactArtifactToken, serveArtifactView } from "./routes/artifacts";
 import { reaRoutes } from "./routes/rea";
 import { scaffoldRoutes } from "./routes/scaffold";
 import { designFoldRoutes, designRoutes } from "./routes/design";
@@ -78,7 +78,7 @@ import { SessionError } from "../sessions/manager";
 import { UserError } from "../util";
 import { onSettingChanged } from "../settings";
 
-export { VERSION, isArtifactViewPath };
+export { VERSION, isArtifactViewPath, redactArtifactToken };
 
 export interface ServerOptions {
   port: number;
@@ -234,7 +234,7 @@ export function startServer(opts: ServerOptions) {
         if (err instanceof GitError) return json({ error: err.message, detail: err.stderr || undefined }, err.status);
         if (err instanceof SessionError || err instanceof UserError) return json({ error: err.message }, 400);
         if (err instanceof ConflictError) return json({ error: err.message, conflict: true, mtime: err.mtime }, 409);
-        console.error(`[trb] ${req.method} ${url.pathname}:`, err);
+        console.error(`[trb] ${req.method} ${redactArtifactToken(url.pathname)}:`, err);
         return json({ error: err?.message ?? "Internal error." }, 500);
       }
     }),

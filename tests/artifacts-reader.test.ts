@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 import { db } from "../src/db";
 import { home } from "../src/paths";
-import { addPasted, getArtifact, recordPublished } from "../src/artifacts/store";
+import { addPasted, getArtifact, listArtifactFiles, recordPublished } from "../src/artifacts/store";
 import {
   AlreadyReadingError,
   claudeVersion,
@@ -1338,5 +1338,76 @@ describe("artifacts reader", () => {
     expect(batchCall.args.at(-1)!).toContain("batch 2:");
     const assetCall = calls.find((c) => c.args.at(-1)!.includes(assetPng))!;
     expect(assetCall.args.at(-1)!).not.toContain(badAsset);
+  });
+
+  test("enforces on-disk project caps in finally even when a download batch throws, keeping canvas.json and support.js", async () => {
+    setClaudeSpawner(async (input) => {
+      if (input.args[0] === "--version") return { exitCode: 0, stdout: "2.1.318\n", stderr: "" };
+      const prompt = input.args.at(-1)!;
+      if (prompt.includes('action "list"')) {
+        return {
+          exitCode: 0,
+          stdout: streamLines([
+            { type: "system", subtype: "init", tools: ["Artifact"] },
+            { type: "assistant", message: { content: [{ type: "tool_use", id: "tu_l", name: "Artifact", input: { action: "list", scope: "files" } }] } },
+            {
+              type: "user",
+              message: {
+                content: [
+                  {
+                    type: "tool_result",
+                    tool_use_id: "tu_l",
+                    is_error: false,
+                    content: '- project/canvas.json (10 bytes)\n- project/support.js (10 bytes)',
+                  },
+                ],
+              },
+            },
+          ]),
+          stderr: "",
+        };
+      }
+      if (prompt.includes("paths ")) {
+        const projDir = path.join(input.cwd, "project");
+        fs.mkdirSync(projDir, { recursive: true });
+        fs.writeFileSync(path.join(projDir, "canvas.json"), '{"v":1}', "utf-8");
+        fs.writeFileSync(path.join(projDir, "support.js"), "/* runtime */", "utf-8");
+        for (let i = 0; i < 305; i++) {
+          fs.writeFileSync(path.join(projDir, `board-${String(i).padStart(3, "0")}.dc.html`), `<div>${i}</div>`, "utf-8");
+        }
+        throw new Error("simulated batch failure");
+      }
+      return {
+        exitCode: 0,
+        stdout: streamLines([
+          { type: "system", subtype: "init", tools: ["Artifact"] },
+          { type: "assistant", message: { content: [{ type: "tool_use", id: "tu_a", name: "Artifact", input: { action: "read" } }] } },
+          {
+            type: "user",
+            message: {
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: "tu_a",
+                  is_error: false,
+                  content: 'Artifact aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee (version 1) — owned by you, private\nan Artifact of type "Design"',
+                },
+              ],
+            },
+          },
+        ]),
+        stderr: "",
+      };
+    });
+
+    const item = addPasted("https://claude.ai/artifact/cap-throw");
+    await expect(readArtifact(item.id)).rejects.toThrow("simulated batch failure");
+
+    const filesDir = path.join(home(), "artifacts", "cap-throw", "files");
+    const onDisk = listArtifactFiles(filesDir);
+    expect(onDisk.length).toBeLessThanOrEqual(300);
+    expect(onDisk.reduce((sum, f) => sum + f.size, 0)).toBeLessThanOrEqual(60 * 1024 * 1024);
+    expect(onDisk.some((f) => f.path === "project/canvas.json")).toBe(true);
+    expect(onDisk.some((f) => f.path === "project/support.js")).toBe(true);
   });
 });

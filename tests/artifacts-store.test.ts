@@ -233,5 +233,14 @@ describe("artifacts store", () => {
 
     expect(markRemoved(pasted.id)).toBe(true);
     expect(getArtifactViewToken(pasted.id)).toBeNull();
+    const removedRow = db().prepare("SELECT view_token FROM artifacts WHERE id = ?").get(pasted.id) as { view_token: string | null };
+    expect(removedRow.view_token).toMatch(/^[0-9a-f]{32}$/);
+    expect(removedRow.view_token).not.toBe(token);
+
+    expect(restore(pasted.id)).not.toBeNull();
+    const restoredToken = getArtifactViewToken(pasted.id);
+    expect(restoredToken).toMatch(/^[0-9a-f]{32}$/);
+    expect(restoredToken).not.toBe(token);
+    expect(restoredToken).not.toBe(removedRow.view_token);
   });
 });

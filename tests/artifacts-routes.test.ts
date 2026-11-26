@@ -6,7 +6,7 @@ import { home } from "../src/paths";
 import { HttpError, makeCtx, type RouteModule } from "../src/daemon/http";
 import { artifactRoutes } from "../src/daemon/routes/artifacts";
 import { coreRoutes } from "../src/daemon/routes/core";
-import { isArtifactViewPath, startServer } from "../src/daemon/server";
+import { isArtifactViewPath, redactArtifactToken, startServer } from "../src/daemon/server";
 import { drainReads, setClaudeSpawner } from "../src/artifacts/reader";
 import { addPasted, getArtifact, getArtifactViewToken, saveRead } from "../src/artifacts/store";
 import { createLead, interruptAll } from "../src/sessions/manager";
@@ -377,6 +377,19 @@ describe("artifacts HTTP routes", () => {
     expect(isArtifactViewPath(`/api/artifacts/des-1/files`)).toBe(false);
   });
 
+  test("redactArtifactToken replaces 32-hex capability token and leaves other paths unchanged", () => {
+    const tok = "0123456789abcdef0123456789abcdef";
+    expect(redactArtifactToken(`/api/artifacts/des-1/f/${tok}/project/Main.dc.html`)).toBe(
+      "/api/artifacts/des-1/f/<token>/project/Main.dc.html",
+    );
+    expect(redactArtifactToken(`/api/artifacts/des-1/f/${tok}/`)).toBe("/api/artifacts/des-1/f/<token>/");
+    expect(redactArtifactToken("/api/artifacts/des-1/files")).toBe("/api/artifacts/des-1/files");
+    expect(redactArtifactToken(`/api/artifacts/des-1/f/${tok}`)).toBe(`/api/artifacts/des-1/f/${tok}`);
+    expect(redactArtifactToken("/api/artifacts/des-1/f/not-32-hex/a.html")).toBe(
+      "/api/artifacts/des-1/f/not-32-hex/a.html",
+    );
+  });
+
   test("files base token, capability view route, /_blob/ rewrite, _blob extension mapping, and server auth bypass", async () => {
     const assetA = "408e71730f86fb3635996d96af317642";
     const assetB = "4a8fa5bdf99ae45cf0dbe52b28517ce2";
@@ -410,6 +423,7 @@ describe("artifacts HTTP routes", () => {
     ].join("");
     fs.writeFileSync(path.join(projDir, "Main.dc.html"), boardHtml, "utf-8");
     fs.writeFileSync(path.join(projDir, "support.js"), "console.log('dc');", "utf-8");
+    fs.writeFileSync(path.join(projDir, "canvas.json"), '{"title":"PetComplete"}', "utf-8");
     fs.writeFileSync(path.join(projDir, "font.woff2"), "WOFF2DATA", "utf-8");
     fs.writeFileSync(path.join(projDir, "data.xml"), "<root/>", "utf-8");
     fs.writeFileSync(path.join(blobDir, `${assetA}.png`), "PNGDATA", "utf-8");
@@ -435,15 +449,17 @@ describe("artifacts HTTP routes", () => {
     const filesBody = await filesRes.json();
     expect(filesBody.base).toBe(`/api/artifacts/view-1/f/${token}/`);
     expect(filesBody.files.map((f: any) => f.path)).toEqual([
+      "project/canvas.json",
       "project/data.xml",
       "project/font.woff2",
       "project/Main.dc.html",
     ]);
 
-    // Good token serves HTML with CORS, CSP, and rewritten /_blob/ URLs.
+    // Good token serves HTML with CORS, CSP, security headers, and rewritten /_blob/ URLs.
     const htmlRes = await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/${token}/project/Main.dc.html`);
     expect(htmlRes.status).toBe(200);
     expect(htmlRes.headers.get("access-control-allow-origin")).toBe("*");
+    expect(htmlRes.headers.get("referrer-policy")).toBe("no-referrer");
     expect(htmlRes.headers.get("x-content-type-options")).toBe("nosniff");
     expect(htmlRes.headers.get("cache-control")).toBe("no-store");
     expect(htmlRes.headers.get("content-type")).toContain("text/html");
@@ -459,35 +475,53 @@ describe("artifacts HTTP routes", () => {
     expect(servedHtml).not.toContain("'/_blob/");
     expect(servedHtml).not.toContain("url(/_blob/");
 
-    // .js, fonts, _blob/<id> extension mapping, and other attachments.
+    // .js, .json, fonts, _blob/<id> extension mapping, and other attachments carry capability security headers.
     const jsRes = await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/${token}/project/support.js`);
     expect(jsRes.status).toBe(200);
     expect(jsRes.headers.get("access-control-allow-origin")).toBe("*");
+    expect(jsRes.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(jsRes.headers.get("x-content-type-options")).toBe("nosniff");
     expect(jsRes.headers.get("content-type")).toContain("text/javascript");
     expect(await jsRes.text()).toBe("console.log('dc');");
+
+    const jsonCapRes = await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/${token}/project/canvas.json`);
+    expect(jsonCapRes.status).toBe(200);
+    expect(jsonCapRes.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(jsonCapRes.headers.get("x-content-type-options")).toBe("nosniff");
 
     const fontRes = await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/${token}/project/font.woff2`);
     expect(fontRes.status).toBe(200);
     expect(fontRes.headers.get("content-type")).toBe("font/woff2");
+    expect(fontRes.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(fontRes.headers.get("x-content-type-options")).toBe("nosniff");
 
     const blobPngRes = await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/${token}/_blob/${assetA}`);
     expect(blobPngRes.status).toBe(200);
     expect(blobPngRes.headers.get("content-type")).toBe("image/png");
+    expect(blobPngRes.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(blobPngRes.headers.get("x-content-type-options")).toBe("nosniff");
     expect(await blobPngRes.text()).toBe("PNGDATA");
 
     const blobJpgRes = await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/${token}/_blob/${assetB}`);
     expect(blobJpgRes.status).toBe(200);
     expect(blobJpgRes.headers.get("content-type")).toBe("image/jpeg");
+    expect(blobJpgRes.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(blobJpgRes.headers.get("x-content-type-options")).toBe("nosniff");
     expect(await blobJpgRes.text()).toBe("JPGDATA");
 
     const xmlRes = await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/${token}/project/data.xml`);
     expect(xmlRes.status).toBe(200);
     expect(xmlRes.headers.get("content-type")).toBe("application/octet-stream");
     expect(xmlRes.headers.get("content-disposition")).toBe("attachment");
+    expect(xmlRes.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(xmlRes.headers.get("x-content-type-options")).toBe("nosniff");
 
-    // Bad token and ../ traversal return 404.
+    // Bad token and ../ traversal return 404 with security headers.
     const badToken = "0".repeat(32) === token ? "1".repeat(32) : "0".repeat(32);
-    expect((await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/${badToken}/project/Main.dc.html`)).status).toBe(404);
+    const badTokRes = await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/${badToken}/project/Main.dc.html`);
+    expect(badTokRes.status).toBe(404);
+    expect(badTokRes.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(badTokRes.headers.get("x-content-type-options")).toBe("nosniff");
     expect((await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/wrong-token/project/Main.dc.html`)).status).toBe(404);
     expect((await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/${token}/..%2Fsecret.txt`)).status).toBe(404);
     expect((await callRoute(artifactRoutes, "GET", `/api/artifacts/view-1/f/${token}/project%2F..%2F..%2Fsecret.txt`)).status).toBe(404);
@@ -498,15 +532,35 @@ describe("artifacts HTTP routes", () => {
       const pubOk = await fetch(`${srv.url}/api/artifacts/view-1/f/${token}/project/Main.dc.html`);
       expect(pubOk.status).toBe(200);
       expect(pubOk.headers.get("access-control-allow-origin")).toBe("*");
+      expect(pubOk.headers.get("referrer-policy")).toBe("no-referrer");
+      expect(pubOk.headers.get("x-content-type-options")).toBe("nosniff");
 
       const pubWrongTok = await fetch(`${srv.url}/api/artifacts/view-1/f/${badToken}/project/Main.dc.html`);
       expect(pubWrongTok.status).toBe(404);
+      expect(pubWrongTok.headers.get("referrer-policy")).toBe("no-referrer");
+      expect(pubWrongTok.headers.get("x-content-type-options")).toBe("nosniff");
+
+      const pubMissingFile = await fetch(`${srv.url}/api/artifacts/view-1/f/${token}/project/missing.html`);
+      expect(pubMissingFile.status).toBe(404);
+      expect(pubMissingFile.headers.get("referrer-policy")).toBe("no-referrer");
+      expect(pubMissingFile.headers.get("x-content-type-options")).toBe("nosniff");
 
       const pubBadShape = await fetch(`${srv.url}/api/artifacts/view-1/f/not-32-hex/project/Main.dc.html`);
       expect(pubBadShape.status).toBe(401);
 
       const authedOnly = await fetch(`${srv.url}/api/artifacts/view-1/files`);
       expect(authedOnly.status).toBe(401);
+
+      // Removing and restoring rotates view_token so the old capability URL returns 404.
+      expect((await callRoute(artifactRoutes, "DELETE", "/api/artifacts/view-1")).status).toBe(200);
+      expect((await fetch(`${srv.url}/api/artifacts/view-1/f/${token}/project/Main.dc.html`)).status).toBe(404);
+      expect((await callRoute(artifactRoutes, "POST", "/api/artifacts/view-1/restore")).status).toBe(200);
+      expect((await fetch(`${srv.url}/api/artifacts/view-1/f/${token}/project/Main.dc.html`)).status).toBe(404);
+
+      const newToken = getArtifactViewToken("view-1")!;
+      expect(newToken).toMatch(/^[0-9a-f]{32}$/);
+      expect(newToken).not.toBe(token);
+      expect((await fetch(`${srv.url}/api/artifacts/view-1/f/${newToken}/project/Main.dc.html`)).status).toBe(200);
     } finally {
       srv.stop();
     }

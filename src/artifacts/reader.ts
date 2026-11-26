@@ -82,6 +82,7 @@ const DOCS_NOT_CONNECTED_ERROR =
   "Claude Docs isn't connected in Claude Code. Open claude.ai → Settings → Connectors, or run /mcp in Claude Code.";
 const CONTENT_TRUNCATED_NOTE = "\n\n[truncated at 2 MB]";
 const FILES_TRUNCATED_MARKER = ".files-truncated";
+const PROTECTED_PROJECT_FILES = new Set(["project/canvas.json", "project/support.js"]);
 const SAFE_PROJECT_PATH_RE =
   /^project\/[A-Za-z0-9._@+() -]{1,200}(\/[A-Za-z0-9._@+() -]{1,200})*$/;
 
@@ -904,6 +905,30 @@ function enforceBlobCapsOnDisk(blobDir: string): void {
   }
 }
 
+function enforceProjectCapsOnDisk(filesDir: string): void {
+  if (!fs.existsSync(filesDir)) return;
+  try {
+    const projectFiles = listArtifactFiles(filesDir).filter((f) => !f.path.startsWith("_blob/"));
+    const protectedFiles = projectFiles.filter((f) => PROTECTED_PROJECT_FILES.has(f.path));
+    const otherFiles = projectFiles.filter((f) => !PROTECTED_PROJECT_FILES.has(f.path));
+    let kept = protectedFiles.length;
+    let totalBytes = protectedFiles.reduce((sum, f) => sum + f.size, 0);
+    for (const f of otherFiles) {
+      if (kept >= MAX_PROJECT_FILES || totalBytes + f.size > MAX_PROJECT_TOTAL_BYTES) {
+        fs.rmSync(path.join(filesDir, ...f.path.split("/")), { force: true });
+        continue;
+      }
+      kept++;
+      totalBytes += f.size;
+    }
+  } catch {}
+}
+
+function enforceDownloadCapsOnDisk(filesDir: string, blobDir: string): void {
+  enforceProjectCapsOnDisk(filesDir);
+  enforceBlobCapsOnDisk(blobDir);
+}
+
 function buildProjectReadPrompt(url: string, filesDir: string, batches: string[][]): string {
   if (batches.length === 1) {
     return `Use the Artifact tool once with action "read", url ${JSON.stringify(url)}, paths ${JSON.stringify(batches[0])}, out_dir ${JSON.stringify(filesDir)}. Then reply with the single word done.`;
@@ -1197,6 +1222,7 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
     return saveError(id, "read_failed", "Invalid artifact id.");
   }
   const filesDir = path.join(outDir, "files");
+  const blobDir = path.join(filesDir, "_blob");
   fs.rmSync(filesDir, { recursive: true, force: true });
   fs.mkdirSync(filesDir, { recursive: true });
   const truncMarker = path.join(outDir, FILES_TRUNCATED_MARKER);
@@ -1209,7 +1235,12 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
   const pathBatches = chunkArray(safePaths, READ_BATCH_SIZE);
   const filesPrompt = buildProjectReadPrompt(parsedUrl.url, filesDir, pathBatches);
   const filesTimeout = pathBatches.length > 1 ? BATCH_READ_TIMEOUT_MS : READ_TIMEOUT_MS;
-  const outFiles = await runClaude(bin ?? "claude", claudeArtifactArgs(filesPrompt), filesDir, filesTimeout);
+  let outFiles: SpawnOutput;
+  try {
+    outFiles = await runClaude(bin ?? "claude", claudeArtifactArgs(filesPrompt), filesDir, filesTimeout);
+  } finally {
+    enforceDownloadCapsOnDisk(filesDir, blobDir);
+  }
   const parsedFiles = parseStreamOutput(outFiles.stdout);
   const fileResults = parsedFiles.artifactToolResults;
   if (
@@ -1235,7 +1266,11 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
     if (missingPaths.length > 0) {
       const retryBatches = chunkArray(missingPaths, READ_BATCH_SIZE);
       const retryPrompt = buildProjectReadPrompt(parsedUrl.url, filesDir, retryBatches);
-      await runClaude(bin ?? "claude", claudeArtifactArgs(retryPrompt), filesDir, BATCH_READ_TIMEOUT_MS);
+      try {
+        await runClaude(bin ?? "claude", claudeArtifactArgs(retryPrompt), filesDir, BATCH_READ_TIMEOUT_MS);
+      } finally {
+        enforceDownloadCapsOnDisk(filesDir, blobDir);
+      }
     }
   }
 
@@ -1283,7 +1318,6 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
 
   const assetIds = assetsListed.assets.map((a) => a.id).filter((aid) => ASSET_ID_RE.test(aid));
   if (needSupportJs || assetIds.length > 0) {
-    const blobDir = path.join(filesDir, "_blob");
     if (assetIds.length > 0) {
       fs.mkdirSync(blobDir, { recursive: true });
     }
@@ -1294,14 +1328,19 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
       let pendingIds = [...chunk];
       for (let attempt = 0; attempt < 2 && (runtimePending || pendingIds.length > 0); attempt++) {
         const prompt = buildSupportAndAssetsPrompt(parsedUrl.url, filesDir, blobDir, runtimePending, pendingIds);
-        const outExtra = await runClaude(
-          bin ?? "claude",
-          claudeArtifactArgs(prompt),
-          filesDir,
-          pendingIds.length > 5 ? BATCH_READ_TIMEOUT_MS : READ_TIMEOUT_MS,
-        );
-        if (runtimePending && installDcRuntimeAsSupportJs(filesDir)) {
-          runtimePending = false;
+        let outExtra: SpawnOutput;
+        try {
+          outExtra = await runClaude(
+            bin ?? "claude",
+            claudeArtifactArgs(prompt),
+            filesDir,
+            pendingIds.length > 5 ? BATCH_READ_TIMEOUT_MS : READ_TIMEOUT_MS,
+          );
+          if (runtimePending && installDcRuntimeAsSupportJs(filesDir)) {
+            runtimePending = false;
+          }
+        } finally {
+          enforceDownloadCapsOnDisk(filesDir, blobDir);
         }
         const parsedExtra = parseStreamOutput(outExtra.stdout);
         const attemptedPaths = new Set<string>();
@@ -1315,7 +1354,6 @@ async function executeRead(id: string, url: string, opts?: { prompt?: string }):
         if (outExtra.timedOut) break;
       }
     }
-    enforceBlobCapsOnDisk(blobDir);
   }
 
   const savedFiles = listArtifactFiles(filesDir);

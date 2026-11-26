@@ -58,6 +58,10 @@ const SELECT_WITH_SESSION = `
   LEFT JOIN sessions s ON s.id = a.session_id
 `;
 
+function newViewToken(): string {
+  return randomBytes(16).toString("hex");
+}
+
 function getArtifactAny(id: string): Artifact | null {
   const row = db()
     .prepare(`${SELECT_WITH_SESSION} WHERE a.id = ?`)
@@ -116,7 +120,7 @@ export function addPasted(url: string): Artifact {
     | undefined;
   if (existing) {
     if (existing.removed_at !== null) {
-      db().prepare("UPDATE artifacts SET removed_at = NULL WHERE id = ?").run(id);
+      return restore(id)!;
     }
     return getArtifact(id)!;
   }
@@ -147,17 +151,23 @@ export function getArtifact(id: string): Artifact | null {
   return row ? toArtifact(row) : null;
 }
 
-/** Soft-remove an artifact so Undo can restore it before purging. */
+/** Soft-remove an artifact so Undo can restore it before purging, rotating its view token. */
 export function markRemoved(id: string): boolean {
   const res = db()
-    .prepare("UPDATE artifacts SET removed_at = ? WHERE id = ? AND removed_at IS NULL")
-    .run(Date.now(), id);
+    .prepare(
+      "UPDATE artifacts SET removed_at = ?, view_token = CASE WHEN view_token IS NOT NULL THEN ? ELSE NULL END WHERE id = ? AND removed_at IS NULL",
+    )
+    .run(Date.now(), newViewToken(), id);
   return res.changes > 0;
 }
 
-/** Restore a soft-removed artifact and return it, or null if not found. */
+/** Restore a soft-removed artifact and rotate its view token, or return null if not found. */
 export function restore(id: string): Artifact | null {
-  db().prepare("UPDATE artifacts SET removed_at = NULL WHERE id = ?").run(id);
+  db()
+    .prepare(
+      "UPDATE artifacts SET removed_at = NULL, view_token = CASE WHEN view_token IS NOT NULL THEN ? ELSE NULL END WHERE id = ? AND removed_at IS NOT NULL",
+    )
+    .run(newViewToken(), id);
   return getArtifact(id);
 }
 
@@ -207,7 +217,7 @@ export function saveRead(
     "error_text = NULL",
     "view_token = COALESCE(view_token, ?)",
   ];
-  const params: Array<string | number | null> = [Date.now(), randomBytes(16).toString("hex")];
+  const params: Array<string | number | null> = [Date.now(), newViewToken()];
   if (data.htmlPath !== undefined) {
     sets.push("html_path = ?");
     params.push(data.htmlPath);
